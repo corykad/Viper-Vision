@@ -1,0 +1,20 @@
+# Private Configs & Keys
+.env
+viper_config.json
+
+# Logs & Temporary Data
+*.log
+viper_dashboard_log.txt
+api_usage.json
+
+# Audio & Video Files
+*.mp3
+latest_front_*.jpg
+latest_back_*.jpg
+test_frame_*.jpg
+
+# Python Folders
+__pycache__/
+dist/
+build/
+*.spec
