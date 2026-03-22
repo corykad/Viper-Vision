@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  # The MQTT Broker (The middleman)
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+
+  # The Ring Bridge (Translates Ring to MQTT)
+  ring-mqtt:
+    image: tsightler/ring-mqtt:latest
+    container_name: ring-mqtt
+    restart: unless-stopped
+    environment:
+      - MQTTHOST=mosquitto
+    depends_on:
+      - mosquitto
+
+  # Home Assistant (The Logic & Routing Hub)
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    restart: unless-stopped
+    network_mode: host # Required for finding local network speakers
+    volumes:
+      - ./homeassistant:/config
+    depends_on:
+      - mosquitto
