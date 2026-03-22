@@ -154,9 +154,15 @@ class ViperDashboard(wx.Frame):
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_add_spk = wx.Button(self.panel, label="Add Speaker")
         self.btn_add_spk.Bind(wx.EVT_BUTTON, self.on_add_speaker)
+        
+        self.btn_ren_spk = wx.Button(self.panel, label="Rename Selected")
+        self.btn_ren_spk.Bind(wx.EVT_BUTTON, self.on_rename_speaker)
+
         self.btn_rem_spk = wx.Button(self.panel, label="Remove Selected")
         self.btn_rem_spk.Bind(wx.EVT_BUTTON, self.on_remove_speaker)
+        
         btn_sizer.Add(self.btn_add_spk, 1, wx.ALL, 5)
+        btn_sizer.Add(self.btn_ren_spk, 1, wx.ALL, 5)
         btn_sizer.Add(self.btn_rem_spk, 1, wx.ALL, 5)
         
         ssizer.Add(btn_sizer, 0, wx.EXPAND | wx.ALL, 0)
@@ -330,6 +336,30 @@ class ViperDashboard(wx.Frame):
         self.save_config()
         self.refresh_speaker_list()
         self.notify(f"Added {name}", priority=10)
+
+    def on_rename_speaker(self, event):
+        idx = self.speaker_list.GetSelection()
+        if idx == wx.NOT_FOUND:
+            self.notify("Select a speaker to rename.", priority=10)
+            return
+            
+        old_name = self.speaker_list.GetClientData(idx)
+        
+        new_name = wx.GetTextFromUser(f"Enter a new name for {old_name}:", "Rename Speaker", old_name)
+        
+        if not new_name or new_name == old_name:
+            return 
+            
+        if new_name in self.config["speakers"]:
+            self.notify(f"A speaker named {new_name} already exists.", priority=10)
+            return
+            
+        spk_data = self.config["speakers"].pop(old_name)
+        self.config["speakers"][new_name] = spk_data
+        
+        self.save_config()
+        self.refresh_speaker_list()
+        self.notify(f"Renamed {old_name} to {new_name}", priority=10)
 
     def on_remove_speaker(self, event):
         idx = self.speaker_list.GetSelection()
