@@ -89,17 +89,24 @@ def web_speaker_test(name):
 
 @app.route('/remote/speaker/add', methods=['POST'])
 def web_speaker_add():
-    name = request.form.get("name")
+    # .strip() removes accidental leading or trailing spaces
+    name = request.form.get("name", "").strip()
     spk_type = request.form.get("type")
-    spk_id = request.form.get("id")
+    spk_id = request.form.get("id", "").strip()
+    
     if name and spk_id:
+        # We also strip the name here just to be 100% safe
         dash_app.config["speakers"][name] = {"id": spk_id, "type": spk_type, "enabled": True}
         dash_app.save_config()
+        
+        # This tells the audio engine to recognize the new IP immediately
+        cfg.sync_globals_from_config()
+        
         wx.CallAfter(dash_app.notify, f"Added speaker {name}")
         wx.CallAfter(dash_app.refresh_speaker_list)
         flash(f"Speaker {name} added.")
+        
     return redirect(url_for('remote_ui'))
-
 @app.route('/remote/speaker/rename/<old_name>/<new_name>')
 def web_speaker_rename(old_name, new_name):
     if old_name in dash_app.config["speakers"] and new_name:
@@ -177,7 +184,8 @@ class ViperTaskBarIcon(wx.adv.TaskBarIcon):
         if self.frame.IsIconized():
             self.frame.Iconize(False)
         self.frame.Raise()
-        self.frame.SetFocus()
+        # FIX: Explicitly set focus to the main Arm button so JAWS starts reading immediately
+        self.frame.btn_arm.SetFocus()
 
 # ==========================================
 # MAIN DASHBOARD CLASS
@@ -378,6 +386,8 @@ class ViperDashboard(wx.Frame):
         is_chk = self.speaker_list.IsChecked(idx)
         self.config["speakers"][name]["enabled"] = is_chk
         self.save_config()
+        # FIX: Also trigger a global sync so audio.py sees the toggle
+        cfg.sync_globals_from_config()
         
         status_msg = f"{name} {'enabled' if is_chk else 'disabled'}"
         self.notify(status_msg, priority=10)
@@ -396,6 +406,7 @@ class ViperDashboard(wx.Frame):
                 if i:
                     self.config["speakers"][name] = {"id": i, "type": t, "enabled": True}
                     self.save_config()
+                    cfg.sync_globals_from_config()
                     self.refresh_speaker_list()
             dlg.Destroy()
 
@@ -408,6 +419,7 @@ class ViperDashboard(wx.Frame):
                 d = self.config["speakers"].pop(old)
                 self.config["speakers"][new] = d
                 self.save_config()
+                cfg.sync_globals_from_config()
                 self.refresh_speaker_list()
 
     def on_remove_speaker(self, event):
@@ -416,6 +428,7 @@ class ViperDashboard(wx.Frame):
             name = self.speaker_list.GetClientData(idx)
             del self.config["speakers"][name]
             self.save_config()
+            cfg.sync_globals_from_config()
             self.refresh_speaker_list()
 
     # --- CORE ---

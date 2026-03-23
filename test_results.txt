@@ -1,0 +1,35 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.12, pytest-9.0.2, pluggy-1.6.0
+rootdir: C:\scripts\viper
+plugins: anyio-4.12.1
+collected 14 items
+
+viper_test.py ..............                                             [100%]
+
+============================== warnings summary ===============================
+viper_test.py::test_ai_verdict_logic
+  C:\Users\ckadl\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\google\genai\_common.py:651: UserWarning: <MagicMock name='mock.config.__getitem__().get().state' id='1741356221504'> is not a valid FileState
+    warnings.warn(f'{value} is not a valid {cls.__name__}')
+
+viper_test.py::test_ai_verdict_logic
+  C:\Users\ckadl\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\google\genai\_common.py:651: UserWarning: <MagicMock name='mock.config.__getitem__().get().source' id='1741356224864'> is not a valid FileSource
+    warnings.warn(f'{value} is not a valid {cls.__name__}')
+
+viper_test.py::test_ai_verdict_logic
+  C:\Users\ckadl\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\google\genai\_common.py:651: UserWarning: <MagicMock name='mock.config.__getitem__().get().mediaResolution.level' id='1741356227888'> is not a valid PartMediaResolutionLevel
+    warnings.warn(f'{value} is not a valid {cls.__name__}')
+
+viper_test.py::test_ai_verdict_logic
+  C:\Users\ckadl\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\google\genai\_common.py:651: UserWarning: <MagicMock name='mock.config.__getitem__().get().codeExecutionResult.outcome' id='1741356231920'> is not a valid Outcome
+    warnings.warn(f'{value} is not a valid {cls.__name__}')
+
+viper_test.py::test_ai_verdict_logic
+  C:\Users\ckadl\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\google\genai\_common.py:651: UserWarning: <MagicMock name='mock.config.__getitem__().get().executableCode.language' id='1741356235952'> is not a valid Language
+    warnings.warn(f'{value} is not a valid {cls.__name__}')
+
+viper_test.py::test_ai_verdict_logic
+  C:\Users\ckadl\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\google\genai\_common.py:651: UserWarning: <MagicMock name='mock.config.__getitem__().get().functionResponse.scheduling' id='1741356801328'> is not a valid FunctionResponseScheduling
+    warnings.warn(f'{value} is not a valid {cls.__name__}')
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 14 passed, 6 warnings in 4.81s ========================
