@@ -1,4 +1,5 @@
 services:
+  # --- MQTT BROKER ---
   mosquitto:
     image: eclipse-mosquitto
     container_name: mosquitto
@@ -10,6 +11,7 @@ services:
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
 
+  # --- HOME ASSISTANT ---
   homeassistant:
     image: "ghcr.io/home-assistant/home-assistant:stable"
     container_name: homeassistant
@@ -17,23 +19,25 @@ services:
     privileged: true
     volumes:
       - ./hass_config:/config
+      - /etc/localtime:/etc/localtime:ro
     ports:
       - "8123:8123"
     depends_on:
       - mosquitto
 
+  # --- RING TO MQTT BRIDGE ---
   ring-mqtt:
     image: tsightler/ring-mqtt
     container_name: ring-mqtt
     restart: unless-stopped
     ports:
-      - "8554:8554"
-      - "55123:55123"
+      - "8554:8554"   # RTSP Video
+      - "55123:55123" # Web UI
     volumes:
       - ./ring_data:/data
     environment:
       - ENABLE_WEB_UI=true
       - RING_MQTT_WEB_PORT=55123
-      - MQTTHOST=mosquitto
+      - MQTTHOST=mosquitto # Uses the internal Docker name
     depends_on:
       - mosquitto

@@ -7,6 +7,8 @@ import threading
 import requests
 import time
 import logging
+import socket
+import soco
 from queue import PriorityQueue, Empty
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -18,6 +20,46 @@ from accessible_output2.outputs import auto
 import viper_config as cfg
 import viper_audio as audio
 import viper_vision as vision
+
+# ==========================================
+# BACKGROUND HEALTH MONITOR
+# ==========================================
+def monitor_plumbing():
+    """Checks every 60 seconds if Docker ports are actually open."""
+    last_state = {"mqtt": True, "camera": True}
+    
+    while True:
+        try:
+            # 1. Check MQTT Broker (Docker Port 1883)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(2)
+                mqtt_ok = s.connect_ex(('192.168.4.42', 1883)) == 0
+            
+            # 2. Check Camera Bridge (Docker Port 8554)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(2)
+                camera_ok = s.connect_ex(('127.0.0.1', 8554)) == 0
+            
+            # If MQTT drops
+            if not mqtt_ok and last_state["mqtt"]:
+                audio.speak("System Alert: The MQTT broker is unreachable. I am no longer listening for the doorbell.")
+                last_state["mqtt"] = False
+            elif mqtt_ok:
+                last_state["mqtt"] = True
+                
+            # If Camera drops
+            if not camera_ok and last_state["camera"]:
+                audio.speak("System Alert: The camera video feed is blocked. I can hear the doorbell, but I cannot see who is there.")
+                last_state["camera"] = False
+            elif camera_ok:
+                last_state["camera"] = True
+        except Exception as e:
+            logging.error(f"Health Monitor Error: {e}")
+            
+        time.sleep(60)
+
+# Start the monitor in the background immediately
+threading.Thread(target=monitor_plumbing, daemon=True).start()
 
 # ==========================================
 # GLOBAL APP & STATE
@@ -37,30 +79,35 @@ def index():
 
 @app.route('/doorbell-webhook', methods=['POST'])
 def handle_front():
-    executor.submit(vision.process_doorbell, "front door", cfg.RTSP_FRONT, "front", dash_app, executor)
+    if dash_app:
+        executor.submit(vision.process_doorbell, "front door", cfg.RTSP_FRONT, "front", dash_app, executor)
     return "OK", 200
 
 @app.route('/doorbell-webhook/back', methods=['POST'])
 def handle_back():
-    executor.submit(vision.process_doorbell, "back door", cfg.RTSP_BACK, "back", dash_app, executor)
+    if dash_app:
+        executor.submit(vision.process_doorbell, "back door", cfg.RTSP_BACK, "back", dash_app, executor)
     return "OK", 200
 
 @app.route('/remote')
 def remote_ui():
+    if dash_app is None:
+        return "System initializing, please refresh...", 503
     return render_template('remote.html', config=dash_app.config, activity_logs=activity_logs)
 
 @app.route('/remote/toggle', methods=['POST'])
 def web_toggle_arm():
-    dash_app.on_toggle_arm(None)
-    status = "Armed" if dash_app.is_armed else "Disarmed"
-    flash(f"System {status} successfully.")
+    if dash_app:
+        dash_app.on_toggle_arm(None)
+        status = "Armed" if dash_app.is_armed else "Disarmed"
+        flash(f"System {status} successfully.")
     return redirect(url_for('remote_ui'))
 
 # --- WEB SPEAKER MANAGEMENT ---
 
 @app.route('/remote/speaker/toggle/<name>', methods=['POST'])
 def web_speaker_toggle(name):
-    if name in dash_app.config["speakers"]:
+    if dash_app and name in dash_app.config["speakers"]:
         current = dash_app.config["speakers"][name]["enabled"]
         new_state = not current
         dash_app.config["speakers"][name]["enabled"] = new_state
@@ -79,7 +126,7 @@ def web_speaker_toggle(name):
 
 @app.route('/remote/speaker/test/<name>', methods=['POST'])
 def web_speaker_test(name):
-    if name in dash_app.config["speakers"]:
+    if dash_app and name in dash_app.config["speakers"]:
         spk = dash_app.config["speakers"][name]
         status = f"Testing connection to {name}."
         wx.CallAfter(dash_app.notify, status, priority=10)
@@ -89,20 +136,21 @@ def web_speaker_test(name):
 
 @app.route('/remote/speaker/add', methods=['POST'])
 def web_speaker_add():
-    name = request.form.get("name")
-    spk_type = request.form.get("type")
-    spk_id = request.form.get("id")
-    if name and spk_id:
-        dash_app.config["speakers"][name] = {"id": spk_id, "type": spk_type, "enabled": True}
-        dash_app.save_config()
-        wx.CallAfter(dash_app.notify, f"Added speaker {name}")
-        wx.CallAfter(dash_app.refresh_speaker_list)
-        flash(f"Speaker {name} added.")
+    if dash_app:
+        name = request.form.get("name")
+        spk_type = request.form.get("type")
+        spk_id = request.form.get("id")
+        if name and spk_id:
+            dash_app.config["speakers"][name] = {"id": spk_id, "type": spk_type, "enabled": True}
+            dash_app.save_config()
+            wx.CallAfter(dash_app.notify, f"Added speaker {name}")
+            wx.CallAfter(dash_app.refresh_speaker_list)
+            flash(f"Speaker {name} added.")
     return redirect(url_for('remote_ui'))
 
 @app.route('/remote/speaker/rename/<old_name>/<new_name>')
 def web_speaker_rename(old_name, new_name):
-    if old_name in dash_app.config["speakers"] and new_name:
+    if dash_app and old_name in dash_app.config["speakers"] and new_name:
         data = dash_app.config["speakers"].pop(old_name)
         dash_app.config["speakers"][new_name] = data
         dash_app.save_config()
@@ -113,7 +161,7 @@ def web_speaker_rename(old_name, new_name):
 
 @app.route('/remote/speaker/delete/<name>', methods=['POST'])
 def web_speaker_delete(name):
-    if name in dash_app.config["speakers"]:
+    if dash_app and name in dash_app.config["speakers"]:
         del dash_app.config["speakers"][name]
         dash_app.save_config()
         wx.CallAfter(dash_app.notify, f"Removed speaker {name}")
@@ -125,36 +173,54 @@ def web_speaker_delete(name):
 
 @app.route('/remote/switch_prompt', methods=['POST'])
 def web_switch_prompt():
-    new_p = request.form.get("profile_name")
-    dash_app.config["active_prompt"] = new_p
-    wx.CallAfter(dash_app.prompt_choice.SetStringSelection, new_p)
-    wx.CallAfter(dash_app.prompt_editor.SetValue, dash_app.config["prompts"][new_p])
-    dash_app.save_config()
-    flash(f"Switched to {new_p} profile.")
+    if dash_app:
+        new_p = request.form.get("profile_name")
+        dash_app.config["active_prompt"] = new_p
+        wx.CallAfter(dash_app.prompt_choice.SetStringSelection, new_p)
+        wx.CallAfter(dash_app.prompt_editor.SetValue, dash_app.config["prompts"][new_p])
+        dash_app.save_config()
+        flash(f"Switched to {new_p} profile.")
     return redirect(url_for('remote_ui'))
 
 @app.route('/remote/save_prompt', methods=['POST'])
 def web_save_prompt():
-    new_text = request.form.get("prompt_text")
-    active_p = dash_app.config["active_prompt"]
-    dash_app.config["prompts"][active_p] = new_text
-    wx.CallAfter(dash_app.prompt_editor.SetValue, new_text)
-    dash_app.save_config()
-    flash("AI instructions saved.")
+    if dash_app:
+        new_text = request.form.get("prompt_text")
+        active_p = dash_app.config["active_prompt"]
+        dash_app.config["prompts"][active_p] = new_text
+        wx.CallAfter(dash_app.prompt_editor.SetValue, new_text)
+        dash_app.save_config()
+        flash("AI instructions saved.")
     return redirect(url_for('remote_ui'))
 
 # --- WEB UTILITIES ---
 
 @app.route('/remote/utils/api', methods=['POST'])
 def web_api_check():
-    dash_app.on_api(None)
-    flash("API Check requested. Listen for announcement.")
+    if dash_app:
+        dash_app.on_api(None)
+        flash("API Check requested. Listen for announcement.")
     return redirect(url_for('remote_ui'))
 
 @app.route('/remote/utils/batt', methods=['POST'])
 def web_batt_check():
-    dash_app.on_batt(None)
-    flash("Battery Check requested. Listen for announcement.")
+    if dash_app:
+        dash_app.on_batt(None)
+        flash("Battery Check requested. Listen for announcement.")
+    return redirect(url_for('remote_ui'))
+
+@app.route('/remote/utils/scan_sonos', methods=['POST'])
+def web_scan_sonos():
+    if dash_app:
+        dash_app.on_scan_sonos(None)
+        flash("Sonos scan started. Listen for results and check your phone.")
+    return redirect(url_for('remote_ui'))
+
+@app.route('/remote/utils/scan_ha', methods=['POST'])
+def web_scan_ha():
+    if dash_app:
+        dash_app.on_scan_ha(None)
+        flash("Home Assistant scan started. Check your PC screen.")
     return redirect(url_for('remote_ui'))
 
 def run_flask_server():
@@ -291,12 +357,24 @@ class ViperDashboard(wx.Frame):
         # UTILITIES UI
         ubox = wx.StaticBox(self.panel, label="System Utilities")
         usizer = wx.StaticBoxSizer(ubox, wx.HORIZONTAL)
+        
         self.btn_api = wx.Button(self.panel, label="Check API")
         self.btn_api.Bind(wx.EVT_BUTTON, self.on_api)
+        
         self.btn_batt = wx.Button(self.panel, label="Check Batteries")
         self.btn_batt.Bind(wx.EVT_BUTTON, self.on_batt)
+        
+        self.btn_scan = wx.Button(self.panel, label="Scan Sonos")
+        self.btn_scan.Bind(wx.EVT_BUTTON, self.on_scan_sonos)
+
+        self.btn_scan_ha = wx.Button(self.panel, label="Scan HA")
+        self.btn_scan_ha.Bind(wx.EVT_BUTTON, self.on_scan_ha)
+
         usizer.Add(self.btn_api, 1, wx.ALL, 5)
         usizer.Add(self.btn_batt, 1, wx.ALL, 5)
+        usizer.Add(self.btn_scan, 1, wx.ALL, 5)
+        usizer.Add(self.btn_scan_ha, 1, wx.ALL, 5)
+        
         self.sizer.Add(usizer, 0, wx.ALL | wx.EXPAND, 10)
 
         self.btn_min = wx.Button(self.panel, label="Minimize to Tray")
@@ -491,12 +569,11 @@ class ViperDashboard(wx.Frame):
             r = requests.get(f"http://{cfg.HA_IP}:{cfg.HA_PORT}/api/states", headers={"Authorization": f"Bearer {cfg.HA_TOKEN}"}, timeout=5)
             r.raise_for_status()
             
-            # Use dictionary to deduplicate entities with the same Friendly Name
             seen_batteries = {}
             for s in r.json():
                 if s.get("entity_id") in cfg.TARGET_BATTERY_ENTITIES:
                     name = s['attributes'].get('friendly_name', s['entity_id'])
-                    name = name.replace(" Battery", "").strip() # Clean up names like "Front Door Battery Battery"
+                    name = name.replace(" Battery", "").strip() 
                     
                     try: val = float(s.get('state', 0))
                     except ValueError: val = 0
@@ -509,6 +586,180 @@ class ViperDashboard(wx.Frame):
         except Exception as e:
             self.notify("Battery query failed.", priority=10)
             logging.error(f"Battery Error: {e}")
+
+    # --- SONOS SCANNER ---
+    def on_scan_sonos(self, event):
+        self.notify("Scanning network for Sonos speakers. Please wait.", priority=10)
+        executor.submit(self._run_scan_sonos)
+
+    def _run_scan_sonos(self):
+        try:
+            speakers = soco.discover()
+            
+            if not speakers:
+                msg = "Scan Complete. No Sonos speakers found on the network."
+                self.notify(msg, priority=10)
+                self._send_pushover_alert("📡 Sonos Scan", msg)
+                return
+
+            report = "Found the following speakers:\n\n"
+            speech_report = "Scan complete. "
+            
+            existing_ips = [data["id"] for data in self.config.get("speakers", {}).values() if data["type"] == "sonos"]
+            new_speakers = []
+
+            for spk in speakers:
+                report += f"🔊 {spk.player_name}\n📍 IP: {spk.ip_address}\n\n"
+                speech_report += f"Found {spk.player_name}. "
+                
+                if spk.ip_address not in existing_ips:
+                    new_speakers.append(spk)
+            
+            self.notify(speech_report, priority=10)
+            self._send_pushover_alert("📡 Sonos Scan Results", report)
+
+            if new_speakers:
+                wx.CallAfter(self._prompt_add_sonos_speakers, new_speakers)
+            else:
+                wx.CallAfter(self.notify, "All found speakers are already in your config.", priority=10)
+            
+        except Exception as e:
+            self.notify("Sonos scan encountered an error.", priority=10)
+            logging.error(f"Sonos Scan Error: {e}")
+
+    def _prompt_add_sonos_speakers(self, new_speakers):
+        """Pops up a dialog on the desktop to let the user select speakers to add."""
+        choices = [f"{spk.player_name} ({spk.ip_address})" for spk in new_speakers]
+        
+        dlg = wx.MultiChoiceDialog(
+            self,
+            "Select new Sonos speakers to add to Viper Vision:",
+            "New Sonos Speakers Found",
+            choices
+        )
+        
+        if dlg.ShowModal() == wx.ID_OK:
+            selections = dlg.GetSelections()
+            if selections:
+                for idx in selections:
+                    spk = new_speakers[idx]
+                    
+                    base_name = f"{spk.player_name} Sonos"
+                    name = base_name
+                    counter = 2
+                    
+                    while name in self.config["speakers"]:
+                        name = f"{base_name} {counter}"
+                        counter += 1
+                        
+                    self.config["speakers"][name] = {
+                        "id": spk.ip_address,
+                        "type": "sonos",
+                        "enabled": True
+                    }
+                
+                self.save_config()
+                self.refresh_speaker_list()
+                self.notify(f"Added {len(selections)} new speakers.", priority=10)
+                
+        dlg.Destroy()
+
+    # --- HOME ASSISTANT SCANNER (Nest/Echo) ---
+    def on_scan_ha(self, event):
+        self.notify("Scanning Home Assistant for speakers. Please wait.", priority=10)
+        executor.submit(self._run_scan_ha)
+
+    def _run_scan_ha(self):
+        try:
+            url = f"http://{cfg.HA_IP}:{cfg.HA_PORT}/api/states"
+            headers = {"Authorization": f"Bearer {cfg.HA_TOKEN}"}
+            r = requests.get(url, headers=headers, timeout=5)
+            r.raise_for_status()
+            
+            # Find all media players
+            all_entities = r.json()
+            ha_speakers = [e for e in all_entities if e.get('entity_id', '').startswith('media_player.')]
+            
+            if not ha_speakers:
+                wx.CallAfter(self.notify, "No media players found in Home Assistant.", priority=10)
+                return
+
+            # Find existing IDs to avoid annoying duplicates
+            existing_ids = [data["id"] for data in self.config.get("speakers", {}).values()]
+            new_speakers = []
+
+            for spk in ha_speakers:
+                if spk['entity_id'] not in existing_ids:
+                    new_speakers.append(spk)
+
+            if new_speakers:
+                wx.CallAfter(self._prompt_add_ha_speakers, new_speakers)
+            else:
+                wx.CallAfter(self.notify, "All Home Assistant speakers are already configured.", priority=10)
+
+        except Exception as e:
+            wx.CallAfter(self.notify, "Home Assistant speaker scan failed.", priority=10)
+            logging.error(f"HA Scan Error: {e}")
+
+    def _prompt_add_ha_speakers(self, new_speakers):
+        """Pops up a dialog to select HA speakers."""
+        choices = []
+        for spk in new_speakers:
+            fname = spk.get('attributes', {}).get('friendly_name', spk['entity_id'])
+            choices.append(f"{fname} ({spk['entity_id']})")
+        
+        dlg = wx.MultiChoiceDialog(
+            self,
+            "Select new Home Assistant speakers (Nest, Echo, etc.) to add:",
+            "New HA Speakers Found",
+            choices
+        )
+        
+        if dlg.ShowModal() == wx.ID_OK:
+            selections = dlg.GetSelections()
+            if selections:
+                for idx in selections:
+                    spk = new_speakers[idx]
+                    raw_name = spk.get('attributes', {}).get('friendly_name', spk['entity_id'].replace('media_player.', ''))
+                    
+                    # Auto-detect if it's an Alexa device vs a standard HA TTS (Nest) device
+                    spk_type = "ha" 
+                    if 'echo' in raw_name.lower() or 'alexa' in spk['entity_id'].lower():
+                        spk_type = "alexa"
+
+                    base_name = f"{raw_name} ({spk_type.upper()})"
+                    name = base_name
+                    counter = 2
+                    
+                    while name in self.config["speakers"]:
+                        name = f"{base_name} {counter}"
+                        counter += 1
+                        
+                    self.config["speakers"][name] = {
+                        "id": spk['entity_id'],
+                        "type": spk_type,
+                        "enabled": True
+                    }
+                
+                self.save_config()
+                self.refresh_speaker_list()
+                self.notify(f"Added {len(selections)} new HA speakers.", priority=10)
+                
+        dlg.Destroy()
+
+    def _send_pushover_alert(self, title, message):
+        """Sends an alert using the credentials from viper_config."""
+        try:
+            url = "https://api.pushover.net/1/messages.json"
+            data = {
+                "token": cfg.PUSHOVER_API_TOKEN,
+                "user": cfg.PUSHOVER_USER_KEY,
+                "message": message,
+                "title": title
+            }
+            requests.post(url, data=data, timeout=10)
+        except Exception as e:
+            logging.error(f"Failed to send Pushover alert: {e}")
 
     def on_minimize(self, event):
         if isinstance(event, wx.CloseEvent) and event.CanVeto(): event.Veto()
