@@ -1,0 +1,28 @@
+Viper Vision Home Assistant Package Install
+
+1. In Home Assistant, make sure packages are enabled.
+   Add this to /config/configuration.yaml if it is not already present:
+
+   homeassistant:
+     packages: !include_dir_named packages
+
+2. Create this folder if needed:
+
+   /config/packages
+
+3. Copy viper_vision_package.yaml into:
+
+   /config/packages/viper_vision_package.yaml
+
+4. In Home Assistant, run Settings > System > Restart Home Assistant.
+   A YAML reload may work for some sections, but restart is safest after adding packages.
+
+5. After restart, verify these service names exist in Developer Tools > Actions:
+
+   rest_command.viper_broadcast
+   rest_command.viper_broadcast_push
+   rest_command.ring_vision_front
+   rest_command.ring_vision_back
+   rest_command.cinderella_event
+
+6. If automations do not appear, check Settings > System > Logs for YAML errors.

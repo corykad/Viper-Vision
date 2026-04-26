@@ -1,15 +1,56 @@
-# Ignore sensitive config files
-viper_config.json
-ring_data/
-hass_config/
-mosquitto/data/
-mosquitto/log/
-
-# Ignore Python cache and logs
+# Python
 __pycache__/
-*.log
-api_usage.json
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Ignore OS files
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime configuration and secrets
+.env
+*.env
+viper_config.json
+api_usage.json
+viper_full_debug.log
+viper_dashboard_log.txt
+*.log
+
+# Generated audio/media
+dispatch_*.mp3
+dispatch_*.wav
+verdict_*.mp3
+verdict_*.wav
+utility_*.mp3
+utility_*.wav
+warmup.mp3
+static_phrase_*.mp3
+
+# Captured camera frames
+fast_*.jpg
+latest_*.jpg
+*_fallback.jpg
+
+# Build output
+build/
+dist/
+*.zip
+*.exe
+*.msi
+
+# Generated Home Assistant package may contain local IPs and personal topics.
+ha_packages/viper_vision_package.yaml
+
+# Local smoke-test app data
+exe_smoke_appdata/
+exe_smoke_appdata_final/
+
+# OS/editor
 .DS_Store
 Thumbs.db
+.idea/
+.vscode/

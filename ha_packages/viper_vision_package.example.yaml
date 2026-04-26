@@ -1,0 +1,139 @@
+# Viper Vision Home Assistant package example
+# Copy to /config/packages/viper_vision_package.yaml and replace placeholders.
+
+rest_command:
+  ring_vision_front:
+    url: "http://YOUR_VIPER_PC_IP:5050/doorbell-webhook"
+    method: POST
+    timeout: 10
+
+  ring_vision_back:
+    url: "http://YOUR_VIPER_PC_IP:5050/doorbell-webhook/back"
+    method: POST
+    timeout: 10
+
+  viper_broadcast:
+    url: "http://YOUR_VIPER_PC_IP:5050/remote/broadcast"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"broadcast_text": {{ message | tojson }},
+       "channel": {{ channel | default('') | tojson }}}
+    timeout: 15
+
+  viper_broadcast_push:
+    url: "http://YOUR_VIPER_PC_IP:5050/remote/broadcast_push"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"broadcast_text": {{ message | tojson }},
+       "channel": {{ channel | default('') | tojson }}}
+    timeout: 15
+
+  cinderella_event:
+    url: "http://YOUR_VIPER_PC_IP:5050/cinderella"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"event": {{ event | tojson }},
+       "error": {{ error | default('') | tojson }},
+       "source": {{ source | default('vacuum') | tojson }}}
+    timeout: 15
+
+automation:
+  - id: viper_vision_door_ai_monitor
+    alias: "Viper Vision: Door AI Monitor"
+    mode: single
+    triggers:
+      - trigger: mqtt
+        topic: "ring/YOUR_LOCATION_ID/camera/YOUR_FRONT_CAMERA_ID/motion/state"
+        payload: "ON"
+        id: front
+      - trigger: mqtt
+        topic: "ring/YOUR_LOCATION_ID/camera/YOUR_BACK_CAMERA_ID/motion/state"
+        payload: "ON"
+        id: back
+    actions:
+      - choose:
+          - conditions:
+              - condition: trigger
+                id: front
+            sequence:
+              - action: rest_command.ring_vision_front
+          - conditions:
+              - condition: trigger
+                id: back
+            sequence:
+              - action: rest_command.ring_vision_back
+
+  - id: viper_cinderella_event_router
+    alias: "Viper Vision: Cinderella Event Router"
+    mode: queued
+    max: 10
+    triggers:
+      - trigger: state
+        entity_id: sensor.cinderella_vacuum_error
+        not_to: ["none", "unknown", "unavailable"]
+        id: vacuum_error
+      - trigger: state
+        entity_id: sensor.cinderella_dock_dock_error
+        not_to: ["ok", "unknown", "unavailable"]
+        id: dock_error
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to: ["starting", "cleaning", "spot_cleaning", "zoned_cleaning", "zone_cleaning", "segment_cleaning", "mapping", "patrol", "robot_status_mopping", "clean_mop_cleaning", "clean_mop_mopping", "segment_mopping", "segment_clean_mop_cleaning", "segment_clean_mop_mopping", "zoned_mopping", "zoned_clean_mop_cleaning", "zoned_clean_mop_mopping"]
+        for:
+          seconds: 1
+        id: departure
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to: ["washing_mop", "washing_the_mop", "washing_the_mop_2", "back_to_dock_washing_duster"]
+        for:
+          seconds: 2
+        id: washing
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to: ["emptying", "emptying_bin", "emptying_dustbin", "emptying_the_bin"]
+        for:
+          seconds: 2
+        id: emptying
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to: ["returning", "returning_home", "docking", "going_to_target", "going_to_wash_the_mop", "attaching_the_mop", "detaching_the_mop", "air_drying_stopping"]
+        for:
+          seconds: 2
+        id: returning
+      - trigger: state
+        entity_id: binary_sensor.cinderella_dock_mop_drying
+        to: "on"
+        for:
+          seconds: 2
+        id: drying
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to: ["charging", "docked", "charging_complete", "idle"]
+        for:
+          seconds: 2
+        id: victory
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to: ["paused", "remote_control_active", "manual_mode", "in_call", "locked"]
+        for:
+          seconds: 2
+        id: paused
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to: ["unknown", "charger_disconnected", "charging_problem", "error", "shutting_down", "updating", "device_offline", "egg_attack"]
+        for:
+          seconds: 2
+        id: status_update
+    actions:
+      - delay: "00:00:01"
+      - action: rest_command.cinderella_event
+        data:
+          event: "{{ trigger.id if trigger.id not in ['vacuum_error', 'dock_error'] else 'error' }}"
+          error: >-
+            {% if trigger.id == 'vacuum_error' %}{{ states('sensor.cinderella_vacuum_error') }}
+            {% elif trigger.id == 'dock_error' %}{{ states('sensor.cinderella_dock_dock_error') }}
+            {% else %}{% endif %}
+          source: "{{ 'dock' if trigger.id == 'dock_error' else 'vacuum' }}"

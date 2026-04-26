@@ -1,0 +1,41 @@
+$ErrorActionPreference = "Stop"
+
+Set-Location $PSScriptRoot
+
+Write-Host "Cleaning previous PyInstaller output..."
+Remove-Item -Recurse -Force .\build, .\dist -ErrorAction SilentlyContinue
+
+Write-Host "Compiling source files..."
+python -m py_compile `
+  .\main.pyw `
+  .\viper_config.py `
+  .\viper_audio.py `
+  .\viper_vision.py `
+  .\viper_discovery.py `
+  .\viper_ring_discovery.py `
+  .\viper_ha_package.py
+
+Write-Host "Building ViperVision.exe..."
+python -m PyInstaller .\ViperVision.spec --clean --noconfirm
+
+$exe = Join-Path $PSScriptRoot "dist\ViperVision\ViperVision.exe"
+if (-not (Test-Path -LiteralPath $exe)) {
+  throw "Build finished but ViperVision.exe was not found."
+}
+
+$ffmpeg = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+if ($ffmpeg) {
+  $ffmpegDest = Join-Path $PSScriptRoot "dist\ViperVision\ffmpeg.exe"
+  Copy-Item -LiteralPath $ffmpeg.Source -Destination $ffmpegDest -Force
+  Write-Host "Bundled FFmpeg:"
+  Write-Host $ffmpegDest
+} else {
+  Write-Warning "ffmpeg.exe was not found on PATH. Doorbell RTSP processing will require the user to install FFmpeg or place ffmpeg.exe beside ViperVision.exe."
+}
+
+Write-Host ""
+Write-Host "Build complete:"
+Write-Host $exe
+Write-Host ""
+Write-Host "Distribute the whole folder:"
+Write-Host (Join-Path $PSScriptRoot "dist\ViperVision")

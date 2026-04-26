@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Viper Vision Remote</title>
+    <style>
+        /* ── Skip link ─────────────────────────────────────────────────── */
+        .skip-link {
+            position: absolute;
+            left: -9999px;
+            top: auto;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+        }
+        .skip-link:focus {
+            position: static;
+            width: auto;
+            height: auto;
+            display: block;
+            padding: 10px 16px;
+            background: #000;
+            color: #fff;
+            font-size: 1rem;
+            font-weight: bold;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        /* ── Screen-reader-only utility ────────────────────────────────── */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0,0,0,0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* ── Base layout ───────────────────────────────────────────────── */
+        body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 600px; margin: auto; background: #f4f4f4; }
+        section { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd; }
+        h1, h2, h3 { color: #333; margin-top: 0; }
+
+        /* ── Flash message ─────────────────────────────────────────────── */
+        .flash-msg {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border: 1px solid #c3e6cb;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            font-weight: bold;
+            outline: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 10px;
+        }
+        .flash-msg .flash-text { flex: 1; }
+        .flash-dismiss {
+            background: none;
+            border: 1px solid #155724;
+            color: #155724;
+            border-radius: 4px;
+            padding: 2px 10px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            flex-shrink: 0;
+            width: auto;
+            margin-top: 0;
+        }
+        .flash-dismiss:focus { outline: 3px solid #155724; }
+
+        /* ── Buttons ───────────────────────────────────────────────────── */
+        button {
+            padding: 12px;
+            font-size: 1rem;
+            cursor: pointer;
+            border-radius: 5px;
+            border: none;
+            background: #007bff;
+            color: white;
+            width: 100%;
+            margin-top: 10px;
+        }
+        button:focus { outline: 3px solid #0056b3; outline-offset: 2px; }
+        .secondary { background: #6c757d; }
+        .secondary:focus { outline-color: #495057; }
+        .danger { background: #dc3545; }
+        .danger:focus { outline-color: #a71d2a; }
+
+        /* ── Form controls ─────────────────────────────────────────────── */
+        select, textarea, input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 1rem;
+            box-sizing: border-box;
+        }
+        select:focus, textarea:focus, input[type="text"]:focus {
+            outline: 3px solid #007bff;
+            outline-offset: 1px;
+        }
+        textarea { height: 100px; }
+
+        /* fieldset/legend reset — we use these for grouping but don't want
+           the default browser bevel border on every group */
+        fieldset {
+            border: none;
+            margin: 0;
+            padding: 0;
+        }
+        legend {
+            font-weight: bold;
+            font-size: 1rem;
+            padding: 0;
+            margin-bottom: 4px;
+        }
+
+        /* ── Speaker list ──────────────────────────────────────────────── */
+        ul { list-style: none; padding: 0; }
+        li { padding: 12px; border-bottom: 1px solid #eee; display: flex; flex-direction: column; gap: 10px; }
+        .spk-info { font-size: 1.1rem; }
+        .row { display: flex; gap: 5px; }
+
+        /* ── Checkbox toggle ───────────────────────────────────────────── */
+        .checkbox-label { display: flex; align-items: center; cursor: pointer; font-weight: bold; }
+        .checkbox-label input { margin-right: 10px; transform: scale(1.5); }
+        /* Submit button that looks like a checkbox label action — hidden
+           visually but reachable by keyboard so the form can be submitted
+           without JavaScript when onChange is not used */
+        .checkbox-submit {
+            display: inline-block;
+            background: none;
+            border: none;
+            color: #007bff;
+            font-size: 0.85rem;
+            padding: 0;
+            margin-top: 2px;
+            cursor: pointer;
+            width: auto;
+            text-decoration: underline;
+        }
+        .checkbox-submit:focus { outline: 3px solid #007bff; }
+
+        /* ── Inline rename form ────────────────────────────────────────── */
+        .rename-form {
+            display: none;
+            margin-top: 8px;
+            padding: 10px;
+            background: #f0f4ff;
+            border: 1px solid #b8c9f5;
+            border-radius: 6px;
+        }
+        .rename-form.open { display: block; }
+        .rename-form label { font-size: 0.9rem; font-weight: bold; display: block; margin-bottom: 4px; }
+        .rename-form input { margin-top: 0; }
+        .rename-row { display: flex; gap: 6px; margin-top: 8px; }
+        .rename-row button { margin-top: 0; }
+
+        /* ── Studio (Cinderella) ───────────────────────────────────────── */
+        .studio-grid { display: grid; gap: 15px; }
+        .studio-card { border: 1px solid #e2e2e2; border-radius: 8px; padding: 12px; background: #fafafa; }
+        .studio-card h3 { margin-bottom: 6px; }
+        .studio-help { color: #555; font-size: 0.95rem; }
+
+        /* ── Channel cards ─────────────────────────────────────────────── */
+        .field-hint { color: #555; font-size: 0.85rem; margin: 3px 0 8px; }
+        .channel-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px; align-items: end; }
+        .channel-row label { font-weight: bold; display: block; margin-bottom: 4px; }
+        .channel-card { border: 1px solid #e2e2e2; border-radius: 6px; padding: 12px; margin-bottom: 12px; background: #fafafa; }
+        .channel-card strong { display: block; margin-bottom: 8px; font-size: 1rem; }
+
+        /* ── Live status region ────────────────────────────────────────── */
+        #live-status { position: absolute; left: -9999px; }
+    </style>
+</head>
+<body>
+
+    <!-- ── Skip navigation ──────────────────────────────────────────────── -->
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+
+    <!-- ── Flash messages ───────────────────────────────────────────────── -->
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div id="flash-container" role="alert" aria-live="assertive" tabindex="-1" class="flash-msg">
+            <span class="flash-text">
+                {% for message in messages %}{{ message }}{% endfor %}
+            </span>
+            <button type="button" class="flash-dismiss" onclick="this.parentElement.remove()" aria-label="Dismiss notification">Dismiss</button>
+        </div>
+        <script>
+            var flash = document.getElementById('flash-container');
+            if (flash) { flash.focus(); }
+        </script>
+      {% endif %}
+    {% endwith %}
+
+    <!-- Polite live region — used by JS to announce actions without a reload -->
+    <div id="live-status" aria-live="polite" aria-atomic="true"></div>
+
+    <header>
+        <h1>Viper Vision Remote</h1>
+    </header>
+
+    <main id="main-content">
+
+        <!-- ── System Status ─────────────────────────────────────────────── -->
+        <section aria-labelledby="status-heading">
+            <h2 id="status-heading">System Status</h2>
+            <p>
+                Status:
+                <strong id="arm-status-text">{{ "ARMED" if config.is_armed else "DISARMED" }}</strong>
+            </p>
+            <form action="{{ url_for('web_toggle_arm') }}" method="post">
+                <button
+                    type="submit"
+                    class="{{ 'danger' if config.is_armed else '' }}"
+                    aria-describedby="arm-status-text"
+                >
+                    {{ "DISARM SYSTEM" if config.is_armed else "ARM SYSTEM" }}
+                </button>
+            </form>
+        </section>
+
+        <!-- ── Speaker Targets ───────────────────────────────────────────── -->
+        <section aria-labelledby="speakers-heading">
+            <h2 id="speakers-heading">Speaker Targets</h2>
+
+            {% if config.speakers %}
+            <ul role="list" aria-label="Configured speakers">
+                {% for name, data in config.speakers.items() %}
+                <li>
+                    <!-- Enable/disable toggle — explicit submit button instead of
+                         onchange so keyboard users have control over when it fires -->
+                    <div class="spk-info">
+                        <form action="{{ url_for('web_speaker_toggle', name=name) }}" method="post">
+                            <fieldset>
+                                <legend class="sr-only">{{ name }} speaker controls</legend>
+                                <label class="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        name="_confirm"
+                                        id="chk-{{ loop.index }}"
+                                        {{ 'checked' if data.enabled else '' }}
+                                        aria-label="{{ name }} ({{ data.type.upper() }}) — currently {{ 'enabled' if data.enabled else 'disabled' }}"
+                                        onchange="this.form.submit()"
+                                    >
+                                    {{ name }} <small>({{ data.type.upper() }})</small>
+                                </label>
+                                <!-- Visible fallback submit for users who prefer not
+                                     to rely on the onchange JavaScript -->
+                                <noscript>
+                                    <button type="submit" class="checkbox-submit">
+                                        {{ "Disable" if data.enabled else "Enable" }} {{ name }}
+                                    </button>
+                                </noscript>
+                            </fieldset>
+                        </form>
+                    </div>
+
+
+                    <div class="rename-form open" role="group" aria-label="Speaker routing for {{ name }}">
+                        <form action="{{ url_for('web_speaker_settings', name=name) }}" method="post">
+                            <fieldset>
+                                <legend>Speaker routing</legend>
+                                <label class="checkbox-label"><input type="checkbox" name="doorbell" {{ 'checked' if data.get('doorbell', True) else '' }}> Doorbell alerts</label>
+                                <label class="checkbox-label"><input type="checkbox" name="utilities" {{ 'checked' if data.get('utilities', True) else '' }}> Utilities spoken</label>
+                                <label class="checkbox-label"><input type="checkbox" name="fridge" {{ 'checked' if data.get('fridge', True) else '' }}> Fridge / Freezer</label>
+                                <label class="checkbox-label"><input type="checkbox" name="quiet_hours_exempt" {{ 'checked' if data.get('quiet_hours_exempt', False) else '' }}> Ignore quiet hours</label>
+                                <button type="submit" class="secondary">Save Routing</button>
+                            </fieldset>
+                        </form>
+                    </div>
+
+                    <!-- Action buttons — each carries the speaker name in aria-label -->
+                    <div class="row">
+                        <form action="{{ url_for('web_speaker_test', name=name) }}" method="post" style="flex: 1;">
+                            <button
+                                type="submit"
+                                class="secondary"
+                                style="padding: 8px;"
+                                aria-label="Test {{ name }}"
+                            >Test</button>
+                        </form>
+
+                        <!-- Rename — inline form replaces prompt() -->
+                        <button
+                            type="button"
+                            class="secondary"
+                            style="flex: 1; padding: 8px; margin-top: 0;"
+                            aria-expanded="false"
+                            aria-controls="rename-{{ loop.index }}"
+                            aria-label="Rename {{ name }}"
+                            onclick="toggleRename(this, 'rename-{{ loop.index }}')"
+                        >Rename</button>
+
+                        <form
+                            action="{{ url_for('web_speaker_delete', name=name) }}"
+                            method="post"
+                            style="flex: 1;"
+                            onsubmit="return confirmDelete(event, '{{ name }}')"
+                        >
+                            <button
+                                type="submit"
+                                class="danger"
+                                style="padding: 8px;"
+                                aria-label="Delete {{ name }}"
+                            >
+                                <span aria-hidden="true">Del</span>
+                                <span class="sr-only">Delete {{ name }}</span>
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Inline rename form (hidden until Rename is pressed) -->
+                    <div id="rename-{{ loop.index }}" class="rename-form" role="group" aria-label="Rename {{ name }}">
+                        <form action="{{ url_for('web_speaker_rename') }}" method="post">
+                            <input type="hidden" name="old_name" value="{{ name }}">
+                            <label for="rename-input-{{ loop.index }}">New name for {{ name }}:</label>
+                            <input
+                                type="text"
+                                id="rename-input-{{ loop.index }}"
+                                name="new_name"
+                                value="{{ name }}"
+                                required
+                                autocomplete="off"
+                            >
+                            <div class="rename-row">
+                                <button type="submit" style="flex:1;">Save name</button>
+                                <button
+                                    type="button"
+                                    class="secondary"
+                                    style="flex:1;"
+                                    aria-label="Cancel rename {{ name }}"
+                                    onclick="toggleRename(document.querySelector('[aria-controls=\'rename-{{ loop.index }}\']'), 'rename-{{ loop.index }}')"
+                                >Cancel</button>
+                            </div>
+                        </form>
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p>No speakers configured yet. Add one below.</p>
+            {% endif %}
+
+            <!-- Add new speaker -->
+            <button
+                type="button"
+                aria-expanded="false"
+                aria-controls="add-spk-form"
+                onclick="toggleAddSpeaker(this)"
+            >+ Add New Speaker</button>
+
+            <div id="add-spk-form" style="display:none; margin-top: 20px; border-top: 1px solid #ccc; padding-top: 10px;" role="group">
+                <form action="{{ url_for('web_speaker_add') }}" method="post">
+                    <fieldset>
+                        <legend>New Speaker Details</legend>
+                        <label for="new-spk-name">Friendly name</label>
+                        <input type="text" id="new-spk-name" name="name" placeholder="e.g. Living Room Sonos" required autocomplete="off">
+
+                        <label for="new-spk-type" style="margin-top:10px; display:block;">Speaker type</label>
+                        <select id="new-spk-type" name="type">
+                            <option value="sonos">Sonos</option>
+                            <option value="ha">Home Assistant</option>
+                            <option value="alexa">Alexa</option>
+                        </select>
+
+                        <label for="new-spk-id" style="margin-top:10px; display:block;">IP address or entity ID</label>
+                        <input type="text" id="new-spk-id" name="id" placeholder="e.g. 192.168.4.50 or media_player.living_room" required autocomplete="off">
+
+                        <button type="submit">Save New Speaker</button>
+                    </fieldset>
+                </form>
+            </div>
+        </section>
+
+        <!-- ── AI Profile Manager ─────────────────────────────────────────── -->
+        <section aria-labelledby="prompt-heading">
+            <h2 id="prompt-heading">AI Profile Manager</h2>
+
+            <!-- Profile switcher — explicit button so arrow keys don't
+                 accidentally fire mid-navigation -->
+            <form action="{{ url_for('web_switch_prompt') }}" method="post">
+                <fieldset>
+                    <legend class="sr-only">Switch active AI profile</legend>
+                    <label for="profile_select">Active profile:</label>
+                    <select id="profile_select" name="profile_name" aria-describedby="profile-hint">
+                        {% for p_name in config.prompts.keys() %}
+                        <option value="{{ p_name }}" {{ 'selected' if p_name == config.active_prompt else '' }}>{{ p_name }}</option>
+                        {% endfor %}
+                    </select>
+                    <p id="profile-hint" class="sr-only">Select a profile then press Switch Profile to activate it.</p>
+                    <button type="submit">Switch Profile</button>
+                </fieldset>
+            </form>
+
+            <!-- Prompt editor — label includes active profile name for context -->
+            <form action="{{ url_for('web_save_prompt') }}" method="post" style="margin-top: 15px;">
+                <fieldset>
+                    <legend class="sr-only">Edit prompt for {{ config.active_prompt }}</legend>
+                    <label for="prompt_text_area">
+                        Prompt text for <strong>{{ config.active_prompt }}</strong>:
+                    </label>
+                    <textarea
+                        id="prompt_text_area"
+                        name="prompt_text"
+                        aria-describedby="prompt-hint"
+                    >{{ config.prompts[config.active_prompt] }}</textarea>
+                    <p id="prompt-hint" class="sr-only">Edit the AI instruction text, then press Save Changes.</p>
+                    <button type="submit">Save Changes</button>
+                </fieldset>
+            </form>
+        </section>
+
+        <!-- ── System Utilities ───────────────────────────────────────────── -->
+        <section aria-labelledby="utils-heading">
+            <h2 id="utils-heading">System Utilities</h2>
+            <p class="sr-only">Results will be announced through your speakers after pressing a button.</p>
+            <div class="row">
+                <form action="{{ url_for('web_api_check') }}" method="post" style="flex: 1;">
+                    <button type="submit">Check API Cost</button>
+                </form>
+                <form action="{{ url_for('web_batt_check') }}" method="post" style="flex: 1;">
+                    <button type="submit">Check Batteries</button>
+                </form>
+            </div>
+            <div class="row">
+                <form action="{{ url_for('web_filter_check') }}" method="post" style="flex: 1;">
+                    <button type="submit">Check Refrigerator Filter</button>
+                </form>
+            </div>
+
+        </section>
+
+        <section aria-labelledby="quiet-heading">
+            <h2 id="quiet-heading">Quiet Hours</h2>
+            <p class="field-hint">Utilities are suppressed during quiet hours. Doorbell alerts still follow each speaker's Doorbell Alerts setting.</p>
+            <form action="{{ url_for('web_save_quiet_hours') }}" method="post">
+                <label class="checkbox-label">
+                    <input type="checkbox" name="quiet_hours_enabled" {{ 'checked' if config.get('quiet_hours_enabled', False) else '' }}>
+                    Enable quiet hours
+                </label>
+                <div class="channel-row">
+                    <div>
+                        <label for="quiet_hours_start">Start (HH:MM)</label>
+                        <input type="text" id="quiet_hours_start" name="quiet_hours_start" value="{{ config.get('quiet_hours_start', '22:00') }}">
+                    </div>
+                    <div>
+                        <label for="quiet_hours_end">End (HH:MM)</label>
+                        <input type="text" id="quiet_hours_end" name="quiet_hours_end" value="{{ config.get('quiet_hours_end', '07:00') }}">
+                    </div>
+                </div>
+                <button type="submit">Save Quiet Hours</button>
+            </form>
+
+        <!-- ── Fridge & Freezer Channel Settings ──────────────────────────── -->
+        <section aria-labelledby="fridge-heading">
+            <h2 id="fridge-heading">Fridge &amp; Freezer</h2>
+            <p class="field-hint">
+                Set what happens on speakers when each door event fires from Home Assistant.
+                <strong>Chime only</strong> plays the selected sound file with no speech.
+                <strong>Silent</strong> logs the event with no audio output at all.
+            </p>
+
+            <form action="{{ url_for('web_save_broadcast_channels') }}" method="post">
+                <fieldset>
+                    <legend class="sr-only">Fridge and Freezer door channel settings</legend>
+
+                    {% set channels_cfg = config.get('broadcast_channels', {}) %}
+                    {% set channel_defs = [
+                        ('fridge_open',    'Fridge Door Opens'),
+                        ('fridge_closed',  'Fridge Door Closes'),
+                        ('freezer_open',   'Freezer Door Opens'),
+                        ('freezer_closed', 'Freezer Door Closes'),
+                    ] %}
+
+                    {% for ch_key, ch_label in channel_defs %}
+                    {% set ch = channels_cfg.get(ch_key, {'mode': 'chime', 'chime': ''}) %}
+                    <div class="channel-card">
+                        <strong>{{ ch_label }}</strong>
+                        <div class="channel-row">
+                            <div>
+                                <label for="ch-mode-{{ ch_key }}">Mode</label>
+                                <select id="ch-mode-{{ ch_key }}"
+                                        name="channel_{{ ch_key }}_mode"
+                                        aria-label="{{ ch_label }} mode">
+                                    <option value="speak"  {{ 'selected' if ch.get('mode') == 'speak'  else '' }}>Speak</option>
+                                    <option value="chime"  {{ 'selected' if ch.get('mode','chime') == 'chime' else '' }}>Chime only</option>
+                                    <option value="silent" {{ 'selected' if ch.get('mode') == 'silent' else '' }}>Silent</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="ch-chime-{{ ch_key }}">Chime file</label>
+                                <select id="ch-chime-{{ ch_key }}"
+                                        name="channel_{{ ch_key }}_chime"
+                                        aria-label="{{ ch_label }} chime file">
+                                    <option value="(Default)" {{ 'selected' if not ch.get('chime') else '' }}>(Default tone)</option>
+                                    {% for chime in chimes %}
+                                    {% if chime != "(Default)" %}
+                                    <option value="{{ chime }}" {{ 'selected' if ch.get('chime') == chime else '' }}>{{ chime }}</option>
+                                    {% endif %}
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <button type="submit"
+                                class="secondary"
+                                formaction="{{ url_for('web_test_fridge_chime', channel=ch_key) }}"
+                                formmethod="post"
+                                aria-label="Test chime for {{ ch_label }}">
+                            ▶ Test Chime
+                        </button>
+                    </div>
+                    {% endfor %}
+
+
+                    <div class="row" style="margin-top: 12px;">
+                        <form action="{{ url_for('web_ice_maker_on') }}" method="post" style="flex: 1;">
+                            <button type="submit">Turn Ice Maker On</button>
+                        </form>
+                        <form action="{{ url_for('web_ice_maker_off') }}" method="post" style="flex: 1;">
+                            <button type="submit" class="secondary">Turn Ice Maker Off</button>
+                        </form>
+                    </div>
+
+                    <button type="submit">Save Fridge &amp; Freezer Settings</button>
+                </fieldset>
+            </form>
+        </section>
+
+        <!-- ── Broadcast Message ──────────────────────────────────────────── -->
+        <section aria-labelledby="broadcast-heading">
+            <h2 id="broadcast-heading">Broadcast Message</h2>
+            <form action="{{ url_for('web_broadcast') }}" method="post">
+                <input type="hidden" name="channel" value="manual">
+                <label for="broadcast_text">Manual broadcast (always speaks on all speakers):</label>
+                <textarea
+                    id="broadcast_text"
+                    name="broadcast_text"
+                    placeholder="Type your message here…"
+                    aria-describedby="broadcast-hint"
+                ></textarea>
+                <p id="broadcast-hint" class="sr-only">This message will always be spoken aloud regardless of any channel settings.</p>
+                <button type="submit">Broadcast Now</button>
+            </form>
+        </section>
+
+        <!-- ── Discovery Tools ────────────────────────────────────────────── -->
+        <section aria-labelledby="scan-heading">
+            <h2 id="scan-heading">Discovery Tools</h2>
+            <p class="sr-only">Scan results appear as notifications and are announced through your speakers.</p>
+            <div class="row">
+                <form action="{{ url_for('web_scan_sonos') }}" method="post" style="flex: 1;">
+                    <button type="submit">Scan for Sonos</button>
+                </form>
+                <form action="{{ url_for('web_scan_ha') }}" method="post" style="flex: 1;">
+                    <button type="submit">Scan Home Assistant</button>
+                </form>
+            </div>
+        </section>
+
+        <!-- ── Cinderella Message Studio ──────────────────────────────────── -->
+        <section aria-labelledby="cinderella-studio-heading">
+            <h2 id="cinderella-studio-heading">Cinderella Message Studio</h2>
+            <p class="studio-help">
+                One line equals one possible message. Viper picks randomly. Save each section separately.
+                Error templates may include <code>{error}</code> which is replaced with the actual error code.
+            </p>
+
+            {% set cm = config.cinderella_messages %}
+
+            <div class="studio-grid">
+                {% for bucket, label in [
+                    ('departure',              'Departure Messages'),
+                    ('washing',                'Washing Messages'),
+                    ('emptying',               'Emptying Messages'),
+                    ('drying',                 'Drying Messages'),
+                    ('returning',              'Returning Messages'),
+                    ('victory',                'Victory Messages'),
+                    ('paused',                 'Paused Messages'),
+                    ('status_update',          'Other Status Messages'),
+                    ('vacuum_error_templates', 'Generic Vacuum Error Templates'),
+                    ('dock_error_templates',   'Generic Dock Error Templates')
+                ] %}
+                <div class="studio-card">
+                    <form action="{{ url_for('web_save_cinderella_bucket', bucket=bucket) }}" method="post">
+                        <fieldset>
+                            <legend>{{ label }}</legend>
+                            <label for="cm-{{ bucket }}" class="sr-only">
+                                Messages for {{ label }} — one per line
+                            </label>
+                            <textarea
+                                id="cm-{{ bucket }}"
+                                name="messages"
+                                aria-describedby="cm-hint-{{ bucket }}"
+                            >{{ cm.get(bucket, []) | join('\n') }}</textarea>
+                            <p id="cm-hint-{{ bucket }}" class="sr-only">Enter one message per line. Press Save {{ label }} when done.</p>
+                            <button type="submit">Save {{ label }}</button>
+                        </fieldset>
+                    </form>
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Add specific error bucket -->
+            <div class="studio-card" style="margin-top: 15px;">
+                <form action="{{ url_for('web_add_cinderella_error_bucket') }}" method="post">
+                    <fieldset>
+                        <legend>Add Specific Error Bucket</legend>
+                        <label for="error-name-input">
+                            Error code (use underscores, e.g. <code>main_brush_stuck</code>):
+                        </label>
+                        <input
+                            type="text"
+                            id="error-name-input"
+                            name="error_name"
+                            placeholder="e.g. main_brush_stuck"
+                            required
+                            autocomplete="off"
+                            aria-describedby="error-name-hint"
+                        >
+                        <p id="error-name-hint" class="sr-only">Must match the error code sent by the robot. Spaces will be converted to underscores.</p>
+                        <button type="submit">Add Error Bucket</button>
+                    </fieldset>
+                </form>
+            </div>
+
+            <!-- Specific error buckets -->
+            {% if cm.get('specific_errors') %}
+            <div class="studio-grid" style="margin-top: 15px;">
+                {% for error_name, lines in cm.get('specific_errors', {}) | dictsort %}
+                <div class="studio-card">
+                    <form action="{{ url_for('web_save_cinderella_error_bucket', error_name=error_name) }}" method="post">
+                        <fieldset>
+                            <legend>Specific Error: {{ error_name }}</legend>
+                            <label for="cm-err-{{ error_name }}" class="sr-only">
+                                Messages for error {{ error_name }} — one per line
+                            </label>
+                            <textarea
+                                id="cm-err-{{ error_name }}"
+                                name="messages"
+                                aria-describedby="cm-err-hint-{{ error_name }}"
+                            >{{ lines | join('\n') }}</textarea>
+                            <p id="cm-err-hint-{{ error_name }}" class="sr-only">One message per line. Press Save to update.</p>
+                            <button type="submit">Save {{ error_name }}</button>
+                        </fieldset>
+                    </form>
+                    <form
+                        action="{{ url_for('web_delete_cinderella_error_bucket', error_name=error_name) }}"
+                        method="post"
+                        onsubmit="return confirmDelete(event, '{{ error_name }}')"
+                    >
+                        <button type="submit" class="danger">
+                            Delete {{ error_name }} bucket
+                        </button>
+                    </form>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </section>
+
+        <!-- ── Recent Activity ────────────────────────────────────────────── -->
+        <section aria-labelledby="activity-heading">
+            <h2 id="activity-heading">Recent Activity</h2>
+            {% if activity_logs %}
+            <ul aria-label="Recent activity log">
+                {% for log in activity_logs %}
+                <li>[{{ log.time }}] {{ log.msg }}</li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p>No recent activity to display.</p>
+            {% endif %}
+        </section>
+
+    </main>
+
+    <script>
+        // ── Announce a message to screen readers via the live region ────────
+        function announce(msg) {
+            var el = document.getElementById('live-status');
+            if (!el) return;
+            el.textContent = '';
+            // Small delay forces the DOM mutation to be detected as a change
+            setTimeout(function() { el.textContent = msg; }, 50);
+        }
+
+        // ── Toggle inline rename form ────────────────────────────────────────
+        // btn  = the Rename button that was pressed
+        // id   = the id of the .rename-form div to open/close
+        function toggleRename(btn, id) {
+            var form = document.getElementById(id);
+            if (!form) return;
+            var opening = !form.classList.contains('open');
+            form.classList.toggle('open', opening);
+            btn.setAttribute('aria-expanded', String(opening));
+            if (opening) {
+                // Move focus to the name input so the user can start typing
+                var input = form.querySelector('input[type="text"]');
+                if (input) { input.focus(); input.select(); }
+            } else {
+                // Return focus to the Rename button
+                btn.focus();
+            }
+        }
+
+        // ── Toggle Add New Speaker form ──────────────────────────────────────
+        function toggleAddSpeaker(btn) {
+            var form = document.getElementById('add-spk-form');
+            if (!form) return;
+            var opening = form.style.display === 'none';
+            form.style.display = opening ? 'block' : 'none';
+            btn.setAttribute('aria-expanded', String(opening));
+            if (opening) {
+                var first = form.querySelector('input, select, textarea');
+                if (first) first.focus();
+            } else {
+                btn.focus();
+            }
+        }
+
+        // ── Accessible delete confirmation ───────────────────────────────────
+        // Replaces browser confirm() which is poorly supported by JAWS.
+        // Creates a visible, focusable dialog in the page flow so JAWS reads it.
+        function confirmDelete(e, itemName) {
+            e.preventDefault();
+            var form = e.target;
+
+            // Don't stack multiple dialogs
+            if (document.getElementById('confirm-dialog')) {
+                document.getElementById('confirm-dialog').remove();
+            }
+
+            var dialog = document.createElement('div');
+            dialog.id = 'confirm-dialog';
+            dialog.setAttribute('role', 'alertdialog');
+            dialog.setAttribute('aria-modal', 'true');
+            dialog.setAttribute('aria-labelledby', 'confirm-title');
+            dialog.setAttribute('aria-describedby', 'confirm-desc');
+            dialog.setAttribute('tabindex', '-1');
+            dialog.style.cssText = [
+                'position:fixed','top:50%','left:50%',
+                'transform:translate(-50%,-50%)',
+                'background:#fff','border:2px solid #dc3545',
+                'border-radius:8px','padding:24px','max-width:320px',
+                'width:90%','z-index:1000','box-shadow:0 4px 20px rgba(0,0,0,0.3)'
+            ].join(';');
+
+            dialog.innerHTML = [
+                '<h3 id="confirm-title" style="margin-top:0;color:#dc3545;">Confirm Delete</h3>',
+                '<p id="confirm-desc">Are you sure you want to delete <strong>' + escHtml(itemName) + '</strong>? This cannot be undone.</p>',
+                '<div style="display:flex;gap:10px;margin-top:16px;">',
+                '  <button id="confirm-yes" type="button" class="danger" style="flex:1;margin-top:0;">Yes, delete</button>',
+                '  <button id="confirm-no"  type="button" class="secondary" style="flex:1;margin-top:0;">Cancel</button>',
+                '</div>'
+            ].join('');
+
+            document.body.appendChild(dialog);
+            dialog.focus();
+
+            document.getElementById('confirm-yes').addEventListener('click', function() {
+                dialog.remove();
+                form.submit();
+            });
+            document.getElementById('confirm-no').addEventListener('click', function() {
+                dialog.remove();
+                // Return focus to the delete button that opened the dialog
+                var btn = form.querySelector('button[type="submit"]');
+                if (btn) btn.focus();
+                announce('Delete cancelled.');
+            });
+
+            // Trap Tab/Shift-Tab inside the dialog
+            dialog.addEventListener('keydown', function(ev) {
+                if (ev.key !== 'Tab') return;
+                var focusable = dialog.querySelectorAll('button');
+                var first = focusable[0], last = focusable[focusable.length - 1];
+                if (ev.shiftKey && document.activeElement === first) {
+                    ev.preventDefault(); last.focus();
+                } else if (!ev.shiftKey && document.activeElement === last) {
+                    ev.preventDefault(); first.focus();
+                }
+            });
+
+            // Escape closes
+            dialog.addEventListener('keydown', function(ev) {
+                if (ev.key === 'Escape') { document.getElementById('confirm-no').click(); }
+            });
+
+            return false;
+        }
+
+        // Simple HTML escaper used by the dialog
+        function escHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+    </script>
+</body>
+</html>

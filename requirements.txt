@@ -1,0 +1,13 @@
+accessible-output2
+edge-tts
+Flask
+google-genai
+gTTS
+paho-mqtt
+Pillow
+pyinstaller
+pywin32
+requests
+soco
+waitress
+wxPython

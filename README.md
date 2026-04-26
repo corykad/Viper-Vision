@@ -1,63 +1,145 @@
-# 🐍👁️ Viper Vision
+# Viper Vision
 
-**Viper Vision** is an intelligent, highly accessible, self-hosted smart home security dashboard. It bridges the gap between Ring cameras, Home Assistant, Sonos, and Gemini AI to create a fully automated, talking security system.
+Viper Vision is a Windows-first smart home notification system that connects Home Assistant, Ring doorbell events, speaker playback, Gemini vision, and configurable text-to-speech announcements.
 
-When motion or a doorbell ring is detected, Viper Vision captures frames via an RTSP stream, analyzes them using Google's Gemini 2.5 Flash AI, and broadcasts a natural-language description of what it sees (e.g., *"There is a delivery driver holding a package at the front door"*) across your house via Sonos, Alexa, and Google Nest speakers.
+Version `1.0` focuses on fast doorbell awareness, accessible controls, flexible TTS routing, and playful Roborock/Cinderella notifications.
 
----
+## Features
 
-## ✨ Key Features
-* **AI Frame Analysis:** Uses Gemini Vision to analyze RTSP flipbooks and generate concise, accurate security descriptions.
-* **Universal Audio Broadcasting:** Automatically discovers and broadcasts to Sonos, Alexa, and Home Assistant Cast devices.
-* **Accessible Desktop UI:** Built with `wxPython` and `accessible_output2` for full screen-reader compatibility.
-* **Remote Web Dashboard:** Control the system, manage speaker targets, and check batteries via a mobile-friendly Flask interface.
-* **Automated Port Defender:** Includes a custom Windows batch script that prevents WinNAT from stealing Docker networking ports.
-* **Background Health Monitor:** Automatically alerts you via audio if your MQTT broker or Camera Bridge goes offline.
+- Doorbell AI analysis from RTSP snapshots using Gemini vision.
+- Configurable TTS engines:
+  - Gemini cloud TTS
+  - Microsoft Edge TTS
+  - Google Translate speech
+  - Windows SAPI
+- Per-alert voice behavior for doorbell, utilities, and manual broadcasts.
+- Home Assistant REST endpoints for broadcasts, doorbell webhooks, fridge/freezer alerts, and Roborock events.
+- Roborock/Cinderella message routing for vacuum status, dock status, and error events.
+- Sonos, Home Assistant media player, and optional Alexa announcement support.
+- Screen-reader-friendly wxPython UI with focus descriptions for key controls.
+- Local timing logs for RTSP capture, Gemini vision, TTS generation, and speaker playback.
 
----
+## Requirements
 
-## 📂 Project Structure
-* `/setup` - Contains the Master Setup script for initializing directories and fixing Windows networking.
-* `/src` - The core Python application, including the main dashboard, AI vision handlers, and audio routing.
-* `docker-compose.yml` - The Docker stack containing Mosquitto, Home Assistant, and the Ring-MQTT bridge.
+- Windows 10 or newer.
+- Python 3.11+ recommended.
+- Home Assistant for webhooks and media player routing.
+- FFmpeg available on `PATH` or placed beside the app as `ffmpeg.exe`.
+- A Gemini API key for Gemini vision and Gemini TTS features.
 
----
+Install Python dependencies:
 
-## 🚀 Quick Start Guide
-
-### 1. Prerequisites
-* **Windows 10/11** (Required for the WinNAT port-fixer and wxPython UI)
-* **Docker Desktop** installed and running
-* **Python 3.10+**
-
-### 2. The Master Setup
-To avoid port collisions and firewall blocks, **do not run `docker-compose up` manually**. Instead, use the provided installer:
-1. Navigate to the `/setup` folder.
-2. Right-click `Viper_Master_Setup.bat` and select **Run as Administrator**.
-3. **Wait about 30 seconds** for the Docker containers to fully download, extract, and start up in the background.
-
-### 3. Connect Your Ring Account
-Once Docker is running, link your cameras to the local bridge:
-1. Open your browser and go to `http://localhost:55123`
-2. Log in with your Ring credentials to generate the local RTSP streams.
-
-### 4. Install Dependencies & Set Variables
-Open your terminal in the root project directory and install the required Python libraries:
-```
+```powershell
 pip install -r requirements.txt
+```
 
-You must set the following System Environment Variables on your Windows machine for the app to function:
+## Configuration
 
-HA_TOKEN: Your Long-Lived Access Token from Home Assistant.
+Viper stores local runtime settings in `viper_config.json`. That file is intentionally ignored by Git because it may contain local IPs, tokens, MQTT credentials, API keys, and personal smart home entity IDs.
 
-GEMINI_KEY: Your Google Gemini API Key.
+Start from:
 
-PUSHOVER_USER: Your Pushover User Key (for mobile push notifications).
+```text
+viper_config.example.json
+.env.example
+```
 
-PUSHOVER_TOKEN: Your Pushover App Token.
+Common values to configure:
 
-5. Launch Viper Vision
-Navigate to the source directory and run the main app:
+- `GEMINI_API_KEY`
+- Home Assistant host and long-lived access token
+- Ring MQTT topics
+- RTSP camera URLs or camera IDs
+- Target speaker entities and Sonos IPs
+- TTS defaults and per-alert overrides
 
-cd src
-python main.py
+## Running From Source
+
+```powershell
+python main.pyw
+```
+
+The local web UI and webhook server default to:
+
+```text
+http://<your-pc-ip>:5050
+```
+
+## Building The Windows App
+
+The repository includes a PyInstaller spec and helper script:
+
+```powershell
+.\build_exe.ps1
+```
+
+Build output is generated under `dist/` and is not committed.
+
+## Home Assistant
+
+Viper can generate Home Assistant package YAML, but many users may prefer keeping existing `configuration.yaml` and `automations.yaml` files.
+
+The important REST commands are:
+
+- `rest_command.ring_vision_front`
+- `rest_command.ring_vision_back`
+- `rest_command.viper_broadcast`
+- `rest_command.viper_broadcast_push`
+- `rest_command.cinderella_event`
+
+A sanitized package example is included under `ha_packages/`. Replace placeholder IPs, MQTT topics, and entity IDs before installing it.
+
+## Roborock / Cinderella
+
+The Cinderella event router maps Roborock status and error values into spoken messages. Known buckets include:
+
+- departure
+- washing
+- emptying
+- drying
+- returning
+- victory
+- paused
+- status updates
+- vacuum errors
+- dock errors
+
+The app includes default messages and lets you edit message buckets from the remote UI.
+
+## TTS Performance Notes
+
+Gemini voices sound natural, but cloud audio generation adds latency. Edge or Google speech is faster. Viper logs timing markers such as:
+
+- `[DOORBELL TIMING]`
+- `[RTSP CANDIDATE]`
+- `[AI TIMING]`
+- `[TTS TIMING]`
+- `[HA PLAY TIMING]`
+- `[SONOS ... TIMING]`
+
+These logs help tune RTSP capture, AI model timing, TTS latency, and speaker playback.
+
+Gemini warmup calls are real API calls and may be billable. Keep Gemini TTS heartbeat/warmup disabled unless the latency benefit is worth the additional usage.
+
+## Accessibility
+
+The desktop UI is designed with screen-reader use in mind. Controls in the voice configuration area include spoken focus descriptions, and the app uses `accessible-output2` to announce status changes.
+
+## Security
+
+Do not publish:
+
+- `viper_config.json`
+- `.env`
+- Home Assistant tokens
+- Gemini API keys
+- Pushover tokens
+- MQTT passwords
+- personal Ring topic IDs
+- debug logs
+
+The `.gitignore` is configured to keep those out of source control.
+
+## License
+
+MIT License. See `LICENSE`.

@@ -1,0 +1,517 @@
+{
+    "is_armed": true,
+    "active_prompt": "Standard",
+    "vision_engine": "Gemini (Cloud)",
+    "ollama_model": "llama3.2-vision",
+    "tts_engine": "Edge TTS (Natural)",
+    "edge_tts_voice": "en-US-AriaNeural",
+    "gemini_tts_voice": "Sulafat",
+    "gemini_tts_model": "gemini-3.1-flash-tts-preview",
+    "gemini_tts_keep_warm": false,
+    "gemini_tts_heartbeat_seconds": 240,
+    "gemini_tts_min_interval_seconds": 0,
+    "tts_simple": {
+        "mode": "natural_gemini",
+        "personality": "warm",
+        "dynamic_mood": true,
+        "keep_warm": false,
+        "speeds": {
+            "doorbell": "fast",
+            "utilities": "normal",
+            "manual": "normal"
+        }
+    },
+    "tts_defaults": {
+        "engine": "gemini",
+        "gemini_voice": "Sulafat",
+        "edge_voice": "en-US-AriaNeural",
+        "google_tld": "com",
+        "sapi_voice_index": 1,
+        "speed": "normal",
+        "dynamic_mood": true,
+        "keep_warm": false,
+        "gemini_min_interval_seconds": 0
+    },
+    "tts_alerts": {
+        "doorbell": {
+            "use_defaults": true,
+            "engine": "gemini",
+            "gemini_voice": "Kore",
+            "edge_voice": "en-US-AriaNeural",
+            "google_tld": "com",
+            "sapi_voice_index": 1,
+            "speed": "fast",
+            "dynamic_mood": true
+        },
+        "utilities": {
+            "use_defaults": true,
+            "engine": "gemini",
+            "gemini_voice": "Sulafat",
+            "edge_voice": "en-US-AriaNeural",
+            "google_tld": "com",
+            "sapi_voice_index": 1,
+            "speed": "normal",
+            "dynamic_mood": true
+        },
+        "manual": {
+            "use_defaults": true,
+            "engine": "gemini",
+            "gemini_voice": "Puck",
+            "edge_voice": "en-US-AriaNeural",
+            "google_tld": "com",
+            "sapi_voice_index": 1,
+            "speed": "normal",
+            "dynamic_mood": true
+        }
+    },
+    "tts_profiles": {
+        "doorbell": {
+            "model": "gemini-3.1-flash-tts-preview",
+            "voice": "Kore",
+            "priority": "CRITICAL",
+            "target": "configured",
+            "style": "[urgent, clear, very fast]",
+            "dynamic_mood": true,
+            "speed": "fast"
+        },
+        "utilities": {
+            "model": "gemini-3.1-flash-tts-preview",
+            "voice": "Sulafat",
+            "priority": "LOW",
+            "target": "configured",
+            "style": "[calm, clear]",
+            "dynamic_mood": true,
+            "speed": "normal"
+        },
+        "manual": {
+            "model": "gemini-3.1-flash-tts-preview",
+            "voice": "Puck",
+            "priority": "MEDIUM",
+            "target": "all",
+            "style": "[friendly, clear]",
+            "dynamic_mood": true,
+            "speed": "normal"
+        }
+    },
+    "local_voice_index": 1,
+    "google_tts_tld": "com",
+    "front_chime": "",
+    "back_chime": "",
+    "mute_local_pc": false,
+    "enable_alexa": false,
+    "ha_ip": "192.168.1.10",
+    "ha_port": "8123",
+    "ha_token": "",
+    "gemini_api_key": "",
+    "pushover_enabled": false,
+    "pushover_user_key": "",
+    "pushover_api_token": "",
+    "front_camera_id": "",
+    "back_camera_id": "",
+    "ring_topic_root": "",
+    "rtsp_front": "",
+    "rtsp_back": "",
+    "front_doorbell_mqtt_topic": "ring/YOUR_LOCATION_ID/camera/YOUR_FRONT_CAMERA_ID/motion/state",
+    "back_doorbell_mqtt_topic": "ring/YOUR_LOCATION_ID/camera/YOUR_BACK_CAMERA_ID/motion/state",
+    "mqtt_host": "192.168.1.10",
+    "mqtt_port": "1883",
+    "mqtt_username": "",
+    "mqtt_password": "",
+    "quiet_hours_enabled": false,
+    "quiet_hours_start": "22:00",
+    "quiet_hours_end": "07:00",
+    "broadcast_channels": {
+        "default": {
+            "mode": "speak",
+            "chime": ""
+        },
+        "fridge_open": {
+            "mode": "chime",
+            "chime": ""
+        },
+        "fridge_closed": {
+            "mode": "chime",
+            "chime": ""
+        },
+        "freezer_open": {
+            "mode": "chime",
+            "chime": ""
+        },
+        "freezer_closed": {
+            "mode": "chime",
+            "chime": ""
+        }
+    },
+    "cinderella_enabled": true,
+    "cinderella_ai_mode": false,
+    "cinderella_ai_prompt": "You are a dry, witty narrator for a robot vacuum cleaner named Cinderella. Generate exactly ONE short, funny sentence (under 20 words) reacting to the following robot event. Be creative, unexpected, and self-aware. Event: {event}. Source: {source}. Error detail: {error}. Reply with the sentence only \u2014 no quotes, no punctuation after the period.",
+    "prompts": {
+        "Standard": "Analyze this security camera frame. Describe people and actions in a natural sentence. Mention clothing/packages. Under 25 words.",
+        "Detailed": "Analyze this security camera frame. Describe people, actions, clothing, and environment in detail. Strictly under 40 words."
+    },
+    "speakers": {},
+    "cinderella_messages": {
+        "departure": [
+            "The floor goblin has been released.",
+            "Dust, your time has come.",
+            "Cinderella has chosen violence against dirt."
+        ],
+        "washing": [
+            "Mop spa day has begun.",
+            "She is rinsing off the evidence.",
+            "The mop is being reborn."
+        ],
+        "emptying": [
+            "Dumping today's bad decisions.",
+            "The dirt vault is full.",
+            "She is disposing of the evidence."
+        ],
+        "drying": [
+            "Drying cycle engaged.",
+            "The mop is becoming socially acceptable again.",
+            "Moisture is being aggressively removed."
+        ],
+        "returning": [
+            "Returning home like she pays rent.",
+            "Cinderella is done being brave.",
+            "Retreating with dignity... barely."
+        ],
+        "victory": [
+            "The floor has been defeated.",
+            "Cinderella demands recognition.",
+            "Victory has been achieved."
+        ],
+        "paused": [
+            "Paused for existential reasons.",
+            "Cinderella is buffering.",
+            "The robot has stopped and is judging silently."
+        ],
+        "status_update": [
+            "Cinderella has entered a weird little robot state.",
+            "The vacuum has changed modes and would like attention.",
+            "Cinderella reports a status change from the floor front."
+        ],
+        "vacuum_error_templates": [
+            "Cinderella has entered her villain arc. Error: {error}.",
+            "The robot is having a moment. Error: {error}.",
+            "This is not going well. Error: {error}."
+        ],
+        "dock_error_templates": [
+            "The dock is being weird again. Problem: {error}.",
+            "Cinderella's parking spot has opinions. Problem: {error}.",
+            "Dock drama detected. Issue: {error}."
+        ],
+        "specific_errors": {
+            "lidar_blocked": [
+                "Cinderella reports lidar blocked. Please inspect the vacuum.",
+                "The floor mission is blocked by lidar blocked.",
+                "Robot vacuum complaint detected: lidar blocked."
+            ],
+            "bumper_stuck": [
+                "Cinderella reports bumper stuck. Please inspect the vacuum.",
+                "The floor mission is blocked by bumper stuck.",
+                "Robot vacuum complaint detected: bumper stuck."
+            ],
+            "wheels_suspended": [
+                "Cinderella reports wheels suspended. Please inspect the vacuum.",
+                "The floor mission is blocked by wheels suspended.",
+                "Robot vacuum complaint detected: wheels suspended."
+            ],
+            "cliff_sensor_error": [
+                "Cinderella reports cliff sensor error. Please inspect the vacuum.",
+                "The floor mission is blocked by cliff sensor error.",
+                "Robot vacuum complaint detected: cliff sensor error."
+            ],
+            "main_brush_jammed": [
+                "Cinderella reports main brush jammed. Please inspect the vacuum.",
+                "The floor mission is blocked by main brush jammed.",
+                "Robot vacuum complaint detected: main brush jammed."
+            ],
+            "side_brush_jammed": [
+                "Cinderella reports side brush jammed. Please inspect the vacuum.",
+                "The floor mission is blocked by side brush jammed.",
+                "Robot vacuum complaint detected: side brush jammed."
+            ],
+            "wheels_jammed": [
+                "Cinderella reports wheels jammed. Please inspect the vacuum.",
+                "The floor mission is blocked by wheels jammed.",
+                "Robot vacuum complaint detected: wheels jammed."
+            ],
+            "robot_trapped": [
+                "Cinderella reports robot trapped. Please inspect the vacuum.",
+                "The floor mission is blocked by robot trapped.",
+                "Robot vacuum complaint detected: robot trapped."
+            ],
+            "no_dustbin": [
+                "Cinderella reports no dustbin. Please inspect the vacuum.",
+                "The floor mission is blocked by no dustbin.",
+                "Robot vacuum complaint detected: no dustbin."
+            ],
+            "strainer_error": [
+                "Cinderella reports strainer error. Please inspect the vacuum.",
+                "The floor mission is blocked by strainer error.",
+                "Robot vacuum complaint detected: strainer error."
+            ],
+            "compass_error": [
+                "Cinderella reports compass error. Please inspect the vacuum.",
+                "The floor mission is blocked by compass error.",
+                "Robot vacuum complaint detected: compass error."
+            ],
+            "low_battery": [
+                "Cinderella reports low battery. Please inspect the vacuum.",
+                "The floor mission is blocked by low battery.",
+                "Robot vacuum complaint detected: low battery."
+            ],
+            "charging_error": [
+                "Cinderella reports charging error. Please inspect the vacuum.",
+                "The floor mission is blocked by charging error.",
+                "Robot vacuum complaint detected: charging error."
+            ],
+            "battery_error": [
+                "Cinderella reports battery error. Please inspect the vacuum.",
+                "The floor mission is blocked by battery error.",
+                "Robot vacuum complaint detected: battery error."
+            ],
+            "wall_sensor_dirty": [
+                "Cinderella reports wall sensor dirty. Please inspect the vacuum.",
+                "The floor mission is blocked by wall sensor dirty.",
+                "Robot vacuum complaint detected: wall sensor dirty."
+            ],
+            "robot_tilted": [
+                "Cinderella reports robot tilted. Please inspect the vacuum.",
+                "The floor mission is blocked by robot tilted.",
+                "Robot vacuum complaint detected: robot tilted."
+            ],
+            "side_brush_error": [
+                "Cinderella reports side brush error. Please inspect the vacuum.",
+                "The floor mission is blocked by side brush error.",
+                "Robot vacuum complaint detected: side brush error."
+            ],
+            "fan_error": [
+                "Cinderella reports fan error. Please inspect the vacuum.",
+                "The floor mission is blocked by fan error.",
+                "Robot vacuum complaint detected: fan error."
+            ],
+            "dock": [
+                "Cinderella reports dock. Please inspect the vacuum.",
+                "The floor mission is blocked by dock.",
+                "Robot vacuum complaint detected: dock."
+            ],
+            "optical_flow_sensor_dirt": [
+                "Cinderella reports optical flow sensor dirt. Please inspect the vacuum.",
+                "The floor mission is blocked by optical flow sensor dirt.",
+                "Robot vacuum complaint detected: optical flow sensor dirt."
+            ],
+            "vertical_bumper_pressed": [
+                "Cinderella reports vertical bumper pressed. Please inspect the vacuum.",
+                "The floor mission is blocked by vertical bumper pressed.",
+                "Robot vacuum complaint detected: vertical bumper pressed."
+            ],
+            "dock_locator_error": [
+                "Cinderella reports dock locator error. Please inspect the vacuum.",
+                "The floor mission is blocked by dock locator error.",
+                "Robot vacuum complaint detected: dock locator error."
+            ],
+            "return_to_dock_fail": [
+                "Cinderella reports return to dock fail. Please inspect the vacuum.",
+                "The floor mission is blocked by return to dock fail.",
+                "Robot vacuum complaint detected: return to dock fail."
+            ],
+            "nogo_zone_detected": [
+                "Cinderella reports nogo zone detected. Please inspect the vacuum.",
+                "The floor mission is blocked by nogo zone detected.",
+                "Robot vacuum complaint detected: nogo zone detected."
+            ],
+            "visual_sensor": [
+                "Cinderella reports visual sensor. Please inspect the vacuum.",
+                "The floor mission is blocked by visual sensor.",
+                "Robot vacuum complaint detected: visual sensor."
+            ],
+            "light_touch": [
+                "Cinderella reports light touch. Please inspect the vacuum.",
+                "The floor mission is blocked by light touch.",
+                "Robot vacuum complaint detected: light touch."
+            ],
+            "vibrarise_jammed": [
+                "Cinderella reports vibrarise jammed. Please inspect the vacuum.",
+                "The floor mission is blocked by vibrarise jammed.",
+                "Robot vacuum complaint detected: vibrarise jammed."
+            ],
+            "robot_on_carpet": [
+                "Cinderella reports robot on carpet. Please inspect the vacuum.",
+                "The floor mission is blocked by robot on carpet.",
+                "Robot vacuum complaint detected: robot on carpet."
+            ],
+            "filter_blocked": [
+                "Cinderella reports filter blocked. Please inspect the vacuum.",
+                "The floor mission is blocked by filter blocked.",
+                "Robot vacuum complaint detected: filter blocked."
+            ],
+            "invisible_wall_detected": [
+                "Cinderella reports invisible wall detected. Please inspect the vacuum.",
+                "The floor mission is blocked by invisible wall detected.",
+                "Robot vacuum complaint detected: invisible wall detected."
+            ],
+            "cannot_cross_carpet": [
+                "Cinderella reports cannot cross carpet. Please inspect the vacuum.",
+                "The floor mission is blocked by cannot cross carpet.",
+                "Robot vacuum complaint detected: cannot cross carpet."
+            ],
+            "internal_error": [
+                "Cinderella reports internal error. Please inspect the vacuum.",
+                "The floor mission is blocked by internal error.",
+                "Robot vacuum complaint detected: internal error."
+            ],
+            "collect_dust_error_3": [
+                "Cinderella reports collect dust error 3. Please inspect the vacuum.",
+                "The floor mission is blocked by collect dust error 3.",
+                "Robot vacuum complaint detected: collect dust error 3."
+            ],
+            "collect_dust_error_4": [
+                "Cinderella reports collect dust error 4. Please inspect the vacuum.",
+                "The floor mission is blocked by collect dust error 4.",
+                "Robot vacuum complaint detected: collect dust error 4."
+            ],
+            "mopping_roller_1": [
+                "Cinderella reports mopping roller 1. Please inspect the vacuum.",
+                "The floor mission is blocked by mopping roller 1.",
+                "Robot vacuum complaint detected: mopping roller 1."
+            ],
+            "mopping_roller_error_2": [
+                "Cinderella reports mopping roller error 2. Please inspect the vacuum.",
+                "The floor mission is blocked by mopping roller error 2.",
+                "Robot vacuum complaint detected: mopping roller error 2."
+            ],
+            "clear_water_box_hoare": [
+                "Cinderella reports clear water box hoare. Please inspect the vacuum.",
+                "The floor mission is blocked by clear water box hoare.",
+                "Robot vacuum complaint detected: clear water box hoare."
+            ],
+            "dirty_water_box_hoare": [
+                "Cinderella reports dirty water box hoare. Please inspect the vacuum.",
+                "The floor mission is blocked by dirty water box hoare.",
+                "Robot vacuum complaint detected: dirty water box hoare."
+            ],
+            "sink_strainer_hoare": [
+                "Cinderella reports sink strainer hoare. Please inspect the vacuum.",
+                "The floor mission is blocked by sink strainer hoare.",
+                "Robot vacuum complaint detected: sink strainer hoare."
+            ],
+            "clear_water_box_exception": [
+                "Cinderella reports clear water box exception. Please inspect the vacuum.",
+                "The floor mission is blocked by clear water box exception.",
+                "Robot vacuum complaint detected: clear water box exception."
+            ],
+            "clear_brush_exception": [
+                "Cinderella reports clear brush exception. Please inspect the vacuum.",
+                "The floor mission is blocked by clear brush exception.",
+                "Robot vacuum complaint detected: clear brush exception."
+            ],
+            "clear_brush_exception_2": [
+                "Cinderella reports clear brush exception 2. Please inspect the vacuum.",
+                "The floor mission is blocked by clear brush exception 2.",
+                "Robot vacuum complaint detected: clear brush exception 2."
+            ],
+            "filter_screen_exception": [
+                "Cinderella reports filter screen exception. Please inspect the vacuum.",
+                "The floor mission is blocked by filter screen exception.",
+                "Robot vacuum complaint detected: filter screen exception."
+            ],
+            "mopping_roller_2": [
+                "Cinderella reports mopping roller 2. Please inspect the vacuum.",
+                "The floor mission is blocked by mopping roller 2.",
+                "Robot vacuum complaint detected: mopping roller 2."
+            ],
+            "up_water_exception": [
+                "Cinderella reports up water exception. Please inspect the vacuum.",
+                "The floor mission is blocked by up water exception.",
+                "Robot vacuum complaint detected: up water exception."
+            ],
+            "drain_water_exception": [
+                "Cinderella reports drain water exception. Please inspect the vacuum.",
+                "The floor mission is blocked by drain water exception.",
+                "Robot vacuum complaint detected: drain water exception."
+            ],
+            "temperature_protection": [
+                "Cinderella reports temperature protection. Please inspect the vacuum.",
+                "The floor mission is blocked by temperature protection.",
+                "Robot vacuum complaint detected: temperature protection."
+            ],
+            "clean_carousel_exception": [
+                "Cinderella reports clean carousel exception. Please inspect the vacuum.",
+                "The floor mission is blocked by clean carousel exception.",
+                "Robot vacuum complaint detected: clean carousel exception."
+            ],
+            "clean_carousel_water_full": [
+                "Cinderella reports clean carousel water full. Please inspect the vacuum.",
+                "The floor mission is blocked by clean carousel water full.",
+                "Robot vacuum complaint detected: clean carousel water full."
+            ],
+            "water_carriage_drop": [
+                "Cinderella dropped the water carriage like a soap opera prop.",
+                "The water carriage has left the chat.",
+                "Hydration system drama. Water carriage drop."
+            ],
+            "check_clean_carouse": [
+                "Cinderella reports check clean carouse. Please inspect the vacuum.",
+                "The floor mission is blocked by check clean carouse.",
+                "Robot vacuum complaint detected: check clean carouse."
+            ],
+            "audio_error": [
+                "Cinderella reports audio error. Please inspect the vacuum.",
+                "The floor mission is blocked by audio error.",
+                "Robot vacuum complaint detected: audio error."
+            ],
+            "dock_no_dustbin_or_filter": [
+                "The dock reports no dustbin or filter. Cinderella needs help at base.",
+                "Dock issue detected: no dustbin or filter.",
+                "The charging station has filed a complaint: no dustbin or filter."
+            ],
+            "dock_auto_empty_dock_fan_error": [
+                "The dock reports auto empty dock fan error. Cinderella needs help at base.",
+                "Dock issue detected: auto empty dock fan error.",
+                "The charging station has filed a complaint: auto empty dock fan error."
+            ],
+            "dock_duct_blockage": [
+                "The dock reports duct blockage. Cinderella needs help at base.",
+                "Dock issue detected: duct blockage.",
+                "The charging station has filed a complaint: duct blockage."
+            ],
+            "dock_auto_empty_dock_voltage_error": [
+                "The dock reports auto empty dock voltage error. Cinderella needs help at base.",
+                "Dock issue detected: auto empty dock voltage error.",
+                "The charging station has filed a complaint: auto empty dock voltage error."
+            ],
+            "dock_water_empty": [
+                "The dock reports water empty. Cinderella needs help at base.",
+                "Dock issue detected: water empty.",
+                "The charging station has filed a complaint: water empty."
+            ],
+            "dock_waste_water_tank_full": [
+                "The dock reports waste water tank full. Cinderella needs help at base.",
+                "Dock issue detected: waste water tank full.",
+                "The charging station has filed a complaint: waste water tank full."
+            ],
+            "dock_maintenance_brush_jammed": [
+                "The dock reports maintenance brush jammed. Cinderella needs help at base.",
+                "Dock issue detected: maintenance brush jammed.",
+                "The charging station has filed a complaint: maintenance brush jammed."
+            ],
+            "dock_dirty_tank_latch_open": [
+                "The dock reports dirty tank latch open. Cinderella needs help at base.",
+                "Dock issue detected: dirty tank latch open.",
+                "The charging station has filed a complaint: dirty tank latch open."
+            ],
+            "dock_no_dustbin": [
+                "The dock reports no dustbin. Cinderella needs help at base.",
+                "Dock issue detected: no dustbin.",
+                "The charging station has filed a complaint: no dustbin."
+            ],
+            "dock_cleaning_tank_full_or_blocked": [
+                "The dock reports cleaning tank full or blocked. Cinderella needs help at base.",
+                "Dock issue detected: cleaning tank full or blocked.",
+                "The charging station has filed a complaint: cleaning tank full or blocked."
+            ]
+        }
+    }
+}
