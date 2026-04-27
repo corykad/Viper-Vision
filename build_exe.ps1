@@ -25,12 +25,12 @@ if (-not (Test-Path -LiteralPath $exe)) {
 
 $ffmpeg = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
 if ($ffmpeg) {
-  $ffmpegDest = Join-Path $PSScriptRoot "dist\ViperVision\ffmpeg.exe"
+  $ffmpegDest = Join-Path $PSScriptRoot "dist\ViperVision\_internal\ffmpeg.exe"
   Copy-Item -LiteralPath $ffmpeg.Source -Destination $ffmpegDest -Force
   Write-Host "Bundled FFmpeg:"
   Write-Host $ffmpegDest
 } else {
-  Write-Warning "ffmpeg.exe was not found on PATH. Doorbell RTSP processing will require the user to install FFmpeg or place ffmpeg.exe beside ViperVision.exe."
+  Write-Warning "ffmpeg.exe was not found on PATH. Doorbell RTSP processing will require the user to install FFmpeg or set FFMPEG_BIN."
 }
 
 Write-Host ""

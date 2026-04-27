@@ -38,6 +38,7 @@ latest_*.jpg
 # Build output
 build/
 dist/
+installer/
 *.zip
 *.exe
 *.msi

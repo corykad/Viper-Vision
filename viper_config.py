@@ -117,8 +117,20 @@ BACK_DOORBELL_MQTT_TOPIC = os.getenv("BACK_DOORBELL_MQTT_TOPIC", "")
 RTSP_FRONT = os.getenv("RTSP_FRONT", f"rtsp://{HA_IP}:8554/{FRONT_CAMERA_ID}_live" if FRONT_CAMERA_ID else "")
 RTSP_BACK = os.getenv("RTSP_BACK", f"rtsp://{HA_IP}:8554/{BACK_CAMERA_ID}_live" if BACK_CAMERA_ID else "")
 
-_LOCAL_FFMPEG = APP_DIR / "ffmpeg.exe"
-FFMPEG_BIN = os.getenv("FFMPEG_BIN") or (str(_LOCAL_FFMPEG) if _LOCAL_FFMPEG.exists() else "ffmpeg")
+def _resolve_ffmpeg_bin():
+    explicit = os.getenv("FFMPEG_BIN")
+    if explicit:
+        return explicit
+    candidates = [APP_DIR / "ffmpeg.exe"]
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).parent / "ffmpeg.exe")
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return "ffmpeg"
+
+
+FFMPEG_BIN = _resolve_ffmpeg_bin()
 TRIGGER_COOLDOWN_SECONDS = int(os.getenv("TRIGGER_COOLDOWN_SECONDS", "30"))
 # 13s is the hard timeout — the size-based exit in grab_frame should fire well
 # before this on healthy cameras. This is the true last resort.
