@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Installing Home Assistant For Viper Vision</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to main content</a>
+  <header>
+    <h1>Installing Home Assistant For Viper Vision</h1>
+    <p><a href="index.html">Back to help index</a></p>
+  </header>
+  <main id="main">
+    <h2>Best Beginner Choice</h2>
+    <p>The smoothest long-term setup is usually a dedicated Home Assistant device, such as Home Assistant Green, Home Assistant Yellow, or a small mini PC. It keeps your smart home running even when your Windows computer restarts.</p>
+
+    <h2>Trying Home Assistant On This Windows PC</h2>
+    <p>For testing or a budget setup, use Home Assistant OS in VirtualBox. Viper does not bundle or silently install VirtualBox because that creates admin, licensing, antivirus, and machine-specific VM problems.</p>
+
+    <h2>What The Viper Assistant Can Do</h2>
+    <ul>
+      <li>Check whether VirtualBox is installed.</li>
+      <li>Open the official VirtualBox download page.</li>
+      <li>Open the official Home Assistant Windows installation guide.</li>
+      <li>Open the official Home Assistant OS release download page.</li>
+      <li>Look for Home Assistant on your network.</li>
+      <li>Hand off to Viper's Home Assistant setup once HA is reachable.</li>
+    </ul>
+
+    <h2>Windows VirtualBox Setup</h2>
+    <ol>
+      <li>Open Viper, Utilities, New User Setup Assistant.</li>
+      <li>Press Open HA Windows Guide.</li>
+      <li>Press Open VirtualBox Download and install VirtualBox from Oracle.</li>
+      <li>Press Open HA OS Download and download the VirtualBox image listed by Home Assistant.</li>
+      <li>Follow the official Home Assistant Windows guide to create or import the VM.</li>
+      <li>Start the VM.</li>
+      <li>Wait for Home Assistant to finish first boot. This can take several minutes.</li>
+      <li>Open <code>http://homeassistant.local:8123</code> in a browser.</li>
+      <li>Complete Home Assistant onboarding and create your owner account.</li>
+      <li>In Home Assistant, open your user profile and create a long-lived access token.</li>
+      <li>Return to Viper and press Find Home Assistant.</li>
+      <li>Press Continue To Viper Setup.</li>
+    </ol>
+
+    <h2>Network Notes</h2>
+    <p>If Viper cannot find Home Assistant, try entering the Home Assistant IP manually. The VM must be reachable from Windows. If VirtualBox networking is set in a way that isolates the VM, Home Assistant may work in the VM but not be visible to Viper.</p>
+
+    <h2>What Not To Install Unless Needed</h2>
+    <p>You do not need Samba, File Editor, Mosquitto, or ring-mqtt just to connect Viper to Home Assistant. Mosquitto and ring-mqtt are only needed for certain Ring setups. See the Ring setup help page.</p>
+
+    <h2>Official Links</h2>
+    <ul>
+      <li><a href="https://www.home-assistant.io/installation/windows/">Home Assistant Windows installation guide</a></li>
+      <li><a href="https://www.virtualbox.org/wiki/Downloads">VirtualBox download page</a></li>
+      <li><a href="https://github.com/home-assistant/operating-system/releases/latest">Home Assistant OS releases</a></li>
+      <li><a href="https://developers.home-assistant.io/docs/auth_api/">Home Assistant token documentation</a></li>
+    </ul>
+
+    <nav class="topic-nav" aria-label="Previous and next help topics">
+      <p><a href="setup.html">Previous: Start Here: First Setup</a></p>
+      <p><a href="tailscale-remote.html">Next: Remote Web Access With Tailscale</a></p>
+    </nav>
+  </main>
+</body>
+</html>

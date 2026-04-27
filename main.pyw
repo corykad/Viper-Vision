@@ -3,13 +3,19 @@ import logging
 import os
 import random
 import re
+import shutil
 import socket
+import subprocess
+import sys
 import threading
+import traceback
 import time
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from queue import Empty, PriorityQueue
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import requests
 import soco
@@ -22,6 +28,8 @@ from waitress import serve
 import viper_audio as audio
 import viper_config as cfg
 import viper_discovery as discovery
+import viper_diagnostics as diagnostics
+import viper_ha_listener as ha_listener
 import viper_ha_package as ha_package
 import viper_ring_discovery as ring_discovery
 import viper_vision as vision
@@ -55,10 +63,125 @@ def _resolve_template_dir() -> str:
         return str(fallback)
     return str(preferred)
 
+
+def _help_file(topic="index"):
+    topic = re.sub(r"[^a-zA-Z0-9_-]", "", topic or "index") or "index"
+    preferred = cfg.APP_DIR / "help" / f"{topic}.html"
+    fallback = Path(__file__).parent.absolute() / "help" / f"{topic}.html"
+    if preferred.exists():
+        return preferred
+    if fallback.exists():
+        return fallback
+    return cfg.APP_DIR / "help" / "index.html"
+
+
+def open_help(topic="index"):
+    path = _help_file(topic)
+    if path.exists():
+        webbrowser.open(path.resolve().as_uri())
+        return True
+    logging.warning("Help file not found for topic=%s path=%s", topic, path)
+    return False
+
+
+OFFICIAL_LINKS = {
+    "ha_windows": "https://www.home-assistant.io/installation/windows/",
+    "ha_install": "https://www.home-assistant.io/installation/",
+    "ha_tokens": "https://developers.home-assistant.io/docs/auth_api/",
+    "virtualbox": "https://www.virtualbox.org/wiki/Downloads",
+    "ha_os_releases": "https://github.com/home-assistant/operating-system/releases/latest",
+    "mosquitto_docs": "https://github.com/home-assistant/addons/blob/master/mosquitto/DOCS.md",
+    "ring_mqtt_addon": "https://github.com/tsightler/ring-mqtt-ha-addon",
+}
+
+
+def open_official_link(key):
+    url = OFFICIAL_LINKS.get(key)
+    if not url:
+        return False
+    webbrowser.open(url)
+    return True
+
+
+def find_vboxmanage():
+    candidates = [
+        shutil.which("VBoxManage.exe"),
+        shutil.which("VBoxManage"),
+        r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe",
+        r"C:\Program Files (x86)\Oracle\VirtualBox\VBoxManage.exe",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return str(Path(candidate))
+    return ""
+
+
+def get_virtualbox_status():
+    exe = find_vboxmanage()
+    if not exe:
+        return {"installed": False, "path": "", "version": "", "message": "VirtualBox was not found on this PC."}
+    version = ""
+    try:
+        result = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=5)
+        version = (result.stdout or result.stderr or "").strip()
+    except Exception as e:
+        version = f"version check failed: {e}"
+    return {"installed": True, "path": exe, "version": version, "message": f"VirtualBox found at {exe}."}
+
 app = Flask(__name__, template_folder=_resolve_template_dir())
 app.secret_key = os.getenv("VIPER_SECRET_KEY", "viper_vision_secure_key")
 dash_app = None
 activity_logs = []
+
+RUNNING_SENTINEL = cfg.DATA_DIR / "viper_running.sentinel"
+CRASH_LOG_PATH = cfg.DATA_DIR / "viper_last_crash.txt"
+previous_run_unclean = RUNNING_SENTINEL.exists()
+
+
+def _write_crash_report(exc_type, exc_value, exc_traceback, *, source="main"):
+    text = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    try:
+        CRASH_LOG_PATH.write_text(
+            f"Viper Vision unhandled exception from {source} at {datetime.now().isoformat(timespec='seconds')}\n\n{text}",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+    logging.critical("Unhandled exception from %s:\n%s", source, text)
+    return text
+
+
+def install_crash_hooks():
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        _write_crash_report(exc_type, exc_value, exc_traceback, source="main")
+        try:
+            if wx.GetApp():
+                wx.CallAfter(wx.MessageBox, "Viper hit an error. A diagnostic log was saved.", "Viper Vision Error", wx.OK | wx.ICON_ERROR)
+        except Exception:
+            pass
+
+    def handle_thread_exception(args):
+        _write_crash_report(args.exc_type, args.exc_value, args.exc_traceback, source=f"thread:{args.thread.name if args.thread else 'unknown'}")
+
+    sys.excepthook = handle_exception
+    threading.excepthook = handle_thread_exception
+
+
+def mark_app_running():
+    try:
+        RUNNING_SENTINEL.write_text(datetime.now().isoformat(timespec="seconds"), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def mark_app_clean_shutdown():
+    try:
+        RUNNING_SENTINEL.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 # --- VOICE MAPPINGS ---
 EDGE_VOICES = {
@@ -417,6 +540,50 @@ def _handle_doorbell(location: str, rtsp_url: str, key: str):
         logging.exception("Doorbell webhook failed")
         return f"ERROR: {e}", 500
 
+
+def _dispatch_cinderella_event(event: str, error: str = "", source: str = "vacuum"):
+    if dash_app is None or is_shutting_down.is_set():
+        return False
+    event = (event or "").strip().lower().replace(" ", "_").replace("-", "_")
+    error = (error or "").strip().lower().replace(" ", "_").replace("-", "_")
+    source = (source or "vacuum").strip().lower()
+    if not dash_app.config.get("cinderella_enabled", True):
+        return False
+    message = ""
+    if dash_app.config.get("cinderella_ai_mode"):
+        try:
+            message = vision.generate_cinderella_message(event, source, error)
+        except Exception as e:
+            logging.warning("[CINDERELLA AI] listener generation failed: %s", e)
+    if not message:
+        message = choose_cinderella_message(event, error=error, source=source)
+    if not message:
+        return False
+    logging.info("[HA LISTENER] Cinderella event=%s source=%s error=%s message=%r", event, source, error, message)
+    safe_submit(audio.play_notification, "utilities", message)
+    wx.CallAfter(dash_app.notify, message, 3)
+    return True
+
+
+def _handle_ha_listener_action(action: dict):
+    if dash_app is None or is_shutting_down.is_set():
+        return
+    action_type = (action or {}).get("type")
+    if action_type == "doorbell":
+        side = action.get("side") or "front"
+        location = action.get("location") or ("back door" if side == "back" else "front door")
+        status, code = _handle_doorbell(location, action.get("rtsp_url") or "", side)
+        logging.info("[HA LISTENER] doorbell action side=%s code=%s status=%s", side, code, status)
+    elif action_type == "cinderella":
+        _dispatch_cinderella_event(action.get("event", ""), action.get("error", ""), action.get("source", "vacuum"))
+    elif action_type == "broadcast":
+        message = (action.get("message") or "").strip()
+        channel = (action.get("channel") or "default").strip()
+        if message:
+            logging.info("[HA LISTENER] broadcast channel=%s message=%r", channel, message)
+            safe_submit(audio.play_notification, "utilities", message)
+            wx.CallAfter(dash_app.notify, message, 5)
+
 # ==========================================
 # FLASK ROUTES & WEBHOOKS
 # ==========================================
@@ -456,6 +623,62 @@ def remote_ui():
         dialects=DIALECTS,
         vacuum=vacuum,
     )
+
+
+def _current_diagnostics(*, check_ha=False):
+    if dash_app is None:
+        return diagnostics.collect_diagnostics({})
+    ha_connection = {"checked": False}
+    if check_ha:
+        ha_settings = cfg.get_ha_settings(dash_app.config, include_env=True)
+        result = discovery.test_ha_connection(
+            token=ha_settings.get("ha_token"),
+            ha_ip=ha_settings.get("ha_ip"),
+            ha_port=ha_settings.get("ha_port"),
+            timeout=5,
+        )
+        ha_connection = {
+            "checked": True,
+            "ok": bool(result.get("ok")),
+            "message": result.get("message") or result.get("error") or "",
+            "entity_count": result.get("entity_count"),
+        }
+    listener_status = dash_app.ha_listener.status() if hasattr(dash_app, "ha_listener") else {}
+    return diagnostics.collect_diagnostics(
+        dash_app.config,
+        ha_listener_status=listener_status,
+        ha_connection=ha_connection,
+    )
+
+
+@app.route("/remote/diagnostics", methods=["GET"])
+def web_diagnostics():
+    if dash_app is None:
+        return "System initializing, please refresh...", 503
+    diag = _current_diagnostics(check_ha=request.args.get("check_ha") == "1")
+    wants_json = request.accept_mimetypes.best == "application/json" or request.args.get("format") == "json"
+    if wants_json:
+        return jsonify(diag)
+    return "<pre>" + diagnostics.diagnostics_text(diag).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</pre>"
+
+
+@app.route("/remote/diagnostics/support_bundle", methods=["POST"])
+def web_support_bundle():
+    if dash_app is None:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    try:
+        diag = _current_diagnostics(check_ha=True)
+        result = diagnostics.create_support_bundle(
+            dash_app.config,
+            ha_listener_status=diag.get("ha_listener", {}),
+            ha_connection=diag.get("ha_connection", {}),
+        )
+        flash(f"Support bundle created: {result['path']}")
+    except Exception as e:
+        logging.exception("Support bundle creation failed")
+        flash(f"Support bundle failed: {e}")
+    return redirect(url_for("remote_ui"))
 
 def _ha_domain_from_entity_id(entity_id):
     return entity_id.split(".", 1)[0] if isinstance(entity_id, str) and "." in entity_id else ""
@@ -1176,6 +1399,162 @@ class ViperTaskBarIcon(wx.adv.TaskBarIcon):
             self.frame.Iconize(False)
         self.frame.Raise()
 
+
+class HomeAssistantFirstRunAssistantDialog(wx.Dialog):
+    def __init__(self, parent):
+        super().__init__(parent, title="Home Assistant Setup Assistant", size=(780, 720))
+        self.parent = parent
+        panel = wx.Panel(self)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        intro = wx.StaticText(
+            panel,
+            label=(
+                "This assistant helps brand-new users get from nothing to a working Viper setup. "
+                "It does not bundle or silently install VirtualBox or Home Assistant. It opens official pages, checks this PC, finds Home Assistant, and then continues to Viper setup."
+            ),
+        )
+        intro.Wrap(700)
+        sizer.Add(intro, 0, wx.ALL | wx.EXPAND, 12)
+
+        self.status_txt = wx.TextCtrl(
+            panel,
+            value=self._initial_status(),
+            style=wx.TE_MULTILINE | wx.TE_READONLY,
+            size=(-1, 300),
+        )
+        self._describe_control(
+            self.status_txt,
+            "Setup assistant status. This read only box explains what is detected and what to do next.",
+        )
+        sizer.Add(self.status_txt, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 12)
+
+        grid = wx.GridSizer(rows=0, cols=2, vgap=8, hgap=8)
+        buttons = [
+            ("Check This PC", self.on_check_pc, "Checks whether VirtualBox is installed and whether Home Assistant is reachable."),
+            ("Find Home Assistant", self.on_find_ha, "Searches common Home Assistant addresses on your network."),
+            ("Open HA Windows Guide", lambda _e: open_official_link("ha_windows"), "Opens the official Home Assistant Windows installation guide."),
+            ("Open VirtualBox Download", lambda _e: open_official_link("virtualbox"), "Opens the official VirtualBox download page."),
+            ("Open HA OS Download", lambda _e: open_official_link("ha_os_releases"), "Opens the official Home Assistant OS release downloads page."),
+            ("Open Token Help", lambda _e: open_official_link("ha_tokens"), "Opens Home Assistant developer documentation for long lived access tokens."),
+            ("Open Viper Help", lambda _e: open_help("ha-install"), "Opens Viper's local Home Assistant installation help page."),
+            ("Continue To Viper Setup", self.on_continue, "Opens Viper's Home Assistant setup dialog."),
+        ]
+        for label, handler, help_text in buttons:
+            btn = wx.Button(panel, label=label, size=(-1, 44))
+            btn.Bind(wx.EVT_BUTTON, handler)
+            self._describe_control(btn, help_text)
+            grid.Add(btn, 0, wx.EXPAND)
+        sizer.Add(grid, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 12)
+
+        close = wx.Button(panel, label="Close", size=(-1, 44))
+        close.Bind(wx.EVT_BUTTON, lambda _e: self.EndModal(wx.ID_CANCEL))
+        self._describe_control(close, "Close setup assistant button.")
+        sizer.Add(close, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 12)
+
+        panel.SetSizer(sizer)
+        self.Bind(wx.EVT_CHAR_HOOK, self.on_help_key)
+        wx.CallAfter(self.on_check_pc, None)
+
+    def _describe_control(self, control, description):
+        control.SetName(description)
+        control.SetToolTip(description)
+
+    def _initial_status(self):
+        return "\n".join(
+            [
+                "Home Assistant Setup Assistant",
+                "",
+                "Recommended path:",
+                "1. If you already have Home Assistant, press Find Home Assistant.",
+                "2. If you do not have Home Assistant, open the HA Windows guide and VirtualBox download.",
+                "3. Finish Home Assistant onboarding in your browser.",
+                "4. Create a long-lived access token.",
+                "5. Return here and continue to Viper setup.",
+                "",
+                "The easiest hardware path for many beginners is Home Assistant Green or a dedicated mini PC. VirtualBox is useful for trying Home Assistant on this Windows computer.",
+            ]
+        )
+
+    def on_help_key(self, event):
+        if event.GetKeyCode() == wx.WXK_F1:
+            open_help("ha-install")
+            return
+        event.Skip()
+
+    def on_check_pc(self, event):
+        self.status_txt.SetValue("Checking this PC and looking for Home Assistant...")
+        safe_submit(self._run_check_pc)
+
+    def _run_check_pc(self):
+        vbox = get_virtualbox_status()
+        ha_settings = cfg.get_ha_settings(self.parent.config, include_env=True)
+        found = discovery.find_home_assistant(
+            token=ha_settings.get("ha_token") or None,
+            seed_host=ha_settings.get("ha_ip") or "",
+            seed_port=ha_settings.get("ha_port") or "8123",
+            timeout=2,
+        )
+        wx.CallAfter(self._finish_check_pc, vbox, found)
+
+    def _finish_check_pc(self, vbox, found):
+        lines = ["Home Assistant Setup Assistant", ""]
+        if vbox.get("installed"):
+            lines.append(f"VirtualBox: found. {vbox.get('version') or vbox.get('path')}")
+        else:
+            lines.append("VirtualBox: not found. If you want Home Assistant OS on this Windows PC, install VirtualBox from the official download page.")
+
+        if found.get("ok"):
+            lines.append(f"Home Assistant: found at {found.get('ha_ip')}:{found.get('ha_port')}.")
+            if found.get("auth_ok"):
+                lines.append("Token: accepted by Home Assistant.")
+            else:
+                lines.append("Token: not tested or not accepted yet. You will create/paste one during Viper setup.")
+            lines.append("")
+            lines.append("Next step: press Continue To Viper Setup.")
+        else:
+            lines.append("Home Assistant: not found automatically.")
+            lines.append("")
+            lines.append("If Home Assistant is already installed, make sure it is powered on and reachable at http://homeassistant.local:8123.")
+            lines.append("If Home Assistant is not installed, use the official HA Windows guide and VirtualBox download buttons.")
+        lines.append("")
+        lines.append("Viper will not silently install VirtualBox or Home Assistant. This avoids admin, licensing, antivirus, and machine-specific VM problems.")
+        self.status_txt.SetValue("\n".join(lines))
+
+    def on_find_ha(self, event):
+        self.status_txt.SetValue("Looking for Home Assistant...")
+        safe_submit(self._run_find_ha)
+
+    def _run_find_ha(self):
+        ha_settings = cfg.get_ha_settings(self.parent.config, include_env=True)
+        result = discovery.find_home_assistant(
+            token=ha_settings.get("ha_token") or None,
+            seed_host=ha_settings.get("ha_ip") or "",
+            seed_port=ha_settings.get("ha_port") or "8123",
+            timeout=2,
+        )
+        wx.CallAfter(self._finish_find_ha, result)
+
+    def _finish_find_ha(self, result):
+        if result.get("ok"):
+            self.parent.config["ha_ip"] = result.get("ha_ip", "")
+            self.parent.config["ha_port"] = result.get("ha_port", "8123")
+            self.parent.save_config()
+            self.status_txt.SetValue(
+                f"Found Home Assistant at {result.get('ha_ip')}:{result.get('ha_port')}.\n\n"
+                "Next step: press Continue To Viper Setup and paste your long-lived access token."
+            )
+        else:
+            self.status_txt.SetValue(
+                "Home Assistant was not found automatically.\n\n"
+                "Try opening http://homeassistant.local:8123 in your browser. If that works, continue to Viper setup and enter homeassistant.local manually."
+            )
+
+    def on_continue(self, event):
+        self.EndModal(wx.ID_OK)
+        wx.CallAfter(self.parent.show_home_assistant_setup)
+
+
 class HomeAssistantSetupDialog(wx.Dialog):
     def __init__(self, parent, *, use_env_prefill=True):
         super().__init__(parent, title="Viper Vision Setup", size=(820, 860))
@@ -1184,21 +1563,26 @@ class HomeAssistantSetupDialog(wx.Dialog):
         self.ring_listen_cancel = None
         self._doorbell_preview_updating = False
         self._last_derived_values = {}
+        self._front_trigger_initial = ""
+        self._back_trigger_initial = ""
 
         settings = cfg.get_ha_settings(parent.config, include_env=use_env_prefill)
         api_settings = cfg.get_api_settings(parent.config, include_env=use_env_prefill)
         doorbell_settings = cfg.get_doorbell_settings(parent.config, include_env=use_env_prefill)
+        triggers = parent.config.get("doorbell_triggers", {})
+        front_trigger = triggers.get("front", {}) if isinstance(triggers, dict) else {}
+        back_trigger = triggers.get("back", {}) if isinstance(triggers, dict) else {}
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         intro = wx.StaticText(
             panel,
-            label="Connect Viper Vision to Home Assistant and AI services. These settings are saved locally in viper_config.json.",
+            label="Connect Viper Vision to Home Assistant. Viper can listen to Home Assistant directly, so new users do not need to edit YAML automations. Doorbell vision uses live RTSP URLs.",
         )
         intro.Wrap(560)
         sizer.Add(intro, 0, wx.ALL | wx.EXPAND, 12)
 
-        grid = wx.FlexGridSizer(rows=18, cols=2, vgap=8, hgap=8)
+        grid = wx.FlexGridSizer(rows=23, cols=2, vgap=8, hgap=8)
         grid.AddGrowableCol(1, 1)
 
         grid.Add(wx.StaticText(panel, label="Home Assistant IP / host"), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -1211,11 +1595,22 @@ class HomeAssistantSetupDialog(wx.Dialog):
 
         grid.Add(wx.StaticText(panel, label="Long-lived access token"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.ha_token_txt = wx.TextCtrl(panel, value=settings.get("ha_token") or "", style=wx.TE_PASSWORD)
+        self._describe_control(self.ha_token_txt, "Home Assistant long lived access token. Create this in your Home Assistant user profile.")
         grid.Add(self.ha_token_txt, 1, wx.EXPAND)
 
         grid.Add(wx.StaticText(panel, label="Gemini API key"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.gemini_key_txt = wx.TextCtrl(panel, value=api_settings.get("gemini_api_key") or "", style=wx.TE_PASSWORD)
+        self._describe_control(self.gemini_key_txt, "Gemini API key for live doorbell image analysis and Gemini speech.")
         grid.Add(self.gemini_key_txt, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(panel, label="Viper listens to Home Assistant events"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.ha_listener_chk = wx.CheckBox(panel, label="Enable direct Home Assistant listener")
+        self.ha_listener_chk.SetValue(bool(parent.config.get("ha_listener_enabled", True)))
+        self._describe_control(
+            self.ha_listener_chk,
+            "Direct Home Assistant listener checkbox. Keep this checked for the beginner setup. It lets Viper react to Home Assistant state changes without YAML automations.",
+        )
+        grid.Add(self.ha_listener_chk, 0, wx.ALIGN_CENTER_VERTICAL)
 
         grid.Add(wx.StaticText(panel, label="Use Pushover notifications"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.pushover_enabled_chk = wx.CheckBox(panel)
@@ -1245,11 +1640,31 @@ class HomeAssistantSetupDialog(wx.Dialog):
 
         grid.Add(wx.StaticText(panel, label="Front door RTSP URL"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.rtsp_front_txt = wx.TextCtrl(panel, value=doorbell_settings.get("rtsp_front") or "")
+        self._describe_control(self.rtsp_front_txt, "Front door live RTSP URL. This must be current video, not a Home Assistant snapshot.")
         grid.Add(self.rtsp_front_txt, 1, wx.EXPAND)
 
         grid.Add(wx.StaticText(panel, label="Back door RTSP URL"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.rtsp_back_txt = wx.TextCtrl(panel, value=doorbell_settings.get("rtsp_back") or "")
+        self._describe_control(self.rtsp_back_txt, "Back door live RTSP URL. This must be current video, not a Home Assistant snapshot.")
         grid.Add(self.rtsp_back_txt, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(panel, label="Front door HA trigger entity"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.front_trigger_choice = wx.Choice(panel, choices=[])
+        self._front_trigger_initial = front_trigger.get("trigger_entity_id") or ""
+        self._describe_control(
+            self.front_trigger_choice,
+            "Front door Home Assistant trigger entity. Choose the binary sensor or sensor that changes when the front doorbell or motion event fires.",
+        )
+        grid.Add(self.front_trigger_choice, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(panel, label="Back door HA trigger entity"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.back_trigger_choice = wx.Choice(panel, choices=[])
+        self._back_trigger_initial = back_trigger.get("trigger_entity_id") or ""
+        self._describe_control(
+            self.back_trigger_choice,
+            "Back door Home Assistant trigger entity. Choose the binary sensor or sensor that changes when the back doorbell or motion event fires.",
+        )
+        grid.Add(self.back_trigger_choice, 1, wx.EXPAND)
 
         grid.Add(wx.StaticText(panel, label="Front Ring MQTT topic"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.front_mqtt_txt = wx.TextCtrl(panel, value=doorbell_settings.get("front_doorbell_mqtt_topic") or "")
@@ -1281,19 +1696,35 @@ class HomeAssistantSetupDialog(wx.Dialog):
         sizer.Add(self.status_txt, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 12)
 
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_find_ha = wx.Button(panel, label="Find HA")
         self.btn_test = wx.Button(panel, label="Test & Discover")
+        self.btn_test_front_rtsp = wx.Button(panel, label="Test Front RTSP")
+        self.btn_test_back_rtsp = wx.Button(panel, label="Test Back RTSP")
         self.btn_mqtt = wx.Button(panel, label="Test MQTT")
         self.btn_ring = wx.Button(panel, label="Find Ring Topics")
+        self.btn_ring_help = wx.Button(panel, label="Ring Setup Assistant")
+        self.btn_help = wx.Button(panel, label="Help")
         self.btn_save = wx.Button(panel, label="Save")
         self.btn_close = wx.Button(panel, label="Close")
+        self.btn_find_ha.Bind(wx.EVT_BUTTON, self.on_find_ha)
         self.btn_test.Bind(wx.EVT_BUTTON, self.on_test)
+        self.btn_test_front_rtsp.Bind(wx.EVT_BUTTON, lambda event: self.on_test_rtsp(event, "front"))
+        self.btn_test_back_rtsp.Bind(wx.EVT_BUTTON, lambda event: self.on_test_rtsp(event, "back"))
         self.btn_mqtt.Bind(wx.EVT_BUTTON, self.on_test_mqtt)
         self.btn_ring.Bind(wx.EVT_BUTTON, self.on_find_ring_topics)
+        self.btn_ring_help.Bind(wx.EVT_BUTTON, self.on_ring_setup_assistant)
+        self.btn_help.Bind(wx.EVT_BUTTON, lambda _event: open_help("index"))
         self.btn_save.Bind(wx.EVT_BUTTON, self.on_save)
         self.btn_close.Bind(wx.EVT_BUTTON, lambda _event: self.EndModal(wx.ID_CANCEL))
+        self.Bind(wx.EVT_CHAR_HOOK, self.on_help_key)
+        btn_sizer.Add(self.btn_find_ha, 1, wx.ALL | wx.EXPAND, 5)
         btn_sizer.Add(self.btn_test, 1, wx.ALL | wx.EXPAND, 5)
+        btn_sizer.Add(self.btn_test_front_rtsp, 1, wx.ALL | wx.EXPAND, 5)
+        btn_sizer.Add(self.btn_test_back_rtsp, 1, wx.ALL | wx.EXPAND, 5)
         btn_sizer.Add(self.btn_mqtt, 1, wx.ALL | wx.EXPAND, 5)
         btn_sizer.Add(self.btn_ring, 1, wx.ALL | wx.EXPAND, 5)
+        btn_sizer.Add(self.btn_ring_help, 1, wx.ALL | wx.EXPAND, 5)
+        btn_sizer.Add(self.btn_help, 1, wx.ALL | wx.EXPAND, 5)
         btn_sizer.Add(self.btn_save, 1, wx.ALL | wx.EXPAND, 5)
         btn_sizer.Add(self.btn_close, 1, wx.ALL | wx.EXPAND, 5)
         sizer.Add(btn_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 7)
@@ -1303,13 +1734,27 @@ class HomeAssistantSetupDialog(wx.Dialog):
         for ctrl in (self.ha_ip_txt, self.front_camera_id_txt, self.back_camera_id_txt, self.ring_topic_root_txt):
             ctrl.Bind(wx.EVT_TEXT, self.on_doorbell_derivation_change)
         self._refresh_derived_doorbell_preview()
+        self._populate_trigger_choices_from_config(front_trigger.get("trigger_entity_id", ""), back_trigger.get("trigger_entity_id", ""))
+
+    def on_help_key(self, event):
+        if event.GetKeyCode() == wx.WXK_F1:
+            open_help("ring-setup")
+            return
+        event.Skip()
+
+    def _describe_control(self, control, description):
+        control.SetName(description)
+        control.SetToolTip(description)
 
     def _settings(self):
+        front_trigger_entity = self._choice_entity_id(self.front_trigger_choice)
+        back_trigger_entity = self._choice_entity_id(self.back_trigger_choice)
         return {
             "ha_ip": self.ha_ip_txt.GetValue().strip(),
             "ha_port": self.ha_port_txt.GetValue().strip() or "8123",
             "ha_token": self.ha_token_txt.GetValue().strip(),
             "gemini_api_key": self.gemini_key_txt.GetValue().strip(),
+            "ha_listener_enabled": self.ha_listener_chk.GetValue(),
             "pushover_enabled": self.pushover_enabled_chk.GetValue(),
             "pushover_user_key": self.pushover_user_txt.GetValue().strip(),
             "pushover_api_token": self.pushover_token_txt.GetValue().strip(),
@@ -1324,7 +1769,73 @@ class HomeAssistantSetupDialog(wx.Dialog):
             "mqtt_port": self.mqtt_port_txt.GetValue().strip() or "1883",
             "mqtt_username": self.mqtt_user_txt.GetValue().strip(),
             "mqtt_password": self.mqtt_password_txt.GetValue().strip(),
+            "front_trigger_entity_id": front_trigger_entity,
+            "back_trigger_entity_id": back_trigger_entity,
         }
+
+    def _entity_choice_label(self, entity):
+        entity_id = entity.get("entity_id", "")
+        name = entity.get("friendly_name") or entity_id
+        state = entity.get("state", "unknown")
+        return f"{name} ({entity_id}, state {state})"
+
+    def _choice_entity_id(self, choice):
+        idx = choice.GetSelection()
+        if idx == wx.NOT_FOUND:
+            if choice is self.front_trigger_choice:
+                return self._front_trigger_initial
+            if choice is self.back_trigger_choice:
+                return self._back_trigger_initial
+            return ""
+        return choice.GetClientData(idx) or ""
+
+    def _populate_trigger_choices_from_config(self, front_entity="", back_entity=""):
+        choices = []
+        if self.discovery_result and self.discovery_result.get("ok"):
+            categories = self.discovery_result.get("categories", {})
+            seen = set()
+            candidates = []
+            for category in ("door_sensors", "ring_cameras", "cameras"):
+                for entity in categories.get(category, []):
+                    entity_id = entity.get("entity_id")
+                    if entity_id and entity_id not in seen:
+                        seen.add(entity_id)
+                        candidates.append(entity)
+            for entity in self.discovery_result.get("all_entities", []):
+                entity_id = entity.get("entity_id", "")
+                text = " ".join(
+                    str(part).lower()
+                    for part in [
+                        entity_id,
+                        entity.get("friendly_name"),
+                        entity.get("domain"),
+                        entity.get("device_class"),
+                        entity.get("platform"),
+                    ]
+                )
+                if entity.get("domain") in {"binary_sensor", "sensor"} and any(
+                    token in text for token in ["ring", "doorbell", "motion", "ding", "front door", "back door"]
+                ):
+                    if entity_id and entity_id not in seen:
+                        seen.add(entity_id)
+                        candidates.append(entity)
+            for entity in candidates:
+                choices.append((self._entity_choice_label(entity), entity.get("entity_id")))
+        for entity_id in [front_entity, back_entity]:
+            if entity_id and entity_id not in [item[1] for item in choices]:
+                choices.append((entity_id, entity_id))
+        labels = [item[0] for item in choices]
+        for choice, current in [(self.front_trigger_choice, front_entity), (self.back_trigger_choice, back_entity)]:
+            choice.Set(labels)
+            for idx, (_label, entity_id) in enumerate(choices):
+                choice.SetClientData(idx, entity_id)
+            if current:
+                match = next((idx for idx, item in enumerate(choices) if item[1] == current), wx.NOT_FOUND)
+                if match != wx.NOT_FOUND:
+                    choice.SetSelection(match)
+                    continue
+            if labels:
+                choice.SetSelection(0)
 
     def on_doorbell_derivation_change(self, event):
         if not self._doorbell_preview_updating:
@@ -1369,10 +1880,132 @@ class HomeAssistantSetupDialog(wx.Dialog):
         self.pushover_token_txt.Enable(enabled)
 
     def _set_busy(self, busy):
+        self.btn_find_ha.Enable(not busy)
         self.btn_test.Enable(not busy)
+        self.btn_test_front_rtsp.Enable(not busy)
+        self.btn_test_back_rtsp.Enable(not busy)
         self.btn_mqtt.Enable(not busy)
         self.btn_ring.Enable(not busy)
+        self.btn_ring_help.Enable(not busy)
+        self.btn_help.Enable(not busy)
         self.btn_save.Enable(not busy)
+
+    def on_find_ha(self, event):
+        settings = self._settings()
+        self._set_busy(True)
+        self.status_txt.SetValue("Looking for Home Assistant...")
+        safe_submit(self._run_find_ha, settings)
+
+    def _run_find_ha(self, settings):
+        result = discovery.find_home_assistant(
+            token=settings.get("ha_token") or None,
+            seed_host=settings.get("ha_ip") or "",
+            seed_port=settings.get("ha_port") or "8123",
+            timeout=2,
+        )
+        wx.CallAfter(self._finish_find_ha, result)
+
+    def _finish_find_ha(self, result):
+        self._set_busy(False)
+        if result.get("ok"):
+            self.ha_ip_txt.SetValue(result.get("ha_ip", ""))
+            self.ha_port_txt.SetValue(result.get("ha_port", "8123"))
+            auth_note = "Token accepted." if result.get("auth_ok") else "Host found. Token still needs to be tested."
+            self.status_txt.SetValue(f"Found Home Assistant at {result.get('ha_ip')}:{result.get('ha_port')}. {auth_note}")
+            self._refresh_derived_doorbell_preview()
+            return
+        attempts = result.get("attempts", [])
+        self.status_txt.SetValue(
+            "Home Assistant was not found automatically. Enter the host manually, usually homeassistant.local or the HA IP address.\n"
+            f"Attempts made: {len(attempts)}"
+        )
+
+    def on_test_rtsp(self, event, side):
+        settings = self._settings()
+        rtsp_url = settings["rtsp_back"] if side == "back" else settings["rtsp_front"]
+        if not rtsp_url:
+            self.status_txt.SetValue(f"Enter the {side} door RTSP URL before testing it.")
+            return
+        self._set_busy(True)
+        self.status_txt.SetValue(f"Testing {side} door RTSP. This checks for a live video frame.")
+        safe_submit(self._run_test_rtsp, side, rtsp_url)
+
+    def _run_test_rtsp(self, side, rtsp_url):
+        try:
+            test_dir = cfg.DATA_DIR / "rtsp_test"
+            test_dir.mkdir(parents=True, exist_ok=True)
+            min_bytes = cfg.BACK_MIN_FRAME_BYTES if side == "back" else cfg.FRONT_MIN_FRAME_BYTES
+            frame = vision.grab_frame(rtsp_url, test_dir, f"setup_{side}", min_bytes=min_bytes, timeout=8)
+            result = {"ok": bool(frame), "frame": frame}
+        except Exception as e:
+            result = {"ok": False, "message": str(e)}
+        wx.CallAfter(self._finish_test_rtsp, side, result)
+
+    def _finish_test_rtsp(self, side, result):
+        self._set_busy(False)
+        if result.get("ok"):
+            self.status_txt.SetValue(f"{side.title()} door RTSP test passed. Viper captured a live frame from the stream.")
+        else:
+            self.status_txt.SetValue(
+                f"{side.title()} door RTSP test failed. Check go2rtc, Ring camera ID, and the RTSP URL. "
+                f"{result.get('message') or ''}"
+            )
+
+    def on_ring_setup_assistant(self, event):
+        settings = self._settings()
+        lines = [
+            "Ring Setup Assistant",
+            "",
+            "Viper itself does not require Mosquitto or ring-mqtt. Viper needs Home Assistant access, a trigger entity, and a live RTSP URL.",
+            "",
+        ]
+        if not self.discovery_result:
+            lines.append("Next step: press Test & Discover so Viper can look for Ring, doorbell, motion, camera, and speaker entities.")
+            self.status_txt.SetValue("\n".join(lines))
+            open_help("ring-setup")
+            return
+
+        categories = self.discovery_result.get("categories", {}) if self.discovery_result.get("ok") else {}
+        ring_cameras = len(categories.get("ring_cameras", []))
+        cameras = len(categories.get("cameras", []))
+        door_sensors = len(categories.get("door_sensors", []))
+        front_trigger = settings.get("front_trigger_entity_id", "")
+        back_trigger = settings.get("back_trigger_entity_id", "")
+        front_rtsp = settings.get("rtsp_front", "")
+        back_rtsp = settings.get("rtsp_back", "")
+        mqtt_topics = [settings.get("front_doorbell_mqtt_topic", ""), settings.get("back_doorbell_mqtt_topic", "")]
+
+        lines.extend([
+            f"Ring cameras found in Home Assistant: {ring_cameras}",
+            f"Total camera entities found: {cameras}",
+            f"Door or motion-style sensors found: {door_sensors}",
+            f"Front trigger selected: {front_trigger or 'no'}",
+            f"Back trigger selected: {back_trigger or 'no'}",
+            f"Front RTSP URL entered: {'yes' if front_rtsp else 'no'}",
+            f"Back RTSP URL entered: {'yes' if back_rtsp else 'no'}",
+            f"Ring MQTT topics entered: {'yes' if any(mqtt_topics) else 'no'}",
+            "",
+        ])
+
+        if (front_trigger or back_trigger) and (front_rtsp or back_rtsp):
+            lines.append("Likely status: Viper can use the beginner setup. Test each RTSP URL, save, then trigger the doorbell.")
+        elif ring_cameras or cameras or door_sensors:
+            lines.append("Likely status: Home Assistant has some useful entities, but the doorbell setup is incomplete.")
+            if not (front_trigger or back_trigger):
+                lines.append("Choose the Home Assistant entity that changes when Ring motion or a doorbell press happens.")
+            if not (front_rtsp or back_rtsp):
+                lines.append("Add a live RTSP URL. Use go2rtc or ring-mqtt video streaming if Home Assistant only has stale snapshots.")
+        else:
+            lines.append("Likely status: Home Assistant does not expose Ring trigger entities yet.")
+            lines.append("Install the Ring integration if it gives you motion/ding entities. If not, install Mosquitto Broker and ring-mqtt.")
+
+        lines.extend([
+            "",
+            "If you need ring-mqtt: install Mosquitto Broker, create an MQTT user, add the ring-mqtt repository, sign in to Ring, enable video streaming, then return here and press Test & Discover.",
+            "The full step-by-step guide has been opened.",
+        ])
+        self.status_txt.SetValue("\n".join(lines))
+        open_help("ring-setup")
 
     def on_test(self, event):
         settings = self._settings()
@@ -1405,6 +2038,10 @@ class HomeAssistantSetupDialog(wx.Dialog):
         if not result.get("ok"):
             self.status_txt.SetValue(result.get("message") or "Home Assistant discovery failed.")
             return
+        self._populate_trigger_choices_from_config(
+            self._choice_entity_id(self.front_trigger_choice),
+            self._choice_entity_id(self.back_trigger_choice),
+        )
 
         counts = result.get("counts", {})
         lines = [
@@ -1418,7 +2055,7 @@ class HomeAssistantSetupDialog(wx.Dialog):
             f"Filter sensors: {counts.get('filter_sensors', 0)}",
             f"Vacuums: {counts.get('vacuum_entities', 0)}",
             "",
-            "RTSP URLs and Ring MQTT topics are optional now, but needed for doorbell AI triggers.",
+            "Choose a Home Assistant trigger entity for each doorbell and test the matching RTSP URL.",
         ]
         self.status_txt.SetValue("\n".join(lines))
 
@@ -1568,6 +2205,27 @@ class HomeAssistantSetupDialog(wx.Dialog):
         self.parent.config["mqtt_port"] = settings["mqtt_port"]
         self.parent.config["mqtt_username"] = settings["mqtt_username"]
         self.parent.config["mqtt_password"] = settings["mqtt_password"]
+        self.parent.config["ha_listener_enabled"] = settings["ha_listener_enabled"]
+        self.parent.config["doorbell_triggers"] = {
+            "front": {
+                "enabled": bool(settings["rtsp_front"] and settings["front_trigger_entity_id"]),
+                "source": "ha_state",
+                "trigger_entity_id": settings["front_trigger_entity_id"],
+                "active_states": list(ha_listener.DEFAULT_ACTIVE_STATES),
+                "rtsp_url": settings["rtsp_front"],
+                "camera_id": settings["front_camera_id"],
+                "mqtt_topic": settings["front_doorbell_mqtt_topic"],
+            },
+            "back": {
+                "enabled": bool(settings["rtsp_back"] and settings["back_trigger_entity_id"]),
+                "source": "ha_state",
+                "trigger_entity_id": settings["back_trigger_entity_id"],
+                "active_states": list(ha_listener.DEFAULT_ACTIVE_STATES),
+                "rtsp_url": settings["rtsp_back"],
+                "camera_id": settings["back_camera_id"],
+                "mqtt_topic": settings["back_doorbell_mqtt_topic"],
+            },
+        }
         self.parent.save_config()
         cfg.sync_globals_from_config()
         self.parent.notify("Home Assistant settings saved.", priority=10)
@@ -1600,6 +2258,12 @@ class ViperDashboard(wx.Frame):
         self.speech_queue = PriorityQueue()
         self.speech_lock = threading.Lock()
         self._msg_counter = 0
+        self.ha_listener = ha_listener.HomeAssistantEventListener(
+            lambda: cfg.load_config(),
+            _handle_ha_listener_action,
+            self._on_ha_listener_status,
+            is_shutting_down,
+        )
 
         self.panel = wx.Panel(self)
         self.main_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -1625,15 +2289,54 @@ class ViperDashboard(wx.Frame):
 
         self.panel.SetSizer(self.main_sizer)
         self.Bind(wx.EVT_CLOSE, self.on_minimize)
+        self.Bind(wx.EVT_CHAR_HOOK, self.on_help_key)
         self.Center()
         self.Show()
         env_prefill_allowed = not (self.first_run or self.clean_first_run_test)
         ha_settings = cfg.get_ha_settings(self.config, include_env=env_prefill_allowed)
         api_settings = cfg.get_api_settings(self.config, include_env=env_prefill_allowed)
         if not ha_settings.get("ha_token") or not api_settings.get("gemini_api_key"):
-            wx.CallAfter(self.show_home_assistant_setup)
+            wx.CallAfter(self.show_new_user_setup_assistant)
+        if previous_run_unclean:
+            wx.CallAfter(
+                self.notify,
+                "Viper may not have shut down cleanly last time. Use Run Diagnostics or Create Support Bundle if anything seems wrong.",
+                priority=10,
+            )
 
         threading.Thread(target=self.speech_worker, daemon=True).start()
+        self.ha_listener.start()
+
+    def on_help_key(self, event):
+        if event.GetKeyCode() == wx.WXK_F1:
+            page = "index"
+            if hasattr(self, "notebook"):
+                current = self.notebook.GetPageText(self.notebook.GetSelection())
+                page = {
+                    "Voice Behavior": "tts",
+                    "Devices & Chimes": "speakers",
+                    "Utilities": "ha-install",
+                    "Fridge": "scenarios",
+                    "Vacuum": "vacuum",
+                    "Speed": "troubleshooting",
+                    "HA Status": "setup",
+                }.get(current, "index")
+            if not open_help(page):
+                self.notify("Help file not found.", priority=10)
+            return
+        event.Skip()
+
+    def _on_ha_listener_status(self, status):
+        if not hasattr(self, "ha_listener_status_txt"):
+            return
+        if not status.get("running"):
+            label = "HA listener: stopped"
+        elif status.get("connected"):
+            label = f"HA listener: connected to {status.get('last_host') or 'Home Assistant'}"
+        else:
+            err = status.get("last_error") or "connecting"
+            label = f"HA listener: not connected. {err}"
+        wx.CallAfter(self.ha_listener_status_txt.SetLabel, label)
 
     def save_config(self):
         old_config = cfg.load_config()
@@ -2180,9 +2883,15 @@ class ViperDashboard(wx.Frame):
         self.btn_batt.Bind(wx.EVT_BUTTON, self.on_batt)
         self.btn_filter = wx.Button(self.tab_util, label="Check Refrigerator Filter", size=(-1, 40))
         self.btn_filter.Bind(wx.EVT_BUTTON, self.on_filter)
+        self.btn_diagnostics = wx.Button(self.tab_util, label="Run Diagnostics", size=(-1, 40))
+        self.btn_diagnostics.Bind(wx.EVT_BUTTON, self.on_run_diagnostics)
+        self.btn_support_bundle = wx.Button(self.tab_util, label="Create Support Bundle", size=(-1, 40))
+        self.btn_support_bundle.Bind(wx.EVT_BUTTON, self.on_create_support_bundle)
+        self.btn_new_user_setup = wx.Button(self.tab_util, label="New User Setup Assistant", size=(-1, 40))
+        self.btn_new_user_setup.Bind(wx.EVT_BUTTON, self.on_new_user_setup)
         self.btn_ha_setup = wx.Button(self.tab_util, label="Home Assistant Setup", size=(-1, 40))
         self.btn_ha_setup.Bind(wx.EVT_BUTTON, self.on_home_assistant_setup)
-        self.btn_ha_package = wx.Button(self.tab_util, label="Generate HA Package", size=(-1, 40))
+        self.btn_ha_package = wx.Button(self.tab_util, label="Advanced: Export HA YAML Package", size=(-1, 40))
         self.btn_ha_package.Bind(wx.EVT_BUTTON, self.on_generate_ha_package)
         self.btn_scan = wx.Button(self.tab_util, label="Scan Network for Sonos", size=(-1, 40))
         self.btn_scan.Bind(wx.EVT_BUTTON, self.on_scan_sonos)
@@ -2192,6 +2901,9 @@ class ViperDashboard(wx.Frame):
         usizer.Add(self.btn_api, 0, wx.ALL | wx.EXPAND, 5)
         usizer.Add(self.btn_batt, 0, wx.ALL | wx.EXPAND, 5)
         usizer.Add(self.btn_filter, 0, wx.ALL | wx.EXPAND, 5)
+        usizer.Add(self.btn_diagnostics, 0, wx.ALL | wx.EXPAND, 5)
+        usizer.Add(self.btn_support_bundle, 0, wx.ALL | wx.EXPAND, 5)
+        usizer.Add(self.btn_new_user_setup, 0, wx.ALL | wx.EXPAND, 5)
         usizer.Add(self.btn_ha_setup, 0, wx.ALL | wx.EXPAND, 5)
         usizer.Add(self.btn_ha_package, 0, wx.ALL | wx.EXPAND, 5)
         usizer.Add(self.btn_scan, 0, wx.ALL | wx.EXPAND, 5)
@@ -2951,6 +3663,13 @@ class ViperDashboard(wx.Frame):
         )
         bsizer.Add(self.btn_refresh_ha_status, 0, wx.ALL | wx.EXPAND, 5)
 
+        self.ha_listener_status_txt = wx.StaticText(self.tab_ha_status, label="HA listener: starting")
+        self._describe_control(
+            self.ha_listener_status_txt,
+            "Home Assistant listener status. This tells whether Viper is directly listening for Home Assistant state changes.",
+        )
+        bsizer.Add(self.ha_listener_status_txt, 0, wx.ALL | wx.EXPAND, 5)
+
         self.ha_status_txt = wx.TextCtrl(
             self.tab_ha_status,
             value="Press Check Home Assistant status to test Home Assistant and configured entities.",
@@ -3093,6 +3812,13 @@ class ViperDashboard(wx.Frame):
             f"Host: {ha_settings.get('ha_ip') or 'not configured'}:{ha_settings.get('ha_port') or '8123'}",
             "",
         ]
+        listener_status = self.ha_listener.status() if hasattr(self, "ha_listener") else {}
+        lines.extend([
+            f"Viper HA listener enabled: {'yes' if self.config.get('ha_listener_enabled', True) else 'no'}",
+            f"Viper HA listener connected: {'yes' if listener_status.get('connected') else 'no'}",
+            f"Viper HA listener last error: {listener_status.get('last_error') or 'none'}",
+            "",
+        ])
 
         connection = discovery.test_ha_connection(
             token=ha_settings.get("ha_token"),
@@ -3125,6 +3851,17 @@ class ViperDashboard(wx.Frame):
             ])
         else:
             lines.append(f"Discovery: failed. {scan.get('message') or scan.get('error')}")
+
+        triggers = self.config.get("doorbell_triggers", {})
+        lines.extend(["", "Doorbell RTSP triggers:"])
+        for side in ("front", "back"):
+            trigger = triggers.get(side, {}) if isinstance(triggers, dict) else {}
+            label = "Front" if side == "front" else "Back"
+            lines.append(
+                f"{label}: enabled={bool(trigger.get('enabled'))}, source={trigger.get('source') or 'ha_state'}, "
+                f"trigger entity={trigger.get('trigger_entity_id') or 'not selected'}, "
+                f"RTSP={'set' if trigger.get('rtsp_url') else 'missing'}"
+            )
 
         entity_ids = []
         for name, speaker in self.config.get("speakers", {}).items():
@@ -3548,6 +4285,16 @@ class ViperDashboard(wx.Frame):
     def on_home_assistant_setup(self, event):
         self.show_home_assistant_setup()
 
+    def on_new_user_setup(self, event):
+        self.show_new_user_setup_assistant()
+
+    def show_new_user_setup_assistant(self):
+        dlg = HomeAssistantFirstRunAssistantDialog(self)
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
+
     def show_home_assistant_setup(self):
         use_env_prefill = not (self.first_run or self.clean_first_run_test)
         dlg = HomeAssistantSetupDialog(self, use_env_prefill=use_env_prefill)
@@ -3609,6 +4356,53 @@ class ViperDashboard(wx.Frame):
             safe_submit(audio.play_notification, "utilities", msg)
         except Exception as e:
             self.notify(f"Filter query failed: {e}", priority=10)
+
+    def on_run_diagnostics(self, event):
+        self.notify("Running diagnostics...", priority=10)
+        safe_submit(self._run_diagnostics)
+
+    def _run_diagnostics(self):
+        try:
+            diag = _current_diagnostics(check_ha=True)
+            text = diagnostics.diagnostics_text(diag)
+            wx.CallAfter(self._show_text_dialog, "Viper Vision Diagnostics", text)
+        except Exception as e:
+            logging.exception("Diagnostics failed")
+            wx.CallAfter(self.notify, f"Diagnostics failed: {e}", priority=10)
+
+    def on_create_support_bundle(self, event):
+        self.notify("Creating support bundle...", priority=10)
+        safe_submit(self._run_support_bundle)
+
+    def _run_support_bundle(self):
+        try:
+            diag = _current_diagnostics(check_ha=True)
+            result = diagnostics.create_support_bundle(
+                self.config,
+                ha_listener_status=diag.get("ha_listener", {}),
+                ha_connection=diag.get("ha_connection", {}),
+            )
+            wx.CallAfter(self.notify, f"Support bundle created: {result['path']}", priority=10)
+            wx.CallAfter(self._show_text_dialog, "Support Bundle Created", f"Created:\n{result['path']}\n\nThis zip is redacted, but you should still review it before sharing.")
+        except Exception as e:
+            logging.exception("Support bundle failed")
+            wx.CallAfter(self.notify, f"Support bundle failed: {e}", priority=10)
+
+    def _show_text_dialog(self, title, text):
+        dlg = wx.Dialog(self, title=title, size=(760, 560))
+        panel = wx.Panel(dlg)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        box = wx.TextCtrl(panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        box.SetName(f"{title}. Read only diagnostic text.")
+        sizer.Add(box, 1, wx.ALL | wx.EXPAND, 10)
+        close = wx.Button(panel, label="Close")
+        close.Bind(wx.EVT_BUTTON, lambda _event: dlg.EndModal(wx.ID_OK))
+        sizer.Add(close, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+        panel.SetSizer(sizer)
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
 
     def on_scan_sonos(self, event):
         self.notify("Scanning network for Sonos...", priority=10)
@@ -3937,6 +4731,9 @@ class ViperDashboard(wx.Frame):
     def on_quit(self, event):
         self.running = False
         is_shutting_down.set()
+        mark_app_clean_shutdown()
+        if hasattr(self, "ha_listener"):
+            self.ha_listener.stop()
         executor.shutdown(wait=False)
         self.tb_icon.RemoveIcon()
         self.tb_icon.Destroy()
@@ -3947,6 +4744,8 @@ if __name__ == "__main__":
     LOG_PATH = cfg.DATA_DIR / "viper_full_debug.log"
     file_handler = RotatingFileHandler(LOG_PATH, maxBytes=5 * 1024 * 1024, backupCount=2, encoding="utf-8")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", handlers=[file_handler, logging.StreamHandler()], force=True)
+    install_crash_hooks()
+    mark_app_running()
     logging.info("===== VIPER VISION STARTING =====")
     cfg.ensure_default_assets()
     audio.startup_cleanup()

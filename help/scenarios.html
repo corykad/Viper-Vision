@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Viper Vision Setup Scenarios</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to main content</a>
+  <header>
+    <h1>Common Setup Scenarios</h1>
+    <p><a href="index.html">Back to help index</a></p>
+  </header>
+  <main id="main">
+    <h2>Fresh Home Assistant Install</h2>
+    <p>Use the direct listener setup. You only need the Home Assistant token, Gemini API key, speaker entities, doorbell trigger entities, and RTSP URLs.</p>
+
+    <h2>No Samba Or File Editor</h2>
+    <p>You do not need Samba or File Editor for the beginner setup. Viper talks to Home Assistant over its API.</p>
+
+    <h2>Only One Doorbell</h2>
+    <p>Configure only the door you use. Leave the other trigger entity blank.</p>
+
+    <h2>No RTSP Yet</h2>
+    <p>Doorbell AI should wait until you have a live RTSP stream. Configure go2rtc, ring-mqtt video streaming, or another camera stream provider.</p>
+
+    <h2>Using Existing YAML Automations</h2>
+    <p>You can keep them. Existing webhook endpoints still work. The direct listener is the simpler default for new setups.</p>
+
+    <h2>Home Assistant Speakers</h2>
+    <p>Use Scan HA for Speakers, then select which speakers receive doorbell, utility, fridge, and quiet-hours-exempt alerts.</p>
+
+    <h2>Fridge And Freezer Alerts</h2>
+    <p>Viper can announce or chime for fridge and freezer open or closed events. The default entity IDs are listed in the HA Status tab.</p>
+
+    <h2>Roborock Vacuum</h2>
+    <p>Install the Home Assistant Roborock integration, then use the Vacuum tab to discover controls and rooms.</p>
+
+    <h2>Gemini Speech Is Slower Than Push</h2>
+    <p>This is expected sometimes. Pushover sends a small notification quickly. Gemini TTS has cloud generation latency. Use the Speed tab to compare RTSP, Gemini vision, Gemini TTS, and speaker dispatch timing.</p>
+
+    <nav class="topic-nav" aria-label="Previous and next help topics">
+      <p><a href="ring-setup.html">Previous: Ring, RTSP, Mosquitto, and ring-mqtt</a></p>
+      <p><a href="tts.html">Next: Voice and TTS Setup</a></p>
+    </nav>
+  </main>
+</body>
+</html>

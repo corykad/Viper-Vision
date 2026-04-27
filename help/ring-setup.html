@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ring, RTSP, Mosquitto, and ring-mqtt</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to main content</a>
+  <header>
+    <h1>Ring, RTSP, Mosquitto, and ring-mqtt</h1>
+    <p><a href="index.html">Back to help index</a></p>
+  </header>
+  <main id="main">
+    <h2>Do You Need Mosquitto Or ring-mqtt?</h2>
+    <p>Viper itself does not require Mosquitto or ring-mqtt. Viper v1.2 can listen directly to Home Assistant state changes.</p>
+    <p>You may still need Mosquitto and ring-mqtt if Home Assistant does not already expose Ring motion, ding, or RTSP livestream entities.</p>
+
+    <h2>Decision Guide</h2>
+    <ul>
+      <li>If Viper finds Ring motion or doorbell entities and your RTSP test passes, you do not need MQTT setup.</li>
+      <li>If Viper finds Ring entities but RTSP fails, set up go2rtc or ring-mqtt video streaming.</li>
+      <li>If Viper finds no Ring trigger entities, install Ring integration first. If that is not enough, install Mosquitto and ring-mqtt.</li>
+      <li>If you already use ring-mqtt, Viper can use the discovered Home Assistant entities or MQTT topics.</li>
+    </ul>
+
+    <h2>Install Mosquitto Broker In Home Assistant</h2>
+    <ol>
+      <li>Open Home Assistant.</li>
+      <li>Go to Settings, Add-ons, Add-on Store.</li>
+      <li>Find Mosquitto Broker and install it.</li>
+      <li>Turn on Start on boot and Watchdog.</li>
+      <li>Create a Home Assistant user for MQTT, or use the credentials recommended by the Mosquitto add-on documentation.</li>
+      <li>Start Mosquitto Broker.</li>
+      <li>Confirm the MQTT integration is configured under Settings, Devices &amp; services.</li>
+    </ol>
+
+    <h2>Install ring-mqtt</h2>
+    <ol>
+      <li>Open Settings, Add-ons, Add-on Store.</li>
+      <li>Open the three-dot menu and choose Repositories.</li>
+      <li>Add the ring-mqtt Home Assistant add-on repository: <code>https://github.com/tsightler/ring-mqtt-ha-addon</code>.</li>
+      <li>Install Ring-MQTT with Video Streaming.</li>
+      <li>Enter your MQTT broker host, port, username, and password.</li>
+      <li>Sign in to Ring using the add-on instructions.</li>
+      <li>Enable livestream or RTSP support if you need Viper doorbell vision.</li>
+      <li>Start the add-on and check its log for errors.</li>
+    </ol>
+
+    <h2>RTSP URL Pattern</h2>
+    <p>Many Ring/go2rtc setups expose streams like this:</p>
+    <pre><code>rtsp://YOUR_HA_IP:8554/YOUR_CAMERA_ID_live</code></pre>
+    <p>In Viper, paste that URL into the front or back RTSP box and press the matching RTSP test button.</p>
+
+    <h2>Use Viper's Ring Setup Assistant</h2>
+    <ol>
+      <li>Open Utilities, Home Assistant Setup.</li>
+      <li>Press Test &amp; Discover.</li>
+      <li>Press Ring Setup Assistant.</li>
+      <li>Read the status box. It tells you whether you need trigger entities, RTSP, Mosquitto, or ring-mqtt.</li>
+    </ol>
+
+    <h2>Official Links</h2>
+    <ul>
+      <li><a href="https://www.home-assistant.io/docs/mqtt/">Home Assistant MQTT documentation</a></li>
+      <li><a href="https://github.com/home-assistant/addons/blob/master/mosquitto/DOCS.md">Mosquitto Broker add-on documentation</a></li>
+      <li><a href="https://github.com/tsightler/ring-mqtt-ha-addon">ring-mqtt Home Assistant add-on</a></li>
+      <li><a href="https://github.com/tsightler/ring-mqtt/wiki/Video-Streaming">ring-mqtt video streaming documentation</a></li>
+      <li><a href="https://go2rtc.org/internal/ring/">go2rtc Ring documentation</a></li>
+    </ul>
+
+    <nav class="topic-nav" aria-label="Previous and next help topics">
+      <p><a href="tailscale-remote.html">Previous: Remote Web Access With Tailscale</a></p>
+      <p><a href="scenarios.html">Next: Common Setup Scenarios</a></p>
+    </nav>
+  </main>
+</body>
+</html>

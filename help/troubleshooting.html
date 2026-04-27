@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Viper Vision Troubleshooting</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to main content</a>
+  <header>
+    <h1>Troubleshooting And Speed</h1>
+    <p><a href="index.html">Back to help index</a></p>
+  </header>
+  <main id="main">
+    <h2>Home Assistant Not Found</h2>
+    <p>Try entering <code>homeassistant.local</code>, the Home Assistant IP address, and port <code>8123</code>. Confirm the Windows PC and Home Assistant are on the same network.</p>
+
+    <h2>Token Rejected</h2>
+    <p>Create a new long-lived access token from your Home Assistant user profile and paste it into Viper.</p>
+
+    <h2>No Trigger Entities</h2>
+    <p>Install or fix the relevant Home Assistant integration. For Ring, try the Ring integration first, then Mosquitto and ring-mqtt if needed.</p>
+
+    <h2>RTSP Test Fails</h2>
+    <p>Confirm the URL opens in another RTSP client, confirm go2rtc or ring-mqtt is running, and confirm Viper's bundled FFmpeg is present in the installed app.</p>
+
+    <h2>Doorbell Speech Is Slow</h2>
+    <p>Open the Speed tab and press Refresh speed diagnostics. Compare RTSP capture, Gemini vision, Gemini TTS, and speaker playback times.</p>
+
+    <h2>Remote Web Page Does Not Open Over Tailscale</h2>
+    <p>Confirm Tailscale is running and signed in on both devices. On the remote device, open Viper using the Viper computer's Tailscale IP and port <code>5050</code>. Example: <code>http://100.x.y.z:5050/remote</code>. If it works at home but not over Tailscale, check Windows Firewall and make sure Viper is running.</p>
+
+    <h2>Gemini Warmup Costs</h2>
+    <p>Gemini warmup sends requests to the API. Those requests may count as billable API usage. Leave warmup off unless you want the lowest first-alert latency and accept possible cost.</p>
+
+    <h2>Logs</h2>
+    <p>Installed builds store logs under <code>%APPDATA%\viper_vision_1.0</code>. Source runs store logs in the project folder.</p>
+
+    <nav class="topic-nav" aria-label="Previous and next help topics">
+      <p><a href="vacuum.html">Previous: Roborock Vacuum Controls</a></p>
+      <p><a href="index.html">Next: Help Index</a></p>
+    </nav>
+  </main>
+</body>
+</html>

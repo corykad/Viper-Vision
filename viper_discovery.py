@@ -1,5 +1,7 @@
 import logging
+import socket
 from copy import deepcopy
+from urllib.parse import urlparse
 
 import requests
 
@@ -130,6 +132,73 @@ def _request_json(path, *, token=None, ha_ip=None, ha_port=None, timeout=DEFAULT
     except ValueError as e:
         return _error("invalid_json", "Home Assistant returned invalid JSON.", exception=e, url=url)
     return _ok({"data": data}, status_code=response.status_code, url=url)
+
+
+def normalize_ha_host(value):
+    text = str(value or "").strip()
+    if not text:
+        return "", "8123"
+    if "://" in text:
+        parsed = urlparse(text)
+        host = parsed.hostname or ""
+        port = str(parsed.port or 8123)
+        return host, port
+    if ":" in text and not text.startswith("["):
+        host, port = text.rsplit(":", 1)
+        return host.strip(), port.strip() or "8123"
+    return text, "8123"
+
+
+def candidate_ha_hosts(seed_host="", seed_port="8123"):
+    candidates = []
+    seen = set()
+
+    def add(host, port="8123", reason="candidate"):
+        host, parsed_port = normalize_ha_host(host)
+        port = str(port or parsed_port or "8123")
+        key = (host.lower(), port)
+        if host and key not in seen:
+            seen.add(key)
+            candidates.append({"ha_ip": host, "ha_port": port, "reason": reason})
+
+    if seed_host:
+        add(seed_host, seed_port, "saved setting")
+    add("homeassistant.local", "8123", "Home Assistant local name")
+    add("homeassistant", "8123", "Home Assistant host name")
+    settings = cfg.get_ha_settings(include_env=True)
+    if settings.get("ha_ip"):
+        add(settings["ha_ip"], settings.get("ha_port") or "8123", "configured default")
+
+    try:
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+        parts = local_ip.split(".")
+        if len(parts) == 4 and not local_ip.startswith("127."):
+            for last in ("2", "10", "49", "50", "100", "101", "200"):
+                add(".".join(parts[:3] + [last]), "8123", "local subnet guess")
+    except Exception:
+        pass
+    return candidates
+
+
+def find_home_assistant(*, token=None, seed_host="", seed_port="8123", timeout=2):
+    """Try common HA host names and a few local subnet guesses."""
+    attempts = []
+    for candidate in candidate_ha_hosts(seed_host, seed_port):
+        host = candidate["ha_ip"]
+        port = candidate["ha_port"]
+        try:
+            url = f"http://{host}:{port}/api/"
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            response = requests.get(url, headers=headers, timeout=timeout)
+            ok_without_token = response.status_code in {200, 401, 403}
+            ok_with_token = bool(token) and response.status_code == 200
+            attempts.append({**candidate, "url": url, "status_code": response.status_code})
+            if ok_with_token or (not token and ok_without_token):
+                return _ok({"ha_ip": host, "ha_port": port, "attempts": attempts, "auth_ok": ok_with_token})
+        except requests.exceptions.RequestException as e:
+            attempts.append({**candidate, "error": str(e)})
+    return _error("not_found", "Home Assistant was not found automatically.", attempts=attempts)
 
 
 def test_ha_connection(*, token=None, ha_ip=None, ha_port=None, timeout=DEFAULT_TIMEOUT):

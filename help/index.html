@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Viper Vision Help</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to main content</a>
+  <header>
+    <h1>Viper Vision Help</h1>
+    <p>Press F1 anywhere in Viper to open this help. These pages are plain HTML so screen readers can use headings, links, and lists normally.</p>
+  </header>
+  <nav aria-label="Help topics">
+    <h2>Topics</h2>
+    <ul>
+      <li><a href="setup.html">Start Here: First Setup</a></li>
+      <li><a href="ha-install.html">Installing Home Assistant For Viper</a></li>
+      <li><a href="tailscale-remote.html">Remote Web Access With Tailscale</a></li>
+      <li><a href="ring-setup.html">Ring, RTSP, Mosquitto, and ring-mqtt</a></li>
+      <li><a href="scenarios.html">Common Setup Scenarios</a></li>
+      <li><a href="tts.html">Voice and TTS Setup</a></li>
+      <li><a href="speakers.html">Speakers and Chimes</a></li>
+      <li><a href="vacuum.html">Roborock Vacuum Controls</a></li>
+      <li><a href="troubleshooting.html">Troubleshooting and Speed</a></li>
+    </ul>
+  </nav>
+  <main id="main">
+    <h2>What Viper Needs</h2>
+    <ul>
+      <li>Home Assistant host, usually <code>homeassistant.local</code> or an IP address.</li>
+      <li>A Home Assistant long-lived access token.</li>
+      <li>A Gemini API key for doorbell AI and Gemini speech.</li>
+      <li>At least one speaker target.</li>
+      <li>For doorbell AI, a Home Assistant trigger entity and a live RTSP URL.</li>
+    </ul>
+
+    <h2>Recommended v1.2 Setup</h2>
+    <ol>
+      <li>Open Viper Vision.</li>
+      <li>Open Utilities, then Home Assistant Setup.</li>
+      <li>Press Find HA.</li>
+      <li>Paste your Home Assistant long-lived access token and Gemini API key.</li>
+      <li>Press Test &amp; Discover.</li>
+      <li>Choose front and back doorbell trigger entities.</li>
+      <li>Enter or derive live RTSP URLs.</li>
+      <li>Press Test Front RTSP and Test Back RTSP.</li>
+      <li>Press Save.</li>
+    </ol>
+
+    <h2>Important Change In v1.2</h2>
+    <p>Viper can listen directly to Home Assistant state changes. New users do not need to edit Home Assistant YAML, install Samba, or copy package files just to get doorbell alerts working.</p>
+
+    <h2>Remote Web Access</h2>
+    <p>For access away from home, use Tailscale on the Viper computer and on your phone or laptop. See <a href="tailscale-remote.html">Remote Web Access With Tailscale</a>.</p>
+  </main>
+</body>
+</html>

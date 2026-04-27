@@ -315,6 +315,27 @@ CONFIG_SCHEMA = {
         "mqtt_port": "1883",
         "mqtt_username": "",
         "mqtt_password": "",
+        "ha_listener_enabled": True,
+        "doorbell_triggers": {
+            "front": {
+                "enabled": False,
+                "source": "ha_state",
+                "trigger_entity_id": "",
+                "active_states": ["on", "true", "detected", "motion", "ding", "pressed", "open"],
+                "rtsp_url": "",
+                "camera_id": "",
+                "mqtt_topic": "",
+            },
+            "back": {
+                "enabled": False,
+                "source": "ha_state",
+                "trigger_entity_id": "",
+                "active_states": ["on", "true", "detected", "motion", "ding", "pressed", "open"],
+                "rtsp_url": "",
+                "camera_id": "",
+                "mqtt_topic": "",
+            },
+        },
         "quiet_hours_enabled": False,
         "quiet_hours_start": "22:00",
         "quiet_hours_end": "07:00",
@@ -644,6 +665,52 @@ def _normalize_tts_alerts(value, default):
     return normalized
 
 
+def _normalize_active_states(value, default):
+    states = value if isinstance(value, list) else default
+    cleaned = []
+    for item in states:
+        text = _as_str(item).strip().lower()
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return cleaned or deepcopy(default)
+
+
+def _normalize_doorbell_trigger(value, default, side, config_data):
+    trigger = value if isinstance(value, dict) else {}
+    normalized = _deep_merge(default, trigger)
+    source = _as_str(normalized.get("source"), default["source"]).strip().lower()
+    if source not in {"ha_state", "mqtt", "webhook"}:
+        source = default["source"]
+
+    camera_key = f"{side}_camera_id"
+    rtsp_key = "rtsp_back" if side == "back" else "rtsp_front"
+    mqtt_key = "back_doorbell_mqtt_topic" if side == "back" else "front_doorbell_mqtt_topic"
+    camera_id = _as_str(normalized.get("camera_id") or config_data.get(camera_key), "").strip()
+    rtsp_url = _as_str(normalized.get("rtsp_url") or config_data.get(rtsp_key), "").strip()
+    mqtt_topic = _as_str(normalized.get("mqtt_topic") or config_data.get(mqtt_key), "").strip()
+    if not rtsp_url:
+        rtsp_url = _derive_rtsp_url(config_data.get("ha_ip"), camera_id)
+
+    return {
+        **normalized,
+        "enabled": _as_bool(normalized.get("enabled"), bool(rtsp_url or camera_id)),
+        "source": source,
+        "trigger_entity_id": _as_str(normalized.get("trigger_entity_id"), "").strip(),
+        "active_states": _normalize_active_states(normalized.get("active_states"), default["active_states"]),
+        "rtsp_url": rtsp_url,
+        "camera_id": camera_id,
+        "mqtt_topic": mqtt_topic,
+    }
+
+
+def _normalize_doorbell_triggers(value, default, config_data):
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "front": _normalize_doorbell_trigger(raw.get("front"), default["front"], "front", config_data),
+        "back": _normalize_doorbell_trigger(raw.get("back"), default["back"], "back", config_data),
+    }
+
+
 def normalize_speaker_settings(config_data: dict):
     """Backfill and validate speaker routing settings on older configs."""
     if not isinstance(config_data, dict):
@@ -738,6 +805,12 @@ def validate_and_normalize_config(config_data):
     normalized["mqtt_port"] = _as_str(normalized.get("mqtt_port"), defaults["mqtt_port"]).strip() or defaults["mqtt_port"]
     normalized["mqtt_username"] = _as_str(normalized.get("mqtt_username"), defaults["mqtt_username"]).strip()
     normalized["mqtt_password"] = _as_str(normalized.get("mqtt_password"), defaults["mqtt_password"]).strip()
+    normalized["ha_listener_enabled"] = _as_bool(normalized.get("ha_listener_enabled"), defaults["ha_listener_enabled"])
+    normalized["doorbell_triggers"] = _normalize_doorbell_triggers(
+        normalized.get("doorbell_triggers"),
+        defaults["doorbell_triggers"],
+        normalized,
+    )
     normalized["quiet_hours_enabled"] = _as_bool(normalized.get("quiet_hours_enabled"), defaults["quiet_hours_enabled"])
     normalized["quiet_hours_start"] = _normalize_time(normalized.get("quiet_hours_start"), defaults["quiet_hours_start"])
     normalized["quiet_hours_end"] = _normalize_time(normalized.get("quiet_hours_end"), defaults["quiet_hours_end"])
@@ -858,27 +931,34 @@ def get_resolved_doorbell_settings(config_data=None, *, include_env=True):
     env_rtsp_back = os.getenv("RTSP_BACK", "") if include_env else ""
     env_front_topic = FRONT_DOORBELL_MQTT_TOPIC if include_env else ""
     env_back_topic = BACK_DOORBELL_MQTT_TOPIC if include_env else ""
+    triggers = data.get("doorbell_triggers") if isinstance(data.get("doorbell_triggers"), dict) else {}
+    front_trigger = triggers.get("front") if isinstance(triggers.get("front"), dict) else {}
+    back_trigger = triggers.get("back") if isinstance(triggers.get("back"), dict) else {}
 
     resolved_rtsp_front = (
-        data.get("rtsp_front")
+        front_trigger.get("rtsp_url")
+        or data.get("rtsp_front")
         or env_rtsp_front
         or _derive_rtsp_url(ha_ip, front_camera_id)
         or ""
     )
     resolved_rtsp_back = (
-        data.get("rtsp_back")
+        back_trigger.get("rtsp_url")
+        or data.get("rtsp_back")
         or env_rtsp_back
         or _derive_rtsp_url(ha_ip, back_camera_id)
         or ""
     )
     resolved_front_topic = (
-        data.get("front_doorbell_mqtt_topic")
+        front_trigger.get("mqtt_topic")
+        or data.get("front_doorbell_mqtt_topic")
         or env_front_topic
         or _derive_ring_topic(ring_topic_root, front_camera_id)
         or ""
     )
     resolved_back_topic = (
-        data.get("back_doorbell_mqtt_topic")
+        back_trigger.get("mqtt_topic")
+        or data.get("back_doorbell_mqtt_topic")
         or env_back_topic
         or _derive_ring_topic(ring_topic_root, back_camera_id)
         or ""
@@ -898,6 +978,10 @@ def get_resolved_doorbell_settings(config_data=None, *, include_env=True):
         "mqtt_password": data.get("mqtt_password") or "",
         "raw_rtsp_front": data.get("rtsp_front") or "",
         "raw_rtsp_back": data.get("rtsp_back") or "",
+        "front_trigger_entity_id": front_trigger.get("trigger_entity_id", ""),
+        "back_trigger_entity_id": back_trigger.get("trigger_entity_id", ""),
+        "front_trigger_source": front_trigger.get("source", "ha_state"),
+        "back_trigger_source": back_trigger.get("source", "ha_state"),
         "raw_front_doorbell_mqtt_topic": data.get("front_doorbell_mqtt_topic") or "",
         "raw_back_doorbell_mqtt_topic": data.get("back_doorbell_mqtt_topic") or "",
         "raw_front_camera_id": data.get("front_camera_id") or "",

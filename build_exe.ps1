@@ -12,6 +12,8 @@ python -m py_compile `
   .\viper_audio.py `
   .\viper_vision.py `
   .\viper_discovery.py `
+  .\viper_diagnostics.py `
+  .\viper_ha_listener.py `
   .\viper_ring_discovery.py `
   .\viper_ha_package.py
 

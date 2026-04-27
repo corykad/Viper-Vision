@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Viper Vision First Setup</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to main content</a>
+  <header>
+    <h1>First Setup</h1>
+    <p><a href="index.html">Back to help index</a></p>
+  </header>
+  <main id="main">
+    <h2>Create A Home Assistant Token</h2>
+    <ol>
+      <li>In Home Assistant, open your user profile.</li>
+      <li>Find Long-Lived Access Tokens.</li>
+      <li>Create a token named Viper Vision.</li>
+      <li>Copy it immediately. Home Assistant only shows it once.</li>
+    </ol>
+
+    <h2>Connect Viper</h2>
+    <ol>
+      <li>In Viper, open Utilities, then Home Assistant Setup.</li>
+      <li>Press Find HA. If this fails, type the host manually.</li>
+      <li>Paste the Home Assistant token.</li>
+      <li>Paste your Gemini API key.</li>
+      <li>Leave Direct Home Assistant listener enabled.</li>
+      <li>Press Test &amp; Discover.</li>
+    </ol>
+
+    <h2>Choose Doorbell Triggers</h2>
+    <p>A trigger entity is the Home Assistant entity that changes when something happens. For a doorbell, this might be motion, ding, person detected, or button pressed.</p>
+    <p>Choose one trigger entity for the front door and one for the back door. If you only use one door, configure only that door.</p>
+
+    <h2>Test RTSP</h2>
+    <p>Doorbell AI needs a live RTSP stream. Home Assistant snapshots may be old, so Viper does not use snapshots as the default doorbell source.</p>
+    <p>Press Test Front RTSP and Test Back RTSP. Save only after the streams work.</p>
+
+    <h2>Advanced YAML Export</h2>
+    <p>The Advanced: Export HA YAML Package button is for users who prefer Home Assistant automations. It is optional in v1.2.</p>
+
+    <h2>Optional Remote Web Access</h2>
+    <p>After local setup works, you can use Tailscale to open Viper's remote web page from your phone or another computer without exposing Viper to the public internet. See <a href="tailscale-remote.html">Remote Web Access With Tailscale</a>.</p>
+
+    <nav class="topic-nav" aria-label="Previous and next help topics">
+      <p><a href="index.html">Previous: Help Index</a></p>
+      <p><a href="ha-install.html">Next: Installing Home Assistant For Viper</a></p>
+    </nav>
+  </main>
+</body>
+</html>

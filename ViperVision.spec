@@ -9,6 +9,7 @@ hiddenimports = []
 hiddenimports += collect_submodules("accessible_output2")
 hiddenimports += collect_submodules("edge_tts")
 hiddenimports += collect_submodules("paho")
+hiddenimports += collect_submodules("websockets")
 hiddenimports += [
     "google.genai",
     "google.genai.types",
@@ -21,6 +22,7 @@ hiddenimports += [
 datas = [
     ("templates", "templates"),
     ("chimes", "chimes"),
+    ("help", "help"),
 ]
 
 

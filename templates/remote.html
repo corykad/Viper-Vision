@@ -228,6 +228,7 @@
                 <li><a href="#speakers-heading">Speaker targets</a></li>
                 <li><a href="#prompt-heading">AI profile manager</a></li>
                 <li><a href="#utils-heading">System utilities</a></li>
+                <li><a href="#diagnostics-heading">Diagnostics</a></li>
                 <li><a href="#fridge-heading">Fridge and freezer</a></li>
                 <li><a href="#broadcast-heading">Broadcast message</a></li>
                 <li><a href="#cinderella-studio-heading">Cinderella messages</a></li>
@@ -637,6 +638,20 @@
                 </form>
             </div>
 
+        </section>
+
+        <section aria-labelledby="diagnostics-heading">
+            <h2 id="diagnostics-heading">Diagnostics</h2>
+            <p class="field-hint">Diagnostics stay local. Support bundles redact tokens, API keys, passwords, and Ring identifiers before writing the zip.</p>
+            <div class="row">
+                <form action="{{ url_for('web_diagnostics') }}" method="get" style="flex: 1;">
+                    <input type="hidden" name="check_ha" value="1">
+                    <button type="submit">Show Diagnostics</button>
+                </form>
+                <form action="{{ url_for('web_support_bundle') }}" method="post" style="flex: 1;">
+                    <button type="submit">Create Support Bundle</button>
+                </form>
+            </div>
         </section>
 
         <section aria-labelledby="quiet-heading">

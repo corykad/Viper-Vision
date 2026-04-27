@@ -117,6 +117,43 @@
     "mqtt_port": "1883",
     "mqtt_username": "",
     "mqtt_password": "",
+    "ha_listener_enabled": true,
+    "doorbell_triggers": {
+        "front": {
+            "enabled": false,
+            "source": "ha_state",
+            "trigger_entity_id": "binary_sensor.front_doorbell_motion",
+            "active_states": [
+                "on",
+                "true",
+                "detected",
+                "motion",
+                "ding",
+                "pressed",
+                "open"
+            ],
+            "rtsp_url": "rtsp://YOUR_HA_IP:8554/YOUR_FRONT_CAMERA_ID_live",
+            "camera_id": "YOUR_FRONT_CAMERA_ID",
+            "mqtt_topic": "ring/YOUR_LOCATION_ID/camera/YOUR_FRONT_CAMERA_ID/motion/state"
+        },
+        "back": {
+            "enabled": false,
+            "source": "ha_state",
+            "trigger_entity_id": "binary_sensor.back_doorbell_motion",
+            "active_states": [
+                "on",
+                "true",
+                "detected",
+                "motion",
+                "ding",
+                "pressed",
+                "open"
+            ],
+            "rtsp_url": "rtsp://YOUR_HA_IP:8554/YOUR_BACK_CAMERA_ID_live",
+            "camera_id": "YOUR_BACK_CAMERA_ID",
+            "mqtt_topic": "ring/YOUR_LOCATION_ID/camera/YOUR_BACK_CAMERA_ID/motion/state"
+        }
+    },
     "quiet_hours_enabled": false,
     "quiet_hours_start": "22:00",
     "quiet_hours_end": "07:00",

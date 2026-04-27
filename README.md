@@ -1,15 +1,15 @@
 # Viper Vision
 
-Viper Vision is a Windows-first smart home notification and control system. It connects Home Assistant, Ring doorbell events, RTSP camera snapshots, Gemini vision, configurable text-to-speech, speaker playback, refrigerator alerts, and Roborock vacuum controls into one accessible desktop app and web remote.
+Viper Vision is a Windows-first smart home notification and control system. It connects Home Assistant, Ring doorbell events, live RTSP camera streams, Gemini vision, configurable text-to-speech, speaker playback, refrigerator alerts, and Roborock vacuum controls into one accessible desktop app and web remote.
 
-Version `1.1` adds a richer web remote, Roborock vacuum controls, room cleaning, saved vacuum room maps, better Home Assistant diagnostics, speed diagnostics, and stronger screen-reader labeling.
+Version `1.2` adds a beginner-friendly Home Assistant setup path. Viper can now listen directly to Home Assistant state changes, so new users can get started without editing YAML automations, installing Samba, or copying Home Assistant packages.
 
 ## What Viper Vision Does
 
 Viper can:
 
-- Watch doorbell events from Home Assistant or MQTT.
-- Grab a fast RTSP camera frame when a doorbell event fires.
+- Watch doorbell events directly from Home Assistant state changes, MQTT, or legacy webhooks.
+- Grab a fast live RTSP camera frame when a doorbell event fires.
 - Send that image to Gemini vision.
 - Speak a short natural-language alert through your speakers.
 - Play custom chimes for front and back door events.
@@ -27,7 +27,7 @@ Viper can:
 
 ## Big Picture
 
-Viper Vision runs on a Windows PC. Home Assistant sends events to Viper over HTTP. Viper then decides what to do: analyze a camera frame, speak an alert, play a chime, broadcast a message, or trigger a Roborock announcement.
+Viper Vision runs on a Windows PC. In the recommended setup, Viper connects to Home Assistant, discovers your entities, and listens for Home Assistant state changes directly. Viper then decides what to do: analyze a live RTSP camera frame, speak an alert, play a chime, broadcast a message, or trigger a Roborock announcement.
 
 Typical layout:
 
@@ -38,13 +38,13 @@ Ring / Roborock / Fridge / Sensors
 Home Assistant
         |
         v
-Viper Vision on Windows
+Viper Vision on Windows, listening directly to HA events
         |
         v
 Gemini, speakers, Sonos, Home Assistant media players, web remote
 ```
 
-You do not have to be a Home Assistant expert to use this, but Home Assistant is the glue. Viper uses it for entity IDs, automations, REST commands, speakers, Roborock controls, and sensor events.
+You do not have to be a Home Assistant expert to use this, but Home Assistant is the glue. Viper uses it for entity IDs, speakers, Roborock controls, and sensor events. YAML automations are now optional advanced exports.
 
 ## Important Terms
 
@@ -58,7 +58,7 @@ If you are new to Home Assistant, these words matter:
 - **Long-lived access token**: A password-like token Viper uses to talk to Home Assistant. Keep it private.
 - **RTSP**: A camera video stream URL. Viper uses RTSP to grab a still frame quickly.
 - **TTS**: Text-to-speech.
-- **Webhook**: An HTTP URL Home Assistant calls to notify Viper.
+- **Webhook**: An HTTP URL Home Assistant calls to notify Viper. In v1.2, webhooks are still supported, but the beginner setup uses Viper's direct Home Assistant listener instead.
 
 ## Requirements
 
@@ -73,7 +73,7 @@ Minimum:
   - Home Assistant `media_player` entity,
   - optional Alexa media player entity,
   - or local Windows SAPI fallback.
-- FFmpeg for RTSP frame capture.
+- FFmpeg for RTSP frame capture. The Windows installer bundles FFmpeg.
 
 Recommended:
 
@@ -81,18 +81,18 @@ Recommended:
 - A static IP address for the Windows PC running Viper.
 - A static IP address for Home Assistant.
 - Home Assistant Roborock integration if using vacuum controls.
-- Home Assistant Ring or MQTT setup if using doorbell triggers.
+- Home Assistant Ring, go2rtc, or another RTSP source if using doorbell vision.
 - A screen reader such as JAWS, NVDA, or Windows Narrator if you rely on speech feedback.
 
 ## Install Options
 
 You can run Viper two ways.
 
-### Option 1: Windows Release Zip
+### Option 1: Windows Installer
 
 This is easiest for most users.
 
-1. Download `ViperVision-v1.1-Setup.exe` from the GitHub release.
+1. Download the latest `ViperVision-v1.2-Setup.exe` from the GitHub release.
 2. Run the installer.
 3. Choose whether to create a desktop shortcut.
 4. Launch Viper Vision from the Start menu or desktop shortcut.
@@ -106,6 +106,43 @@ Runtime data is stored under:
 ```
 
 That folder contains your real `viper_config.json`, logs, generated audio, and copied chimes.
+
+## Recommended First Setup
+
+Use this path if you just installed Home Assistant and want the quickest route.
+
+1. In Home Assistant, open your user profile and create a long-lived access token.
+2. Start Viper Vision.
+3. Open **Utilities**, then **Home Assistant Setup**.
+4. Press **Find HA**. If Viper cannot find it, enter the Home Assistant host manually, such as `homeassistant.local` or the HA IP address.
+5. Paste the long-lived access token and your Gemini API key.
+6. Press **Test & Discover** so Viper can read Home Assistant entities.
+7. For each doorbell, choose the Home Assistant trigger entity that changes when motion or a press happens.
+8. Enter or derive the matching live RTSP URL. For Ring/go2rtc this is usually `rtsp://YOUR_HA_IP:8554/YOUR_CAMERA_ID_live`.
+9. Press **Test Front RTSP** and **Test Back RTSP**. Doorbell AI needs these live RTSP tests to pass.
+10. Press **Save**.
+
+After this, Viper listens directly to Home Assistant state changes. You do not need to install Samba, edit `automations.yaml`, or copy a package unless you prefer the advanced Home Assistant YAML workflow.
+
+## Built-In Help
+
+Press `F1` in Viper to open the local HTML help manual. The files live in the `help` folder and are included in packaged builds.
+
+The **New User Setup Assistant** in the Utilities tab helps users who have not set up Home Assistant yet. It checks for VirtualBox, opens official Home Assistant and VirtualBox pages, searches for Home Assistant on the network, and then hands off to Viper's Home Assistant setup.
+
+The Home Assistant setup dialog also includes a **Ring Setup Assistant** button. It checks the current discovery results and explains whether you need Ring trigger entities, RTSP setup, Mosquitto, or ring-mqtt.
+
+## Doorbell RTSP Notes
+
+Viper does not use Home Assistant snapshots for doorbell AI by default because snapshots can be stale. The doorbell path is designed around live RTSP streams. If a doorbell alert fires but the RTSP test fails, fix the RTSP source first.
+
+For Ring cameras, many setups expose streams through go2rtc with URLs like:
+
+```text
+rtsp://YOUR_HA_IP:8554/YOUR_CAMERA_ID_live
+```
+
+If you use MQTT/Ring topic discovery, Viper can listen for `ring/#` topics and help identify camera IDs and motion topics. MQTT and webhook triggers remain available for advanced or existing setups.
 
 ### Option 2: Run From Source
 
@@ -318,7 +355,9 @@ Search for `cinderella`, `roborock`, `ring`, `fridge`, or `media_player`.
 
 Viper needs Home Assistant to call its URLs. The cleanest setup is a Home Assistant package.
 
-### Package Setup
+### Advanced Package Setup
+
+The package setup is optional in v1.2. Use it only if you prefer Home Assistant-side YAML automations instead of Viper's direct Home Assistant listener.
 
 1. In Home Assistant, open your `configuration.yaml`.
 2. Make sure packages are enabled:
@@ -364,7 +403,7 @@ Viper needs Home Assistant to call its URLs. The cleanest setup is a Home Assist
 
 8. If the check passes, restart Home Assistant.
 
-### Non-Package Setup
+### Advanced Non-Package Setup
 
 If you already have `configuration.yaml` and `automations.yaml`, you can keep using them.
 
@@ -1330,7 +1369,7 @@ winget install --id JRSoftware.InnoSetup -e
 Installer output:
 
 ```text
-installer\ViperVision-v1.1-Setup.exe
+installer\ViperVision-v1.2-Setup.exe
 ```
 
 Do not commit:
@@ -1343,6 +1382,16 @@ Do not commit:
 ## Running Tests
 
 Viper includes a small release test suite that uses Python's built-in `unittest` module. It does not call your real Home Assistant, Gemini account, speakers, or Roborock vacuum. Home Assistant responses are mocked so the tests can run safely before a commit.
+
+Before publishing a release, also follow `RELEASE_CHECKLIST.md`. It includes installer smoke tests, first-run checks, support bundle checks, and manual HA/RTSP/TTS/Roborock scenarios.
+
+After building the installer, run:
+
+```powershell
+.\smoke_installer.ps1
+```
+
+This silently installs Viper into a temporary folder, launches it with isolated app data, checks packaged help and FFmpeg, and looks for immediate crash markers.
 
 Run everything:
 
@@ -1367,7 +1416,7 @@ The current suite checks:
 - select, number, and child-lock setting routes,
 - Cinderella dock-specific error message routing.
 
-## GitHub Release Checklist For 1.1
+## GitHub Release Checklist For 1.2
 
 Before committing:
 
@@ -1396,16 +1445,16 @@ Suggested commit:
 
 ```powershell
 git add README.md main.pyw templates/remote.html viper_config.py viper_config.example.json
-git commit -m "Release Viper Vision 1.1"
-git tag -a v1.1 -m "Viper Vision 1.1"
+git commit -m "Release Viper Vision 1.2"
+git tag -a v1.2 -m "Viper Vision 1.2"
 ```
 
 If publishing with GitHub CLI:
 
 ```powershell
 git push origin main
-git push origin v1.1
-gh release create v1.1 installer\ViperVision-v1.1-Setup.exe --title "Viper Vision 1.1" --notes "Viper Vision 1.1 release."
+git push origin v1.2
+gh release create v1.2 installer\ViperVision-v1.2-Setup.exe --title "Viper Vision 1.2" --notes "Viper Vision 1.2 release."
 ```
 
 ## Security

@@ -10,4 +10,5 @@ pywin32
 requests
 soco
 waitress
+websockets
 wxPython

@@ -1,7 +1,13 @@
 import unittest
+import tempfile
+import zipfile
+from pathlib import Path
 from unittest.mock import patch
 
 import viper_config as cfg
+import viper_discovery as discovery
+import viper_diagnostics as diagnostics
+import viper_ha_listener as ha_listener
 import main
 
 
@@ -176,6 +182,27 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("Kitchen", body)
         self.assertNotIn("cinderella Full Cleaning", body)
 
+    def test_remote_page_renders_diagnostics_controls(self):
+        main.dash_app = FakeDashboard()
+
+        with patch.object(main.discovery, "get_ha_states", return_value={"ok": True, "states": _sample_states(), "entity_count": 8}):
+            response = self.client.get("/remote")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Diagnostics", body)
+        self.assertIn("Create Support Bundle", body)
+
+    def test_remote_diagnostics_endpoint_returns_json(self):
+        main.dash_app = FakeDashboard()
+
+        response = self.client.get("/remote/diagnostics?format=json")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["app"]["version"], "1.2")
+        self.assertIn("ffmpeg", payload)
+
     def test_web_room_refresh_saves_rooms_to_config(self):
         main.dash_app = FakeDashboard()
 
@@ -256,6 +283,194 @@ class ViperReleaseTests(unittest.TestCase):
         message = main.choose_cinderella_message("error", error="duct_blockage", source="dock")
 
         self.assertEqual(message, "Dock duct blockage test message.")
+
+    def test_v12_config_migrates_flat_doorbell_fields_to_triggers(self):
+        normalized = cfg.validate_and_normalize_config(
+            {
+                "ha_ip": "192.168.1.10",
+                "front_camera_id": "front123",
+                "back_camera_id": "back456",
+                "rtsp_front": "rtsp://example/front",
+                "front_doorbell_mqtt_topic": "ring/root/camera/front123/motion/state",
+            }
+        )
+
+        self.assertTrue(normalized["ha_listener_enabled"])
+        self.assertEqual(normalized["doorbell_triggers"]["front"]["rtsp_url"], "rtsp://example/front")
+        self.assertEqual(normalized["doorbell_triggers"]["front"]["camera_id"], "front123")
+        self.assertEqual(
+            normalized["doorbell_triggers"]["front"]["mqtt_topic"],
+            "ring/root/camera/front123/motion/state",
+        )
+        self.assertEqual(
+            normalized["doorbell_triggers"]["back"]["rtsp_url"],
+            "rtsp://192.168.1.10:8554/back456_live",
+        )
+
+    def test_ha_listener_routes_doorbell_state_to_rtsp_action(self):
+        config = cfg.validate_and_normalize_config(
+            {
+                "doorbell_triggers": {
+                    "front": {
+                        "enabled": True,
+                        "source": "ha_state",
+                        "trigger_entity_id": "binary_sensor.front_doorbell_motion",
+                        "rtsp_url": "rtsp://camera/front",
+                    }
+                }
+            }
+        )
+
+        actions = ha_listener.route_state_change(
+            config,
+            "binary_sensor.front_doorbell_motion",
+            {"state": "off"},
+            {"state": "on"},
+        )
+
+        self.assertEqual(actions[0]["type"], "doorbell")
+        self.assertEqual(actions[0]["side"], "front")
+        self.assertEqual(actions[0]["rtsp_url"], "rtsp://camera/front")
+
+    def test_ha_listener_ignores_repeated_active_doorbell_state(self):
+        config = cfg.validate_and_normalize_config(
+            {
+                "doorbell_triggers": {
+                    "back": {
+                        "enabled": True,
+                        "source": "ha_state",
+                        "trigger_entity_id": "binary_sensor.back_doorbell_motion",
+                        "rtsp_url": "rtsp://camera/back",
+                    }
+                }
+            }
+        )
+
+        actions = ha_listener.route_state_change(
+            config,
+            "binary_sensor.back_doorbell_motion",
+            {"state": "on"},
+            {"state": "on"},
+        )
+
+        self.assertEqual(actions, [])
+
+    def test_ha_listener_routes_roborock_status_and_errors(self):
+        config = cfg.validate_and_normalize_config({"cinderella_enabled": True})
+
+        status_actions = ha_listener.route_state_change(
+            config,
+            "sensor.cinderella_status",
+            {"state": "cleaning"},
+            {"state": "washing_the_mop"},
+        )
+        error_actions = ha_listener.route_state_change(
+            config,
+            "sensor.cinderella_dock_dock_error",
+            {"state": "ok"},
+            {"state": "duct_blockage"},
+        )
+
+        self.assertEqual(status_actions, [{"type": "cinderella", "event": "washing", "error": "", "source": "vacuum"}])
+        self.assertEqual(error_actions, [{"type": "cinderella", "event": "error", "error": "duct_blockage", "source": "dock"}])
+
+    def test_ha_listener_derives_ring_rtsp_url(self):
+        self.assertEqual(
+            ha_listener.derive_rtsp_url("192.168.1.10", "abc123"),
+            "rtsp://192.168.1.10:8554/abc123_live",
+        )
+
+    def test_ha_host_normalization_accepts_url_and_plain_host(self):
+        self.assertEqual(discovery.normalize_ha_host("http://homeassistant.local:8123"), ("homeassistant.local", "8123"))
+        self.assertEqual(discovery.normalize_ha_host("192.168.1.10"), ("192.168.1.10", "8123"))
+
+    def test_first_run_assistant_helpers_are_safe_without_virtualbox(self):
+        with patch.object(main.shutil, "which", return_value=None), patch.object(main.Path, "exists", return_value=False):
+            self.assertEqual(main.find_vboxmanage(), "")
+            status = main.get_virtualbox_status()
+        self.assertFalse(status["installed"])
+        self.assertIn("not found", status["message"].lower())
+
+    def test_official_setup_links_include_home_assistant_install(self):
+        self.assertIn("home-assistant.io/installation/windows", main.OFFICIAL_LINKS["ha_windows"])
+        self.assertIn("virtualbox.org", main.OFFICIAL_LINKS["virtualbox"])
+
+    def test_support_bundle_redacts_secrets(self):
+        config = cfg.validate_and_normalize_config(
+            {
+                "ha_token": "super-secret-ha-token",
+                "gemini_api_key": "secret-gemini-key",
+                "pushover_user_key": "secret-push-user",
+                "pushover_api_token": "secret-push-token",
+                "mqtt_password": "secret-mqtt-password",
+                "front_camera_id": "ring-front-camera-id",
+                "ring_topic_root": "ring-location-id",
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            result = diagnostics.create_support_bundle(config, output_dir=tmp)
+            with zipfile.ZipFile(result["path"], "r") as zf:
+                combined = "\n".join(zf.read(name).decode("utf-8", errors="ignore") for name in zf.namelist())
+
+        self.assertNotIn("super-secret-ha-token", combined)
+        self.assertNotIn("secret-gemini-key", combined)
+        self.assertNotIn("secret-push-user", combined)
+        self.assertNotIn("secret-push-token", combined)
+        self.assertNotIn("secret-mqtt-password", combined)
+        self.assertNotIn("ring-front-camera-id", combined)
+        self.assertIn("[REDACTED]", combined)
+
+    def test_installer_metadata_is_v12_and_help_is_packaged(self):
+        root = Path(__file__).resolve().parents[1]
+        iss = (root / "ViperVision.iss").read_text(encoding="utf-8")
+        spec = (root / "ViperVision.spec").read_text(encoding="utf-8")
+        self.assertIn('#define MyAppVersion "1.2"', iss)
+        self.assertIn('OutputBaseFilename=ViperVision-v{#MyAppVersion}-Setup', iss)
+        self.assertIn('("help", "help")', spec)
+
+    def test_crash_report_formatter_writes_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            crash_path = Path(tmp) / "crash.txt"
+            with patch.object(main, "CRASH_LOG_PATH", crash_path), patch.object(main.logging, "critical"):
+                try:
+                    raise RuntimeError("diagnostic crash test")
+                except RuntimeError:
+                    exc_type, exc_value, exc_tb = main.sys.exc_info()
+                    text = main._write_crash_report(exc_type, exc_value, exc_tb, source="test")
+            saved = crash_path.read_text(encoding="utf-8")
+        self.assertIn("diagnostic crash test", text)
+        self.assertIn("diagnostic crash test", saved)
+
+    def test_help_files_exist_for_f1_topics(self):
+        root = Path(__file__).resolve().parents[1]
+        for name in [
+            "index.html",
+            "ha-install.html",
+            "setup.html",
+            "ring-setup.html",
+            "scenarios.html",
+            "tts.html",
+            "speakers.html",
+            "vacuum.html",
+            "troubleshooting.html",
+            "style.css",
+        ]:
+            self.assertTrue((root / "help" / name).exists(), name)
+
+    def test_release_checklist_exists(self):
+        root = Path(__file__).resolve().parents[1]
+        text = (root / "RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
+        self.assertIn(".\\run_tests.ps1", text)
+        self.assertIn(".\\build_installer.ps1", text)
+        self.assertIn(".\\smoke_installer.ps1", text)
+        self.assertIn("Create Support Bundle", text)
+
+    def test_smoke_installer_script_exists(self):
+        root = Path(__file__).resolve().parents[1]
+        text = (root / "smoke_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("ViperVision-v1.2-Setup.exe", text)
+        self.assertIn("VIPER_CLEAN_FIRST_RUN_TEST", text)
+        self.assertIn("ffmpeg.exe", text)
 
 
 if __name__ == "__main__":
