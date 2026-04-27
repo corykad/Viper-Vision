@@ -97,18 +97,6 @@ This is easiest for most users.
 3. Choose whether to create a desktop shortcut.
 4. Launch Viper Vision from the Start menu or desktop shortcut.
 
-If you use the portable zip instead, download `ViperVision-v1.1-windows.zip` and extract it to a folder such as:
-
-   ```text
-   C:\ViperVision
-   ```
-
-Then run:
-
-   ```text
-   ViperVision.exe
-   ```
-
 Windows may show a SmartScreen warning because this is a small unsigned personal project. Choose "More info" and "Run anyway" only if you trust the source.
 
 Runtime data is stored under:
@@ -155,7 +143,7 @@ Important public files:
 - `chimes/`: Bundled chime audio assets.
 - `requirements.txt`: Python dependencies.
 - `ViperVision.spec`: PyInstaller build spec.
-- `build_exe.ps1`: Windows portable app build helper.
+- `build_exe.ps1`: Windows packaged app build helper used by the installer.
 - `build_installer.ps1`: Windows installer build helper.
 - `ViperVision.iss`: Inno Setup installer definition.
 
@@ -1315,7 +1303,7 @@ Do not post logs publicly without checking for private URLs, IP addresses, entit
 
 ## Building A Windows Release
 
-Build the portable app folder:
+Build the app folder:
 
 ```powershell
 .\build_exe.ps1
@@ -1326,8 +1314,6 @@ Output:
 ```text
 dist\ViperVision
 ```
-
-Create a zip from the `dist\ViperVision` folder if you want a portable release asset.
 
 Build the installer:
 
@@ -1352,7 +1338,7 @@ Do not commit:
 - `dist/`
 - `installer/`
 - `build/`
-- generated zip files unless they are release assets only.
+- generated zip files.
 
 ## Running Tests
 
@@ -1419,7 +1405,7 @@ If publishing with GitHub CLI:
 ```powershell
 git push origin main
 git push origin v1.1
-gh release create v1.1 installer\ViperVision-v1.1-Setup.exe ViperVision-v1.1-windows.zip --title "Viper Vision 1.1" --notes "Viper Vision 1.1 release."
+gh release create v1.1 installer\ViperVision-v1.1-Setup.exe --title "Viper Vision 1.1" --notes "Viper Vision 1.1 release."
 ```
 
 ## Security
