@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import random
+import re
 import socket
 import threading
 import time
@@ -439,6 +440,7 @@ def remote_ui():
     if dash_app is None:
         return "System initializing, please refresh...", 503
     ensure_cinderella_message_config(dash_app.config)
+    vacuum = _build_web_vacuum_context()
     chime_files = ["(Default)"]
     if cfg.CHIMES_DIR.exists():
         for f in cfg.CHIMES_DIR.iterdir():
@@ -452,7 +454,143 @@ def remote_ui():
         edge_voices=EDGE_VOICES,
         gemini_tts_voices=GEMINI_TTS_VOICES,
         dialects=DIALECTS,
+        vacuum=vacuum,
     )
+
+def _ha_domain_from_entity_id(entity_id):
+    return entity_id.split(".", 1)[0] if isinstance(entity_id, str) and "." in entity_id else ""
+
+def _web_entity_name(entity):
+    attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
+    return str(attrs.get("friendly_name") or entity.get("entity_id") or "")
+
+def _web_short_entity_label(entity):
+    name = _web_entity_name(entity)
+    entity_id = entity.get("entity_id", "")
+    return f"{name} ({entity_id})" if name and name != entity_id else entity_id
+
+def _web_vacuum_tokens(entity_id):
+    tokens = {"roborock", "cinderella", "saros", "qrevo", "q revo"}
+    if entity_id and "." in entity_id:
+        base = entity_id.split(".", 1)[1]
+        tokens.add(base.lower())
+        tokens.update(part for part in re.split(r"[_\s-]+", base.lower()) if len(part) >= 4)
+    return tokens
+
+def _web_looks_like_roborock(entity):
+    attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
+    text = " ".join(
+        str(part).lower()
+        for part in [
+            entity.get("entity_id"),
+            attrs.get("friendly_name"),
+            attrs.get("manufacturer"),
+            attrs.get("model"),
+            attrs.get("platform"),
+            attrs.get("integration"),
+        ]
+    )
+    return any(token in text for token in ["roborock", "cinderella", "saros", "qrevo", "q revo", "s7", "s8"])
+
+def _web_show_vacuum_setting(entity):
+    entity_id = entity.get("entity_id", "")
+    domain = _ha_domain_from_entity_id(entity_id)
+    if domain in {"select", "number"}:
+        return True
+    if domain == "switch" and "child_lock" in entity_id:
+        return True
+    return False
+
+def _build_web_vacuum_context():
+    empty = {
+        "ok": False,
+        "message": "Home Assistant is not ready.",
+        "vacuums": [],
+        "selected": "",
+        "selected_entity": None,
+        "status_lines": [],
+        "fan_speeds": [],
+        "settings": [],
+        "rooms": [],
+    }
+    if not dash_app:
+        return empty
+    ha_settings = cfg.get_ha_settings(dash_app.config, include_env=True)
+    result = discovery.get_ha_states(
+        token=ha_settings.get("ha_token"),
+        ha_ip=ha_settings.get("ha_ip"),
+        ha_port=ha_settings.get("ha_port"),
+        timeout=8,
+    )
+    if not result.get("ok"):
+        empty["message"] = result.get("message") or result.get("error") or "Home Assistant scan failed."
+        return empty
+    states = result.get("states", [])
+    vacuums = [entity for entity in states if _ha_domain_from_entity_id(entity.get("entity_id", "")) == "vacuum"]
+    roborock_vacuums = [entity for entity in vacuums if _web_looks_like_roborock(entity)]
+    vacuums = roborock_vacuums or vacuums
+    selected = request.values.get("vacuum_entity", "")
+    if selected and not any(entity.get("entity_id") == selected for entity in vacuums):
+        selected = ""
+    selected = selected or (vacuums[0].get("entity_id") if vacuums else "")
+    selected_entity = next((entity for entity in vacuums if entity.get("entity_id") == selected), None)
+    tokens = _web_vacuum_tokens(selected)
+    related = []
+    for entity in states:
+        entity_id = entity.get("entity_id", "")
+        domain = _ha_domain_from_entity_id(entity_id)
+        if domain not in {"vacuum", "select", "number", "switch", "button", "sensor", "binary_sensor"}:
+            continue
+        attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
+        text = " ".join(str(part).lower() for part in [entity_id, attrs.get("friendly_name"), attrs.get("manufacturer"), attrs.get("model")])
+        if entity_id == selected or any(token and token in text for token in tokens):
+            related.append(entity)
+    related = sorted(related, key=lambda e: (_ha_domain_from_entity_id(e.get("entity_id", "")), _web_entity_name(e).lower()))
+    attrs = selected_entity.get("attributes") if selected_entity and isinstance(selected_entity.get("attributes"), dict) else {}
+    status_lines = []
+    if selected_entity:
+        battery = attrs.get("battery_level")
+        if battery is None:
+            battery_entity = next((entity for entity in related if entity.get("entity_id", "").endswith("_battery")), None)
+            battery = battery_entity.get("state") if battery_entity else "unknown"
+        status_lines.extend([
+            f"Selected: {_web_short_entity_label(selected_entity)}",
+            f"State: {selected_entity.get('state', 'unknown')}",
+            f"Battery: {battery}",
+            f"Current suction speed: {attrs.get('fan_speed', 'unknown')}",
+        ])
+        for entity in related:
+            domain = _ha_domain_from_entity_id(entity.get("entity_id", ""))
+            if domain in {"sensor", "binary_sensor"}:
+                status_lines.append(f"{_web_short_entity_label(entity)}: {entity.get('state', 'unknown')}")
+    settings = []
+    for entity in related:
+        if not _web_show_vacuum_setting(entity):
+            continue
+        entity_attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
+        settings.append({
+            "entity_id": entity.get("entity_id", ""),
+            "domain": _ha_domain_from_entity_id(entity.get("entity_id", "")),
+            "label": _web_short_entity_label(entity),
+            "state": entity.get("state", ""),
+            "options": [str(option) for option in entity_attrs.get("options", [])] if isinstance(entity_attrs.get("options"), list) else [],
+            "min": entity_attrs.get("min", 0),
+            "max": entity_attrs.get("max", 100),
+            "step": entity_attrs.get("step", 1),
+        })
+    rooms = dash_app.config.get("vacuum_rooms", {}).get(selected, [])
+    return {
+        "ok": bool(vacuums),
+        "message": "Vacuum controls loaded." if vacuums else "No vacuum entities found in Home Assistant.",
+        "vacuums": [{"entity_id": entity.get("entity_id", ""), "label": _web_short_entity_label(entity), "state": entity.get("state", "unknown")} for entity in vacuums],
+        "selected": selected,
+        "selected_entity": selected_entity,
+        "status_lines": status_lines,
+        "fan_speeds": [str(speed) for speed in attrs.get("fan_speed_list", [])] if isinstance(attrs.get("fan_speed_list"), list) else [],
+        "current_fan_speed": str(attrs.get("fan_speed", "")),
+        "settings": settings,
+        "rooms": rooms,
+    }
 
 @app.route("/remote/tts_engine", methods=["POST"])
 def web_set_tts_engine():
@@ -578,6 +716,153 @@ def web_save_quiet_hours():
     wx.CallAfter(dash_app._sync_quiet_hours_controls)
     flash("Quiet hours settings saved.")
     return redirect(url_for("remote_ui"))
+
+@app.route("/remote/vacuum/action", methods=["POST"])
+def web_vacuum_action():
+    if not dash_app:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    entity_id = request.form.get("vacuum_entity", "").strip()
+    service = request.form.get("service", "").strip()
+    allowed = {
+        "vacuum/start",
+        "vacuum/pause",
+        "vacuum/stop",
+        "vacuum/return_to_base",
+        "vacuum/locate",
+        "vacuum/clean_spot",
+    }
+    if not entity_id or service not in allowed:
+        flash("Vacuum action was missing a vacuum or valid action.")
+        return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+    ok = dash_app._call_ha_service_data(service, {"entity_id": entity_id})
+    flash(f"Sent {service.replace('/', '.')} to {entity_id}." if ok else "Vacuum action failed. Check the Viper log.")
+    return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+
+@app.route("/remote/vacuum/fan_speed", methods=["POST"])
+def web_vacuum_fan_speed():
+    if not dash_app:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    entity_id = request.form.get("vacuum_entity", "").strip()
+    fan_speed = request.form.get("fan_speed", "").strip()
+    if not entity_id or not fan_speed:
+        flash("Choose a vacuum and suction speed first.")
+        return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+    ok = dash_app._call_ha_service_data("vacuum/set_fan_speed", {"entity_id": entity_id, "fan_speed": fan_speed})
+    flash(f"Set suction speed to {fan_speed}." if ok else "Could not set suction speed.")
+    return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+
+@app.route("/remote/vacuum/setting", methods=["POST"])
+def web_vacuum_setting():
+    if not dash_app:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    vacuum_entity = request.form.get("vacuum_entity", "").strip()
+    entity_id = request.form.get("entity_id", "").strip()
+    domain = request.form.get("domain", "").strip()
+    if not entity_id:
+        flash("Vacuum setting was missing an entity.")
+        return redirect(url_for("remote_ui", vacuum_entity=vacuum_entity))
+    if domain == "select":
+        option = request.form.get("option", "").strip()
+        ok = dash_app._call_ha_service_data("select/select_option", {"entity_id": entity_id, "option": option})
+        flash(f"Set {entity_id} to {option}." if ok else f"Could not set {entity_id}.")
+    elif domain == "number":
+        raw_value = request.form.get("value", "").strip()
+        try:
+            value = float(raw_value)
+        except ValueError:
+            flash("Number setting must be a valid number.")
+            return redirect(url_for("remote_ui", vacuum_entity=vacuum_entity))
+        ok = dash_app._call_ha_service_data("number/set_value", {"entity_id": entity_id, "value": value})
+        flash(f"Set {entity_id} to {value}." if ok else f"Could not set {entity_id}.")
+    elif domain == "switch":
+        turn_on = request.form.get("turn_on") == "1"
+        service = "switch/turn_on" if turn_on else "switch/turn_off"
+        ok = dash_app._call_ha_service_data(service, {"entity_id": entity_id})
+        flash(f"Turned {'on' if turn_on else 'off'} {entity_id}." if ok else f"Could not change {entity_id}.")
+    else:
+        flash("Unsupported vacuum setting type.")
+    return redirect(url_for("remote_ui", vacuum_entity=vacuum_entity))
+
+@app.route("/remote/vacuum/rooms", methods=["POST"])
+def web_vacuum_rooms():
+    if not dash_app:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    entity_id = request.form.get("vacuum_entity", "").strip()
+    if not entity_id:
+        flash("Choose a vacuum first.")
+        return redirect(url_for("remote_ui"))
+    result = dash_app._call_ha_service_response("roborock/get_maps", {"entity_id": entity_id})
+    if not result.get("ok"):
+        flash(result.get("message") or "Could not load Roborock rooms.")
+        return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+    rooms = dash_app._parse_roborock_rooms(result.get("data"), entity_id)
+    dash_app._save_vacuum_rooms(entity_id, rooms)
+    flash(f"Loaded and saved {len(rooms)} room{'s' if len(rooms) != 1 else ''} for {entity_id}.")
+    return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+
+@app.route("/remote/vacuum/clean_rooms", methods=["POST"])
+def web_vacuum_clean_rooms():
+    if not dash_app:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    entity_id = request.form.get("vacuum_entity", "").strip()
+    raw_segments = request.form.getlist("segments")
+    try:
+        segments = [int(segment) for segment in raw_segments]
+        repeat = int(request.form.get("repeat", "1"))
+    except ValueError:
+        flash("Room clean request had an invalid segment or repeat count.")
+        return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+    repeat = max(1, min(3, repeat))
+    if not entity_id or not segments:
+        flash("Choose a vacuum and at least one room first.")
+        return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+    payload = {"entity_id": entity_id, "command": "app_segment_clean", "params": [{"segments": segments, "repeat": repeat}]}
+    ok = dash_app._call_ha_service_data("vacuum/send_command", payload)
+    flash(f"Sent room clean request for {len(segments)} room{'s' if len(segments) != 1 else ''}." if ok else "Could not send room clean request.")
+    return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+
+@app.route("/remote/vacuum/advanced", methods=["POST"])
+def web_vacuum_advanced():
+    if not dash_app:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    entity_id = request.form.get("vacuum_entity", "").strip()
+    command = request.form.get("command", "").strip()
+    params_text = request.form.get("params", "").strip()
+    if not entity_id or not command:
+        flash("Choose a vacuum and enter a command first.")
+        return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+    payload = {"entity_id": entity_id, "command": command}
+    if params_text:
+        try:
+            payload["params"] = json.loads(params_text)
+        except json.JSONDecodeError as exc:
+            flash(f"Advanced command parameters are not valid JSON: {exc}")
+            return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+    ok = dash_app._call_ha_service_data("vacuum/send_command", payload)
+    flash(f"Sent advanced command {command}." if ok else "Could not send advanced command.")
+    return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+
+@app.route("/remote/vacuum/goto", methods=["POST"])
+def web_vacuum_goto():
+    if not dash_app:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    entity_id = request.form.get("vacuum_entity", "").strip()
+    try:
+        x = int(request.form.get("x", "").strip())
+        y = int(request.form.get("y", "").strip())
+    except ValueError:
+        flash("Roborock coordinates must be whole numbers.")
+        return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+    ok = dash_app._call_ha_service_data("roborock/set_vacuum_goto_position", {"entity_id": entity_id, "x": x, "y": y})
+    flash(f"Sent vacuum to coordinates {x}, {y}." if ok else "Could not send go-to-position request.")
+    return redirect(url_for("remote_ui", vacuum_entity=entity_id))
 
 @app.route("/remote/ice/on", methods=["POST"])
 def web_ice_maker_on():
@@ -1380,12 +1665,21 @@ class ViperDashboard(wx.Frame):
         self.tab_util = wx.Panel(self.notebook)
         self.tab_fridge = wx.ScrolledWindow(self.notebook)
         self.tab_fridge.SetScrollRate(0, 20)
+        self.tab_vacuum = wx.ScrolledWindow(self.notebook)
+        self.tab_vacuum.SetScrollRate(0, 20)
+        self.tab_speed = wx.ScrolledWindow(self.notebook)
+        self.tab_speed.SetScrollRate(0, 20)
+        self.tab_ha_status = wx.ScrolledWindow(self.notebook)
+        self.tab_ha_status.SetScrollRate(0, 20)
 
         self.notebook.AddPage(self.tab_dash, "Dashboard")
         self.notebook.AddPage(self.tab_tts, "Voice Behavior")
         self.notebook.AddPage(self.tab_dev, "Devices & Chimes")
         self.notebook.AddPage(self.tab_util, "Utilities")
         self.notebook.AddPage(self.tab_fridge, "Fridge")
+        self.notebook.AddPage(self.tab_vacuum, "Vacuum")
+        self.notebook.AddPage(self.tab_speed, "Speed")
+        self.notebook.AddPage(self.tab_ha_status, "HA Status")
 
         self.setup_hidden_ai_voice_compat_controls()
         self.setup_dash_tab()
@@ -1393,6 +1687,9 @@ class ViperDashboard(wx.Frame):
         self.setup_devices_tab()
         self.setup_utils_tab()
         self.setup_fridge_tab()
+        self.setup_vacuum_tab()
+        self.setup_speed_tab()
+        self.setup_ha_status_tab()
 
         self.main_sizer.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 5)
 
@@ -1923,6 +2220,960 @@ class ViperDashboard(wx.Frame):
 
         sizer.Add(qsizer, 0, wx.ALL | wx.EXPAND, 10)
         self.tab_util.SetSizer(sizer)
+
+    def setup_vacuum_tab(self):
+        self.vacuum_state_entities = []
+        self.vacuum_control_entities = []
+        self.vacuum_control_widgets = {}
+        self.vacuum_rooms = []
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        top_box = wx.StaticBox(self.tab_vacuum, label="Roborock Vacuum Controls")
+        top = wx.StaticBoxSizer(top_box, wx.VERTICAL)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(wx.StaticText(self.tab_vacuum, label="Vacuum entity:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.vacuum_choice = wx.Choice(self.tab_vacuum, choices=[])
+        self.vacuum_choice.Bind(wx.EVT_CHOICE, self.on_vacuum_choice_change)
+        self._describe_control(
+            self.vacuum_choice,
+            "Vacuum entity picker. Choose which Roborock vacuum Viper should control.",
+        )
+        row.Add(self.vacuum_choice, 1, wx.ALL | wx.EXPAND, 5)
+        self.btn_refresh_vacuum = wx.Button(self.tab_vacuum, label="Refresh vacuum controls", size=(-1, 40))
+        self.btn_refresh_vacuum.Bind(wx.EVT_BUTTON, self.on_refresh_vacuum)
+        self._describe_control(
+            self.btn_refresh_vacuum,
+            "Refresh vacuum controls button. Scans Home Assistant for Roborock vacuum controls, modes, switches, buttons, and status sensors.",
+        )
+        row.Add(self.btn_refresh_vacuum, 0, wx.ALL, 5)
+        top.Add(row, 0, wx.EXPAND)
+
+        self.vacuum_status_txt = wx.TextCtrl(
+            self.tab_vacuum,
+            value="Press Refresh vacuum controls to scan Home Assistant for Roborock controls.",
+            style=wx.TE_MULTILINE | wx.TE_READONLY,
+            size=(-1, 150),
+        )
+        self._describe_control(
+            self.vacuum_status_txt,
+            "Vacuum status. This read only box summarizes the selected vacuum state and nearby Roborock status sensors.",
+        )
+        top.Add(self.vacuum_status_txt, 0, wx.ALL | wx.EXPAND, 5)
+
+        actions = wx.GridSizer(rows=2, cols=3, vgap=6, hgap=6)
+        for label, service, help_text in [
+            ("Start cleaning", "vacuum/start", "Start cleaning button. Starts or resumes the selected Roborock vacuum."),
+            ("Pause cleaning", "vacuum/pause", "Pause cleaning button. Pauses the selected Roborock vacuum."),
+            ("Stop cleaning", "vacuum/stop", "Stop cleaning button. Stops the selected Roborock vacuum."),
+            ("Return to dock", "vacuum/return_to_base", "Return to dock button. Sends the selected Roborock vacuum back to its dock."),
+            ("Locate vacuum", "vacuum/locate", "Locate vacuum button. Makes the selected Roborock identify itself if Home Assistant supports locate."),
+            ("Spot clean", "vacuum/clean_spot", "Spot clean button. Starts a spot cleaning cycle if Home Assistant supports it."),
+        ]:
+            btn = wx.Button(self.tab_vacuum, label=label, size=(-1, 40))
+            btn.Bind(wx.EVT_BUTTON, lambda event, svc=service: self.on_vacuum_basic_action(event, svc))
+            self._describe_control(btn, help_text)
+            actions.Add(btn, 0, wx.EXPAND)
+        top.Add(actions, 0, wx.ALL | wx.EXPAND, 5)
+
+        fan_row = wx.BoxSizer(wx.HORIZONTAL)
+        fan_row.Add(wx.StaticText(self.tab_vacuum, label="Vacuum suction speed:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.vacuum_fan_choice = wx.Choice(self.tab_vacuum, choices=[])
+        self._describe_control(
+            self.vacuum_fan_choice,
+            "Vacuum suction speed picker. Choose a fan speed from the selected vacuum, then press Set suction speed.",
+        )
+        fan_row.Add(self.vacuum_fan_choice, 1, wx.ALL | wx.EXPAND, 5)
+        self.btn_set_vacuum_fan = wx.Button(self.tab_vacuum, label="Set suction speed", size=(-1, 40))
+        self.btn_set_vacuum_fan.Bind(wx.EVT_BUTTON, self.on_vacuum_set_fan_speed)
+        self._describe_control(
+            self.btn_set_vacuum_fan,
+            "Set suction speed button. Sends the chosen suction or fan speed to the selected Roborock vacuum.",
+        )
+        fan_row.Add(self.btn_set_vacuum_fan, 0, wx.ALL, 5)
+        top.Add(fan_row, 0, wx.EXPAND)
+        sizer.Add(top, 0, wx.ALL | wx.EXPAND, 10)
+
+        room_box = wx.StaticBox(self.tab_vacuum, label="Room Cleaning")
+        room_outer = wx.StaticBoxSizer(room_box, wx.VERTICAL)
+        room_buttons = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_refresh_vacuum_rooms = wx.Button(self.tab_vacuum, label="Refresh room list", size=(-1, 40))
+        self.btn_refresh_vacuum_rooms.Bind(wx.EVT_BUTTON, self.on_refresh_vacuum_rooms)
+        self._describe_control(
+            self.btn_refresh_vacuum_rooms,
+            "Refresh room list button. Asks Home Assistant for Roborock map rooms and fills the room checklist.",
+        )
+        room_buttons.Add(self.btn_refresh_vacuum_rooms, 1, wx.ALL | wx.EXPAND, 5)
+        self.btn_clean_vacuum_rooms = wx.Button(self.tab_vacuum, label="Clean selected rooms", size=(-1, 40))
+        self.btn_clean_vacuum_rooms.Bind(wx.EVT_BUTTON, self.on_vacuum_clean_selected_rooms)
+        self._describe_control(
+            self.btn_clean_vacuum_rooms,
+            "Clean selected rooms button. Sends the checked Roborock rooms to the selected vacuum.",
+        )
+        room_buttons.Add(self.btn_clean_vacuum_rooms, 1, wx.ALL | wx.EXPAND, 5)
+        room_outer.Add(room_buttons, 0, wx.EXPAND)
+
+        self.vacuum_room_list = wx.CheckListBox(self.tab_vacuum, choices=[], size=(-1, 140))
+        self.vacuum_room_list.Bind(wx.EVT_KEY_DOWN, self.on_vacuum_room_key_down)
+        self._describe_control(
+            self.vacuum_room_list,
+            "Roborock room checklist. Use arrow keys to move through rooms. Press Space to check or uncheck the focused room, then press Clean selected rooms.",
+        )
+        room_outer.Add(self.vacuum_room_list, 0, wx.ALL | wx.EXPAND, 5)
+
+        repeat_row = wx.BoxSizer(wx.HORIZONTAL)
+        repeat_row.Add(wx.StaticText(self.tab_vacuum, label="Room clean repeat count:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.vacuum_room_repeat = wx.SpinCtrl(self.tab_vacuum, min=1, max=3, initial=1)
+        self._describe_control(
+            self.vacuum_room_repeat,
+            "Room clean repeat count. Choose 1, 2, or 3 passes for selected rooms.",
+        )
+        repeat_row.Add(self.vacuum_room_repeat, 0, wx.ALL, 5)
+        room_outer.Add(repeat_row, 0, wx.EXPAND)
+
+        self.vacuum_room_status_txt = wx.TextCtrl(
+            self.tab_vacuum,
+            value="Press Refresh room list to load Roborock rooms from Home Assistant.",
+            style=wx.TE_MULTILINE | wx.TE_READONLY,
+            size=(-1, 80),
+        )
+        self._describe_control(
+            self.vacuum_room_status_txt,
+            "Room cleaning status. This read only box reports map and room discovery results.",
+        )
+        room_outer.Add(self.vacuum_room_status_txt, 0, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(room_outer, 0, wx.ALL | wx.EXPAND, 10)
+
+        dynamic_box = wx.StaticBox(self.tab_vacuum, label="Discovered Roborock Settings")
+        dynamic_outer = wx.StaticBoxSizer(dynamic_box, wx.VERTICAL)
+        self.vacuum_controls_panel = wx.Panel(self.tab_vacuum)
+        self.vacuum_controls_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.vacuum_controls_panel.SetSizer(self.vacuum_controls_sizer)
+        dynamic_outer.Add(self.vacuum_controls_panel, 0, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(dynamic_outer, 0, wx.ALL | wx.EXPAND, 10)
+
+        command_box = wx.StaticBox(self.tab_vacuum, label="Advanced Roborock Command")
+        command = wx.StaticBoxSizer(command_box, wx.VERTICAL)
+        command.Add(wx.StaticText(self.tab_vacuum, label="Command name:"), 0, wx.ALL, 5)
+        self.vacuum_command_txt = wx.TextCtrl(self.tab_vacuum, value="")
+        self._describe_control(
+            self.vacuum_command_txt,
+            "Advanced command name. Example: app_segment_clean. Leave blank unless you know the Roborock command to send.",
+        )
+        command.Add(self.vacuum_command_txt, 0, wx.ALL | wx.EXPAND, 5)
+        command.Add(wx.StaticText(self.tab_vacuum, label="Parameters JSON, optional:"), 0, wx.ALL, 5)
+        self.vacuum_params_txt = wx.TextCtrl(self.tab_vacuum, value="", style=wx.TE_MULTILINE, size=(-1, 90))
+        self._describe_control(
+            self.vacuum_params_txt,
+            "Advanced command parameters JSON. Optional. Example: a JSON object or list for Home Assistant vacuum send command parameters.",
+        )
+        command.Add(self.vacuum_params_txt, 0, wx.ALL | wx.EXPAND, 5)
+        self.btn_send_vacuum_command = wx.Button(self.tab_vacuum, label="Send advanced vacuum command", size=(-1, 40))
+        self.btn_send_vacuum_command.Bind(wx.EVT_BUTTON, self.on_vacuum_send_command)
+        self._describe_control(
+            self.btn_send_vacuum_command,
+            "Send advanced vacuum command button. Calls Home Assistant vacuum send command for the selected Roborock vacuum.",
+        )
+        command.Add(self.btn_send_vacuum_command, 0, wx.ALL | wx.EXPAND, 5)
+
+        command.Add(wx.StaticText(self.tab_vacuum, label="Home Assistant area IDs, comma separated, optional:"), 0, wx.ALL, 5)
+        self.vacuum_area_ids_txt = wx.TextCtrl(self.tab_vacuum, value="")
+        self._describe_control(
+            self.vacuum_area_ids_txt,
+            "Home Assistant area IDs for vacuum clean area. Enter comma separated area IDs only if your vacuum segments are mapped to Home Assistant areas.",
+        )
+        command.Add(self.vacuum_area_ids_txt, 0, wx.ALL | wx.EXPAND, 5)
+        self.btn_clean_vacuum_areas = wx.Button(self.tab_vacuum, label="Clean Home Assistant areas", size=(-1, 40))
+        self.btn_clean_vacuum_areas.Bind(wx.EVT_BUTTON, self.on_vacuum_clean_areas)
+        self._describe_control(
+            self.btn_clean_vacuum_areas,
+            "Clean Home Assistant areas button. Calls vacuum clean area using the comma separated area IDs.",
+        )
+        command.Add(self.btn_clean_vacuum_areas, 0, wx.ALL | wx.EXPAND, 5)
+
+        goto_row = wx.BoxSizer(wx.HORIZONTAL)
+        goto_row.Add(wx.StaticText(self.tab_vacuum, label="Go to X:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.vacuum_goto_x_txt = wx.TextCtrl(self.tab_vacuum, value="25500")
+        self._describe_control(
+            self.vacuum_goto_x_txt,
+            "Roborock go to X coordinate. Enter an integer coordinate. The dock is often near 25500.",
+        )
+        goto_row.Add(self.vacuum_goto_x_txt, 1, wx.ALL | wx.EXPAND, 5)
+        goto_row.Add(wx.StaticText(self.tab_vacuum, label="Go to Y:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.vacuum_goto_y_txt = wx.TextCtrl(self.tab_vacuum, value="25500")
+        self._describe_control(
+            self.vacuum_goto_y_txt,
+            "Roborock go to Y coordinate. Enter an integer coordinate. The dock is often near 25500.",
+        )
+        goto_row.Add(self.vacuum_goto_y_txt, 1, wx.ALL | wx.EXPAND, 5)
+        self.btn_vacuum_goto = wx.Button(self.tab_vacuum, label="Send vacuum to coordinates", size=(-1, 40))
+        self.btn_vacuum_goto.Bind(wx.EVT_BUTTON, self.on_vacuum_goto_position)
+        self._describe_control(
+            self.btn_vacuum_goto,
+            "Send vacuum to coordinates button. Calls the Roborock go to position service for the selected vacuum.",
+        )
+        goto_row.Add(self.btn_vacuum_goto, 0, wx.ALL, 5)
+        command.Add(goto_row, 0, wx.EXPAND)
+        sizer.Add(command, 0, wx.ALL | wx.EXPAND, 10)
+
+        self.tab_vacuum.SetSizer(sizer)
+        wx.CallAfter(self.on_refresh_vacuum, None)
+
+    def on_refresh_vacuum(self, event):
+        self.vacuum_status_txt.SetValue("Scanning Home Assistant for Roborock vacuum controls...")
+        safe_submit(self._run_vacuum_refresh)
+
+    def _run_vacuum_refresh(self):
+        ha_settings = cfg.get_ha_settings(self.config, include_env=True)
+        result = discovery.get_ha_states(
+            token=ha_settings.get("ha_token"),
+            ha_ip=ha_settings.get("ha_ip"),
+            ha_port=ha_settings.get("ha_port"),
+            timeout=8,
+        )
+        if not result.get("ok"):
+            message = result.get("message") or result.get("error") or "Home Assistant scan failed."
+            wx.CallAfter(self._finish_vacuum_refresh, [], [], f"Vacuum scan failed: {message}")
+            return
+        states = result.get("states", [])
+        vacuums = [entity for entity in states if self._ha_domain(entity) == "vacuum"]
+        roborock_vacuums = [entity for entity in vacuums if self._looks_like_roborock(entity)]
+        selected_vacuums = roborock_vacuums or vacuums
+        current = self._selected_vacuum_entity_id()
+        if current and not any(e.get("entity_id") == current for e in selected_vacuums):
+            current = ""
+        selected = current or (selected_vacuums[0].get("entity_id") if selected_vacuums else "")
+        controls = self._find_vacuum_related_controls(states, selected)
+        summary = self._build_vacuum_summary(selected_vacuums, controls, selected)
+        wx.CallAfter(self._finish_vacuum_refresh, selected_vacuums, controls, summary)
+
+    def _finish_vacuum_refresh(self, vacuums, controls, summary):
+        self.vacuum_state_entities = vacuums
+        self.vacuum_control_entities = controls
+        current = self._selected_vacuum_entity_id()
+        vacuum_choices = [self._entity_choice_label(entity) for entity in vacuums]
+        self.vacuum_choice.Set(vacuum_choices)
+        if vacuum_choices:
+            selected_label = next(
+                (label for label, entity in zip(vacuum_choices, vacuums) if entity.get("entity_id") == current),
+                vacuum_choices[0],
+            )
+            self.vacuum_choice.SetStringSelection(selected_label)
+        self.vacuum_status_txt.SetValue(summary)
+        self._populate_vacuum_fan_speed()
+        self._finish_vacuum_room_refresh(
+            self._get_saved_vacuum_rooms(self._selected_vacuum_entity_id()),
+            "Saved room list loaded. Press Refresh room list to update it from Home Assistant.",
+            save=False,
+        )
+        self._rebuild_vacuum_dynamic_controls()
+        self.tab_vacuum.Layout()
+        self.tab_vacuum.FitInside()
+
+    def _selected_vacuum_entity_id(self):
+        if not hasattr(self, "vacuum_choice"):
+            return ""
+        selection = self.vacuum_choice.GetSelection()
+        if selection == wx.NOT_FOUND or selection >= len(getattr(self, "vacuum_state_entities", [])):
+            return ""
+        return self.vacuum_state_entities[selection].get("entity_id", "")
+
+    def on_vacuum_choice_change(self, event):
+        selected = self._selected_vacuum_entity_id()
+        controls = self._find_vacuum_related_controls(
+            getattr(self, "_last_vacuum_states", []) or getattr(self, "vacuum_control_entities", []),
+            selected,
+        )
+        if not controls:
+            controls = getattr(self, "vacuum_control_entities", [])
+        self.vacuum_control_entities = controls
+        self.vacuum_status_txt.SetValue(self._build_vacuum_summary(self.vacuum_state_entities, controls, selected))
+        self._populate_vacuum_fan_speed()
+        self._finish_vacuum_room_refresh(
+            self._get_saved_vacuum_rooms(selected),
+            "Saved room list loaded. Press Refresh room list to update it from Home Assistant.",
+            save=False,
+        )
+        self._rebuild_vacuum_dynamic_controls()
+
+    def _ha_domain(self, entity):
+        entity_id = entity.get("entity_id", "")
+        return entity_id.split(".", 1)[0] if "." in entity_id else ""
+
+    def _ha_name(self, entity):
+        attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
+        return str(attrs.get("friendly_name") or entity.get("entity_id") or "")
+
+    def _looks_like_roborock(self, entity):
+        attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
+        text = " ".join(
+            str(part).lower()
+            for part in [
+                entity.get("entity_id"),
+                attrs.get("friendly_name"),
+                attrs.get("manufacturer"),
+                attrs.get("model"),
+                attrs.get("device_class"),
+                attrs.get("platform"),
+                attrs.get("integration"),
+            ]
+        )
+        return any(token in text for token in ["roborock", "cinderella", "saros", "qrevo", "q revo", "s7", "s8"])
+
+    def _vacuum_match_tokens(self, selected_entity_id):
+        tokens = {"roborock", "cinderella", "saros", "qrevo", "q revo"}
+        if selected_entity_id and "." in selected_entity_id:
+            base = selected_entity_id.split(".", 1)[1]
+            tokens.add(base.lower())
+            tokens.update(part for part in re.split(r"[_\s-]+", base.lower()) if len(part) >= 4)
+        return tokens
+
+    def _find_vacuum_related_controls(self, states, selected_entity_id):
+        if not states:
+            return []
+        self._last_vacuum_states = states
+        control_domains = {"vacuum", "select", "number", "switch", "button", "sensor", "binary_sensor"}
+        tokens = self._vacuum_match_tokens(selected_entity_id)
+        related = []
+        for entity in states:
+            domain = self._ha_domain(entity)
+            if domain not in control_domains:
+                continue
+            attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
+            text = " ".join(str(part).lower() for part in [entity.get("entity_id"), attrs.get("friendly_name"), attrs.get("manufacturer"), attrs.get("model")])
+            if entity.get("entity_id") == selected_entity_id or any(token and token in text for token in tokens):
+                related.append(entity)
+        return sorted(related, key=lambda e: (self._ha_domain(e), self._ha_name(e).lower(), e.get("entity_id", "")))
+
+    def _entity_choice_label(self, entity):
+        name = self._ha_name(entity)
+        entity_id = entity.get("entity_id", "")
+        state = entity.get("state", "unknown")
+        return f"{name} ({entity_id}, state {state})"
+
+    def _short_entity_label(self, entity):
+        name = self._ha_name(entity)
+        entity_id = entity.get("entity_id", "")
+        if name and name != entity_id:
+            return f"{name} ({entity_id})"
+        return entity_id
+
+    def _build_vacuum_summary(self, vacuums, controls, selected):
+        lines = ["Vacuum Controls", ""]
+        if not vacuums:
+            lines.append("No vacuum entities found in Home Assistant. Check the HA Status tab and your Home Assistant token.")
+            return "\n".join(lines)
+        selected_entity = next((entity for entity in vacuums if entity.get("entity_id") == selected), vacuums[0])
+        attrs = selected_entity.get("attributes") if isinstance(selected_entity.get("attributes"), dict) else {}
+        battery = attrs.get("battery_level", "unknown")
+        if battery == "unknown" or battery is None:
+            battery_entity = next((entity for entity in controls if entity.get("entity_id", "").endswith("_battery")), None)
+            if battery_entity:
+                battery = battery_entity.get("state", "unknown")
+        lines.extend([
+            f"Selected: {self._short_entity_label(selected_entity)}",
+            f"State: {selected_entity.get('state', 'unknown')}",
+            f"Battery: {battery}",
+            f"Current suction speed: {attrs.get('fan_speed', 'unknown')}",
+            f"Discovered related entities: {len(controls)}",
+            "",
+            "Interactive controls found:",
+        ])
+        counts = {}
+        for entity in controls:
+            domain = self._ha_domain(entity)
+            counts[domain] = counts.get(domain, 0) + 1
+        for domain in ["select", "number", "switch", "button", "sensor", "binary_sensor"]:
+            if counts.get(domain):
+                lines.append(f"{domain}: {counts[domain]}")
+        if not any(self._ha_domain(entity) in {"select", "number", "switch", "button"} for entity in controls):
+            lines.append("No extra Roborock select, number, switch, or button entities were found. Basic vacuum actions are still available.")
+        sensor_entities = [entity for entity in controls if self._ha_domain(entity) in {"sensor", "binary_sensor"}]
+        if sensor_entities:
+            lines.extend(["", "Status snapshot:"])
+            for entity in sensor_entities:
+                lines.append(f"{self._short_entity_label(entity)}: {entity.get('state', 'unknown')}")
+        return "\n".join(lines)
+
+    def _populate_vacuum_fan_speed(self):
+        selected = self._selected_vacuum_entity_id()
+        entity = next((item for item in self.vacuum_state_entities if item.get("entity_id") == selected), None)
+        attrs = entity.get("attributes") if entity and isinstance(entity.get("attributes"), dict) else {}
+        speeds = attrs.get("fan_speed_list") if isinstance(attrs.get("fan_speed_list"), list) else []
+        current = attrs.get("fan_speed")
+        self.vacuum_fan_choice.Set([str(item) for item in speeds])
+        if current and str(current) in [str(item) for item in speeds]:
+            self.vacuum_fan_choice.SetStringSelection(str(current))
+        elif speeds:
+            self.vacuum_fan_choice.SetSelection(0)
+        self.vacuum_fan_choice.Enable(bool(speeds))
+        self.btn_set_vacuum_fan.Enable(bool(speeds))
+
+    def _clear_sizer(self, sizer):
+        while sizer.GetItemCount():
+            item = sizer.GetItem(0)
+            window = item.GetWindow()
+            child_sizer = item.GetSizer()
+            sizer.Detach(0)
+            if window:
+                window.Destroy()
+            elif child_sizer:
+                self._clear_sizer(child_sizer)
+
+    def _rebuild_vacuum_dynamic_controls(self):
+        self._clear_sizer(self.vacuum_controls_sizer)
+        self.vacuum_control_widgets = {}
+        interactive = [entity for entity in self.vacuum_control_entities if self._show_vacuum_setting(entity)]
+        if not interactive:
+            self.vacuum_controls_sizer.Add(
+                wx.StaticText(self.vacuum_controls_panel, label="No discovered setting entities yet. Press Refresh vacuum controls after Home Assistant is connected."),
+                0,
+                wx.ALL | wx.EXPAND,
+                5,
+            )
+            self.vacuum_controls_panel.Layout()
+            return
+        for entity in interactive:
+            domain = self._ha_domain(entity)
+            entity_id = entity.get("entity_id", "")
+            attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
+            row = wx.BoxSizer(wx.HORIZONTAL)
+            row.Add(wx.StaticText(self.vacuum_controls_panel, label=f"{self._short_entity_label(entity)}:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+            if domain == "select":
+                options = [str(item) for item in attrs.get("options", [])] if isinstance(attrs.get("options"), list) else []
+                choice = wx.Choice(self.vacuum_controls_panel, choices=options)
+                if str(entity.get("state", "")) in options:
+                    choice.SetStringSelection(str(entity.get("state")))
+                elif options:
+                    choice.SetSelection(0)
+                btn = wx.Button(self.vacuum_controls_panel, label="Apply setting")
+                btn.Bind(wx.EVT_BUTTON, lambda event, eid=entity_id: self.on_vacuum_set_select(event, eid))
+                self._describe_control(choice, f"{self._short_entity_label(entity)} picker. Choose a Roborock setting value, then press Apply setting.")
+                self._describe_control(btn, f"Apply {self._short_entity_label(entity)} button. Sends the selected value to Home Assistant.")
+                row.Add(choice, 1, wx.ALL | wx.EXPAND, 5)
+                row.Add(btn, 0, wx.ALL, 5)
+                self.vacuum_control_widgets[entity_id] = choice
+            elif domain == "number":
+                minimum = attrs.get("min", 0)
+                maximum = attrs.get("max", 100)
+                step = attrs.get("step", 1)
+                spin = wx.SpinCtrlDouble(self.vacuum_controls_panel, min=float(minimum), max=float(maximum), inc=float(step))
+                try:
+                    spin.SetValue(float(entity.get("state", minimum)))
+                except (TypeError, ValueError):
+                    spin.SetValue(float(minimum))
+                btn = wx.Button(self.vacuum_controls_panel, label="Set number")
+                btn.Bind(wx.EVT_BUTTON, lambda event, eid=entity_id: self.on_vacuum_set_number(event, eid))
+                self._describe_control(spin, f"{self._short_entity_label(entity)} numeric value. Adjust the value, then press Set number.")
+                self._describe_control(btn, f"Set {self._short_entity_label(entity)} number button. Sends the numeric value to Home Assistant.")
+                row.Add(spin, 1, wx.ALL | wx.EXPAND, 5)
+                row.Add(btn, 0, wx.ALL, 5)
+                self.vacuum_control_widgets[entity_id] = spin
+            elif domain == "switch":
+                state = str(entity.get("state", "")).lower()
+                btn_on = wx.Button(self.vacuum_controls_panel, label="Turn on")
+                btn_off = wx.Button(self.vacuum_controls_panel, label="Turn off")
+                btn_on.Bind(wx.EVT_BUTTON, lambda event, eid=entity_id: self.on_vacuum_switch(event, eid, True))
+                btn_off.Bind(wx.EVT_BUTTON, lambda event, eid=entity_id: self.on_vacuum_switch(event, eid, False))
+                self._describe_control(btn_on, f"Turn on {self._short_entity_label(entity)} button. Current state is {state or 'unknown'}.")
+                self._describe_control(btn_off, f"Turn off {self._short_entity_label(entity)} button. Current state is {state or 'unknown'}.")
+                row.Add(wx.StaticText(self.vacuum_controls_panel, label=f"Current state {state or 'unknown'}"), 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+                row.Add(btn_on, 0, wx.ALL, 5)
+                row.Add(btn_off, 0, wx.ALL, 5)
+            elif domain == "button":
+                btn = wx.Button(self.vacuum_controls_panel, label="Press button")
+                btn.Bind(wx.EVT_BUTTON, lambda event, eid=entity_id: self.on_vacuum_press_button(event, eid))
+                self._describe_control(btn, f"Press {self._short_entity_label(entity)} button. Sends a Home Assistant button press for this Roborock control.")
+                row.Add(wx.StaticText(self.vacuum_controls_panel, label=f"Last state {entity.get('state', 'unknown')}"), 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+                row.Add(btn, 0, wx.ALL, 5)
+            self.vacuum_controls_sizer.Add(row, 0, wx.EXPAND)
+        self.vacuum_controls_panel.Layout()
+
+    def _show_vacuum_setting(self, entity):
+        entity_id = entity.get("entity_id", "")
+        domain = self._ha_domain(entity)
+        if domain in {"select", "number"}:
+            return True
+        if domain == "switch" and "child_lock" in entity_id:
+            return True
+        return False
+
+    def on_vacuum_basic_action(self, event, service):
+        entity_id = self._selected_vacuum_entity_id()
+        if not entity_id:
+            self.notify("Choose a vacuum first.", priority=10)
+            return
+        self._run_ha_service_async(service, {"entity_id": entity_id}, f"Sent {service.replace('/', '.')} to {entity_id}.")
+
+    def on_vacuum_set_fan_speed(self, event):
+        entity_id = self._selected_vacuum_entity_id()
+        speed = self.vacuum_fan_choice.GetStringSelection()
+        if not entity_id or not speed:
+            self.notify("Choose a vacuum and suction speed first.", priority=10)
+            return
+        self._run_ha_service_async("vacuum/set_fan_speed", {"entity_id": entity_id, "fan_speed": speed}, f"Set suction speed to {speed}.")
+
+    def on_vacuum_set_select(self, event, entity_id):
+        choice = self.vacuum_control_widgets.get(entity_id)
+        option = choice.GetStringSelection() if choice else ""
+        if not option:
+            self.notify("Choose a setting value first.", priority=10)
+            return
+        self._run_ha_service_async("select/select_option", {"entity_id": entity_id, "option": option}, f"Set {entity_id} to {option}.")
+
+    def on_vacuum_set_number(self, event, entity_id):
+        spin = self.vacuum_control_widgets.get(entity_id)
+        value = spin.GetValue() if spin else None
+        if value is None:
+            self.notify("Enter a number first.", priority=10)
+            return
+        self._run_ha_service_async("number/set_value", {"entity_id": entity_id, "value": value}, f"Set {entity_id} to {value}.")
+
+    def on_vacuum_switch(self, event, entity_id, turn_on):
+        service = "switch/turn_on" if turn_on else "switch/turn_off"
+        label = "on" if turn_on else "off"
+        self._run_ha_service_async(service, {"entity_id": entity_id}, f"Turned {label} {entity_id}.")
+
+    def on_vacuum_press_button(self, event, entity_id):
+        self._run_ha_service_async("button/press", {"entity_id": entity_id}, f"Pressed {entity_id}.")
+
+    def on_refresh_vacuum_rooms(self, event):
+        entity_id = self._selected_vacuum_entity_id()
+        if not entity_id:
+            self.notify("Choose a vacuum first.", priority=10)
+            return
+        self.vacuum_room_status_txt.SetValue("Loading Roborock rooms from Home Assistant...")
+        safe_submit(self._run_vacuum_room_refresh, entity_id)
+
+    def _run_vacuum_room_refresh(self, entity_id):
+        result = self._call_ha_service_response("roborock/get_maps", {"entity_id": entity_id})
+        if not result.get("ok"):
+            message = result.get("message") or result.get("error") or "Room discovery failed."
+            wx.CallAfter(self._finish_vacuum_room_refresh, self._get_saved_vacuum_rooms(entity_id), f"Room discovery failed: {message}", False)
+            return
+        rooms = self._parse_roborock_rooms(result.get("data"), entity_id)
+        if not rooms:
+            wx.CallAfter(
+                self._finish_vacuum_room_refresh,
+                self._get_saved_vacuum_rooms(entity_id),
+                "No rooms came back from Roborock maps. Open Home Assistant Developer Tools and confirm roborock.get_maps returns rooms for this vacuum.",
+                False,
+            )
+            return
+        wx.CallAfter(self._finish_vacuum_room_refresh, rooms, f"Loaded and saved {len(rooms)} Roborock room{'s' if len(rooms) != 1 else ''}.", True)
+
+    def _parse_roborock_rooms(self, data, entity_id):
+        service_response = data.get("service_response") if isinstance(data, dict) else None
+        if not isinstance(service_response, dict):
+            return []
+        vacuum_payload = service_response.get(entity_id) or next(iter(service_response.values()), {})
+        maps = vacuum_payload.get("maps") if isinstance(vacuum_payload, dict) else []
+        rooms = []
+        for map_info in maps if isinstance(maps, list) else []:
+            map_name = str(map_info.get("name") or "Current map")
+            room_map = map_info.get("rooms") if isinstance(map_info.get("rooms"), dict) else {}
+            for room_id, room_name in room_map.items():
+                label = f"{room_name} ({room_id})" if map_name == "Current map" else f"{room_name} on {map_name} ({room_id})"
+                try:
+                    segment_id = int(room_id)
+                except (TypeError, ValueError):
+                    continue
+                rooms.append({"label": label, "name": str(room_name), "map": map_name, "segment": segment_id})
+        return sorted(rooms, key=lambda room: room["label"].lower())
+
+    def _finish_vacuum_room_refresh(self, rooms, message, save=False):
+        self.vacuum_rooms = rooms
+        self.vacuum_room_list.Set([room["label"] for room in rooms])
+        self.vacuum_room_status_txt.SetValue(message)
+        if save:
+            self._save_vacuum_rooms(self._selected_vacuum_entity_id(), rooms)
+        self.tab_vacuum.Layout()
+        self.tab_vacuum.FitInside()
+
+    def _sanitize_vacuum_rooms(self, rooms):
+        cleaned = []
+        for room in rooms if isinstance(rooms, list) else []:
+            if not isinstance(room, dict):
+                continue
+            try:
+                segment = int(room.get("segment"))
+            except (TypeError, ValueError):
+                continue
+            name = str(room.get("name") or f"Room {segment}")
+            map_name = str(room.get("map") or "Current map")
+            label = str(room.get("label") or (f"{name} ({segment})" if map_name == "Current map" else f"{name} on {map_name} ({segment})"))
+            cleaned.append({"label": label, "name": name, "map": map_name, "segment": segment})
+        return sorted(cleaned, key=lambda room: room["label"].lower())
+
+    def _get_saved_vacuum_rooms(self, entity_id):
+        if not entity_id:
+            return []
+        return self._sanitize_vacuum_rooms(self.config.get("vacuum_rooms", {}).get(entity_id, []))
+
+    def _save_vacuum_rooms(self, entity_id, rooms):
+        if not entity_id:
+            return
+        sanitized = self._sanitize_vacuum_rooms(rooms)
+        self.config.setdefault("vacuum_rooms", {})[entity_id] = sanitized
+        self.save_config()
+
+    def on_vacuum_room_key_down(self, event):
+        key = event.GetKeyCode()
+        if key in (wx.WXK_SPACE, ord(" ")):
+            index = self.vacuum_room_list.GetSelection()
+            if index != wx.NOT_FOUND:
+                checked = not self.vacuum_room_list.IsChecked(index)
+                self.vacuum_room_list.Check(index, checked)
+                label = self.vacuum_room_list.GetString(index)
+                wx.CallAfter(self._safe_speak, f"{label} {'checked' if checked else 'unchecked'}")
+                return
+        event.Skip()
+
+    def on_vacuum_clean_selected_rooms(self, event):
+        entity_id = self._selected_vacuum_entity_id()
+        if not entity_id:
+            self.notify("Choose a vacuum first.", priority=10)
+            return
+        checked = list(self.vacuum_room_list.GetCheckedItems())
+        if not checked:
+            self.notify("Check one or more rooms first.", priority=10)
+            return
+        segments = [self.vacuum_rooms[index]["segment"] for index in checked if index < len(self.vacuum_rooms)]
+        repeat = self.vacuum_room_repeat.GetValue()
+        payload = {
+            "entity_id": entity_id,
+            "command": "app_segment_clean",
+            "params": [{"segments": segments, "repeat": repeat}],
+        }
+        self._run_ha_service_async(
+            "vacuum/send_command",
+            payload,
+            f"Sent room clean request for {len(segments)} room{'s' if len(segments) != 1 else ''}.",
+        )
+
+    def on_vacuum_send_command(self, event):
+        entity_id = self._selected_vacuum_entity_id()
+        command = self.vacuum_command_txt.GetValue().strip()
+        params_text = self.vacuum_params_txt.GetValue().strip()
+        if not entity_id:
+            self.notify("Choose a vacuum first.", priority=10)
+            return
+        if not command:
+            self.notify("Enter a command name first.", priority=10)
+            return
+        payload = {"entity_id": entity_id, "command": command}
+        if params_text:
+            try:
+                payload["params"] = json.loads(params_text)
+            except json.JSONDecodeError as e:
+                self.notify(f"Vacuum command parameters are not valid JSON: {e}", priority=10)
+                return
+        self._run_ha_service_async("vacuum/send_command", payload, f"Sent vacuum command {command}.")
+
+    def on_vacuum_clean_areas(self, event):
+        entity_id = self._selected_vacuum_entity_id()
+        area_ids = [item.strip() for item in self.vacuum_area_ids_txt.GetValue().split(",") if item.strip()]
+        if not entity_id:
+            self.notify("Choose a vacuum first.", priority=10)
+            return
+        if not area_ids:
+            self.notify("Enter one or more Home Assistant area IDs first.", priority=10)
+            return
+        self._run_ha_service_async(
+            "vacuum/clean_area",
+            {"entity_id": entity_id, "cleaning_area_id": area_ids},
+            f"Sent clean area request for {len(area_ids)} area{'s' if len(area_ids) != 1 else ''}.",
+        )
+
+    def on_vacuum_goto_position(self, event):
+        entity_id = self._selected_vacuum_entity_id()
+        if not entity_id:
+            self.notify("Choose a vacuum first.", priority=10)
+            return
+        try:
+            x = int(self.vacuum_goto_x_txt.GetValue().strip())
+            y = int(self.vacuum_goto_y_txt.GetValue().strip())
+        except ValueError:
+            self.notify("Roborock go to coordinates must be whole numbers.", priority=10)
+            return
+        self._run_ha_service_async(
+            "roborock/set_vacuum_goto_position",
+            {"entity_id": entity_id, "x": x, "y": y},
+            f"Sent Roborock go to position {x}, {y}.",
+        )
+
+    def _run_ha_service_async(self, service, payload, success_message):
+        def worker():
+            ok = self._call_ha_service_data(service, payload)
+            if ok:
+                wx.CallAfter(lambda: self.notify(success_message, priority=10))
+                wx.CallAfter(lambda: wx.CallLater(1200, self.on_refresh_vacuum, None))
+        safe_submit(worker)
+
+    def setup_speed_tab(self):
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        box = wx.StaticBox(self.tab_speed, label="Speed Diagnostics")
+        bsizer = wx.StaticBoxSizer(box, wx.VERTICAL)
+
+        self.btn_refresh_speed = wx.Button(self.tab_speed, label="Refresh speed diagnostics", size=(-1, 40))
+        self.btn_refresh_speed.Bind(wx.EVT_BUTTON, self.on_refresh_speed)
+        self._describe_control(
+            self.btn_refresh_speed,
+            "Refresh speed diagnostics button. Reads the latest Viper log and summarizes doorbell, TTS, speaker, and chime timing.",
+        )
+        bsizer.Add(self.btn_refresh_speed, 0, wx.ALL | wx.EXPAND, 5)
+
+        self.speed_status_txt = wx.TextCtrl(
+            self.tab_speed,
+            value="Press Refresh speed diagnostics to read the latest timing log.",
+            style=wx.TE_MULTILINE | wx.TE_READONLY,
+            size=(-1, 420),
+        )
+        self._describe_control(
+            self.speed_status_txt,
+            "Speed diagnostics results. This read only box summarizes recent timing measurements from the Viper log.",
+        )
+        bsizer.Add(self.speed_status_txt, 1, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(bsizer, 1, wx.ALL | wx.EXPAND, 10)
+        self.tab_speed.SetSizer(sizer)
+
+    def setup_ha_status_tab(self):
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        box = wx.StaticBox(self.tab_ha_status, label="Home Assistant Status")
+        bsizer = wx.StaticBoxSizer(box, wx.VERTICAL)
+
+        self.btn_refresh_ha_status = wx.Button(self.tab_ha_status, label="Check Home Assistant status", size=(-1, 40))
+        self.btn_refresh_ha_status.Bind(wx.EVT_BUTTON, self.on_refresh_ha_status)
+        self._describe_control(
+            self.btn_refresh_ha_status,
+            "Check Home Assistant status button. Tests the Home Assistant connection and verifies configured speaker and automation entities.",
+        )
+        bsizer.Add(self.btn_refresh_ha_status, 0, wx.ALL | wx.EXPAND, 5)
+
+        self.ha_status_txt = wx.TextCtrl(
+            self.tab_ha_status,
+            value="Press Check Home Assistant status to test Home Assistant and configured entities.",
+            style=wx.TE_MULTILINE | wx.TE_READONLY,
+            size=(-1, 420),
+        )
+        self._describe_control(
+            self.ha_status_txt,
+            "Home Assistant status results. This read only box lists connection status, entity checks, and useful counts.",
+        )
+        bsizer.Add(self.ha_status_txt, 1, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(bsizer, 1, wx.ALL | wx.EXPAND, 10)
+        self.tab_ha_status.SetSizer(sizer)
+
+    def on_refresh_speed(self, event):
+        self.speed_status_txt.SetValue("Reading speed log...")
+        safe_submit(self._run_speed_diagnostics)
+
+    def _run_speed_diagnostics(self):
+        log_path = cfg.DATA_DIR / "viper_full_debug.log"
+        if not log_path.exists():
+            wx.CallAfter(self.speed_status_txt.SetValue, f"No speed log found at {log_path}.")
+            return
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="ignore")
+            summary = self._build_speed_summary(text)
+        except Exception as e:
+            summary = f"Could not read speed log: {e}"
+        wx.CallAfter(self.speed_status_txt.SetValue, summary)
+
+    def _latest_trace_block(self, lines, trace):
+        if not trace:
+            return []
+        start = next((i for i, line in enumerate(lines) if trace in line and "webhook_received" in line), None)
+        if start is None:
+            start = next((i for i, line in enumerate(lines) if trace in line), None)
+        if start is None:
+            return []
+        end = min(len(lines), start + 180)
+        return lines[start:end]
+
+    def _first_float(self, pattern, text):
+        match = re.search(pattern, text)
+        return float(match.group(1)) if match else None
+
+    def _last_float(self, pattern, text):
+        matches = re.findall(pattern, text)
+        return float(matches[-1]) if matches else None
+
+    def _format_seconds(self, value):
+        return f"{value:.2f} seconds" if value is not None else "not found"
+
+    def _median(self, values):
+        if not values:
+            return None
+        values = sorted(values)
+        mid = len(values) // 2
+        if len(values) % 2:
+            return values[mid]
+        return (values[mid - 1] + values[mid]) / 2
+
+    def _build_speed_summary(self, text):
+        lines = text.splitlines()
+        traces = []
+        for trace in re.findall(r"trace=(doorbell-[a-z]+-\d+)", text):
+            if trace not in traces:
+                traces.append(trace)
+
+        output = ["Speed Diagnostics", f"Log: {cfg.DATA_DIR / 'viper_full_debug.log'}", ""]
+        latest = ""
+        for trace in reversed(traces):
+            if "fast_capture=" in "\n".join(self._latest_trace_block(lines, trace)):
+                latest = trace
+                break
+        if not latest and traces:
+            latest = traces[-1]
+        if not latest:
+            output.append("No doorbell traces found yet.")
+        else:
+            block_lines = self._latest_trace_block(lines, latest)
+            block = "\n".join(block_lines)
+            output.extend([
+                f"Latest doorbell trace: {latest}",
+                f"RTSP capture: {self._format_seconds(self._first_float(r'fast_capture=([0-9.]+)s', block))}",
+                f"Total to vision verdict: {self._format_seconds(self._first_float(r'total_to_verdict=([0-9.]+)s', block))}",
+                f"Audio submitted: {self._format_seconds(self._first_float(r'audio_notification_submitted=([0-9.]+)s', block))}",
+                f"Doorbell TTS path: {self._format_seconds(self._last_float(r'TTS path for doorbell:unknown completed in ([0-9.]+)s', block))}",
+                f"Home Assistant play request: {self._format_seconds(self._last_float(r'HA PLAY TIMING .* submitted in ([0-9.]+)s', block))}",
+                f"Sonos play request: {self._format_seconds(self._last_float(r'SONOS DISPATCH TIMING - .* submitted in ([0-9.]+)s', block))}",
+                f"Pushover sent: {'yes' if '[PUSHOVER]' in block else 'not found'}",
+            ])
+            engine_match = re.search(r"category=doorbell engine=([a-z]+)", block)
+            if engine_match:
+                output.append(f"Doorbell TTS engine: {engine_match.group(1)}")
+
+        output.append("")
+        output.append("Recent medians from the whole log:")
+        recent_doorbell_blocks = []
+        for trace in reversed(traces):
+            block = "\n".join(self._latest_trace_block(lines, trace))
+            if "fast_capture=" in block:
+                recent_doorbell_blocks.append(block)
+            if len(recent_doorbell_blocks) >= 8:
+                break
+        capture_values = [self._first_float(r"fast_capture=([0-9.]+)s", b) for b in recent_doorbell_blocks]
+        verdict_values = [self._first_float(r"total_to_verdict=([0-9.]+)s", b) for b in recent_doorbell_blocks]
+        capture_values = [v for v in capture_values if v is not None]
+        verdict_values = [v for v in verdict_values if v is not None]
+        gemini_tts_values = [float(v) for v in re.findall(r"Gemini TTS API response took: ([0-9.]+)s", text)][-20:]
+        ha_play_values = [float(v) for v in re.findall(r"HA PLAY TIMING .* submitted in ([0-9.]+)s", text)][-20:]
+        sonos_values = [float(v) for v in re.findall(r"SONOS .* TIMING - .* submitted in ([0-9.]+)s", text)][-20:]
+        output.extend([
+            f"Doorbell RTSP capture median: {self._format_seconds(self._median(capture_values))}",
+            f"Doorbell verdict median: {self._format_seconds(self._median(verdict_values))}",
+            f"Gemini TTS API median: {self._format_seconds(self._median(gemini_tts_values))}",
+            f"HA play request median: {self._format_seconds(self._median(ha_play_values))}",
+            f"Sonos play request median: {self._format_seconds(self._median(sonos_values))}",
+        ])
+        output.append("")
+        output.append("Notes:")
+        output.append("If doorbell TTS engine says google, the latest doorbell did not use Gemini voice.")
+        output.append("If HA play is above 1 second but Sonos is fast, the delay is likely Home Assistant media service response time.")
+        return "\n".join(output)
+
+    def on_refresh_ha_status(self, event):
+        self.ha_status_txt.SetValue("Checking Home Assistant...")
+        safe_submit(self._run_ha_status_check)
+
+    def _run_ha_status_check(self):
+        try:
+            summary = self._build_ha_status_summary()
+        except Exception as e:
+            summary = f"Home Assistant status check failed: {e}"
+        wx.CallAfter(self.ha_status_txt.SetValue, summary)
+
+    def _build_ha_status_summary(self):
+        ha_settings = cfg.get_ha_settings(self.config, include_env=True)
+        lines = [
+            "Home Assistant Status",
+            f"Host: {ha_settings.get('ha_ip') or 'not configured'}:{ha_settings.get('ha_port') or '8123'}",
+            "",
+        ]
+
+        connection = discovery.test_ha_connection(
+            token=ha_settings.get("ha_token"),
+            ha_ip=ha_settings.get("ha_ip"),
+            ha_port=ha_settings.get("ha_port"),
+            timeout=5,
+        )
+        if not connection.get("ok"):
+            lines.append(f"Connection: failed. {connection.get('message') or connection.get('error')}")
+            return "\n".join(lines)
+        lines.append(f"Connection: ok. Entities visible: {connection.get('entity_count', 'unknown')}")
+
+        scan = discovery.discover_ha_entities(
+            token=ha_settings.get("ha_token"),
+            ha_ip=ha_settings.get("ha_ip"),
+            ha_port=ha_settings.get("ha_port"),
+            timeout=8,
+        )
+        if scan.get("ok"):
+            categories = scan.get("categories", {})
+            lines.extend([
+                "",
+                "Discovery counts:",
+                f"Media players: {len(categories.get('media_players', []))}",
+                f"Ring cameras: {len(categories.get('ring_cameras', []))}",
+                f"Door sensors: {len(categories.get('door_sensors', []))}",
+                f"Fridge sensors: {len(categories.get('fridge_sensors', []))}",
+                f"Freezer sensors: {len(categories.get('freezer_sensors', []))}",
+                f"Roborock candidates: {len(categories.get('roborock_entities', []))}",
+            ])
+        else:
+            lines.append(f"Discovery: failed. {scan.get('message') or scan.get('error')}")
+
+        entity_ids = []
+        for name, speaker in self.config.get("speakers", {}).items():
+            if speaker.get("type") in {"ha", "alexa"} and speaker.get("id"):
+                entity_ids.append((f"Speaker {name}", speaker["id"]))
+        for label, entity_id in [
+            ("Fridge door", "binary_sensor.refrigerator_fridge_door"),
+            ("Freezer door", "binary_sensor.refrigerator_freezer_door"),
+            ("Water filter", "sensor.refrigerator_water_filter_usage"),
+            ("Ice maker switch", "switch.refrigerator_cubed_ice"),
+            ("Cinderella status", "sensor.cinderella_status"),
+            ("Cinderella vacuum error", "sensor.cinderella_vacuum_error"),
+            ("Cinderella dock error", "sensor.cinderella_dock_dock_error"),
+            ("Cinderella mop drying", "binary_sensor.cinderella_dock_mop_drying"),
+        ]:
+            entity_ids.append((label, entity_id))
+
+        lines.append("")
+        lines.append("Entity checks:")
+        seen = set()
+        for label, entity_id in entity_ids:
+            if entity_id in seen:
+                continue
+            seen.add(entity_id)
+            result = discovery.validate_entity_exists(
+                entity_id,
+                token=ha_settings.get("ha_token"),
+                ha_ip=ha_settings.get("ha_ip"),
+                ha_port=ha_settings.get("ha_port"),
+                timeout=5,
+            )
+            if result.get("ok") and result.get("exists"):
+                state = result.get("entity", {}).get("state", "unknown")
+                lines.append(f"{label}: found. {entity_id}. State: {state}")
+            elif result.get("ok"):
+                lines.append(f"{label}: missing. {entity_id}")
+            else:
+                lines.append(f"{label}: check failed. {entity_id}. {result.get('message') or result.get('error')}")
+
+        lines.append("")
+        lines.append("Configured speakers:")
+        speakers = self.config.get("speakers", {})
+        if not speakers:
+            lines.append("No speakers configured in Viper.")
+        else:
+            for name, speaker in speakers.items():
+                enabled = "enabled" if speaker.get("enabled", True) else "disabled"
+                lines.append(f"{name}: {speaker.get('type')} {speaker.get('id')} {enabled}")
+        return "\n".join(lines)
 
     # --- UI EVENT HANDLERS ---
     def on_refresh_edge_voices(self, event):
@@ -2603,21 +3854,61 @@ class ViperDashboard(wx.Frame):
 
     def _call_ha_service(self, domain_service: str, entity_id: str):
         """Call a Home Assistant service for a single entity."""
+        return self._call_ha_service_data(domain_service, {"entity_id": entity_id})
+
+    def _call_ha_service_data(self, domain_service: str, data: dict):
+        """Call a Home Assistant service with arbitrary JSON data."""
+        entity_id = (data or {}).get("entity_id", "Home Assistant")
         try:
+            ha_settings = cfg.get_ha_settings(self.config, include_env=True)
+            token = ha_settings.get("ha_token")
+            ha_ip = ha_settings.get("ha_ip")
+            ha_port = ha_settings.get("ha_port") or "8123"
+            if not ha_ip or not token:
+                raise RuntimeError("Home Assistant host or token is missing.")
             headers = {
-                "Authorization": f"Bearer {cfg.HA_TOKEN}",
+                "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             }
             requests.post(
-                f"http://{cfg.HA_IP}:{cfg.HA_PORT}/api/services/{domain_service}",
+                f"http://{ha_ip}:{ha_port}/api/services/{domain_service}",
                 headers=headers,
-                json={"entity_id": entity_id},
+                json=data or {},
                 timeout=10,
             ).raise_for_status()
             return True
         except Exception as e:
             self.notify(f"HA service failed for {entity_id}: {e}", priority=10)
             return False
+
+    def _call_ha_service_response(self, domain_service: str, data: dict):
+        """Call a Home Assistant service that returns response data."""
+        entity_id = (data or {}).get("entity_id", "Home Assistant")
+        try:
+            ha_settings = cfg.get_ha_settings(self.config, include_env=True)
+            token = ha_settings.get("ha_token")
+            ha_ip = ha_settings.get("ha_ip")
+            ha_port = ha_settings.get("ha_port") or "8123"
+            if not ha_ip or not token:
+                raise RuntimeError("Home Assistant host or token is missing.")
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+            response = requests.post(
+                f"http://{ha_ip}:{ha_port}/api/services/{domain_service}?return_response",
+                headers=headers,
+                json=data or {},
+                timeout=15,
+            )
+            response.raise_for_status()
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            return {"ok": True, "data": payload}
+        except Exception as e:
+            return {"ok": False, "message": f"HA service failed for {entity_id}: {e}"}
 
     def on_ice_maker_on(self, event):
         """Force the ice maker on and enable the helper so the 5-second auto-off

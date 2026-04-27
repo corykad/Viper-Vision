@@ -320,6 +320,7 @@ CONFIG_SCHEMA = {
         # ── Roborock / Cinderella ──────────────────────────────────────────
         "cinderella_enabled": True,
         "cinderella_ai_mode": False,
+        "vacuum_rooms": {},
         "cinderella_ai_prompt": (
             "You are a dry, witty narrator for a robot vacuum cleaner named Cinderella. "
             "Generate exactly ONE short, funny sentence (under 20 words) reacting to the "
@@ -515,6 +516,33 @@ def _normalize_broadcast_channels(value, default):
     return normalized
 
 
+def _normalize_vacuum_rooms(value):
+    if not isinstance(value, dict):
+        return {}
+    normalized = {}
+    for entity_id, rooms in value.items():
+        key = _as_str(entity_id).strip()
+        if not key or not isinstance(rooms, list):
+            continue
+        cleaned = []
+        for room in rooms:
+            if not isinstance(room, dict):
+                continue
+            try:
+                segment = int(room.get("segment"))
+            except (TypeError, ValueError):
+                continue
+            name = _as_str(room.get("name"), f"Room {segment}").strip() or f"Room {segment}"
+            map_name = _as_str(room.get("map"), "Current map").strip() or "Current map"
+            label = _as_str(room.get("label"), "").strip()
+            if not label:
+                label = f"{name} ({segment})" if map_name == "Current map" else f"{name} on {map_name} ({segment})"
+            cleaned.append({"label": label, "name": name, "map": map_name, "segment": segment})
+        if cleaned:
+            normalized[key] = sorted(cleaned, key=lambda item: item["label"].lower())
+    return normalized
+
+
 def _normalize_tts_profiles(value, default):
     profiles = value if isinstance(value, dict) else {}
     normalized = _deep_merge(default, profiles)
@@ -702,6 +730,7 @@ def validate_and_normalize_config(config_data):
     normalized["quiet_hours_start"] = _normalize_time(normalized.get("quiet_hours_start"), defaults["quiet_hours_start"])
     normalized["quiet_hours_end"] = _normalize_time(normalized.get("quiet_hours_end"), defaults["quiet_hours_end"])
     normalized["broadcast_channels"] = _normalize_broadcast_channels(normalized.get("broadcast_channels"), defaults["broadcast_channels"])
+    normalized["vacuum_rooms"] = _normalize_vacuum_rooms(normalized.get("vacuum_rooms"))
     normalized["cinderella_enabled"] = _as_bool(normalized.get("cinderella_enabled"), defaults["cinderella_enabled"])
     normalized["cinderella_ai_mode"] = _as_bool(normalized.get("cinderella_ai_mode"), defaults["cinderella_ai_mode"])
     normalized["cinderella_ai_prompt"] = _as_str(normalized.get("cinderella_ai_prompt"), defaults["cinderella_ai_prompt"]) or defaults["cinderella_ai_prompt"]

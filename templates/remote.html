@@ -43,9 +43,14 @@
         }
 
         /* ── Base layout ───────────────────────────────────────────────── */
-        body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 600px; margin: auto; background: #f4f4f4; }
+        body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 900px; margin: auto; background: #f4f4f4; }
         section { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd; }
         h1, h2, h3 { color: #333; margin-top: 0; }
+        nav { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 20px; }
+        nav ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px; margin: 0; }
+        nav li { border-bottom: 0; padding: 0; display: block; }
+        nav a { display: block; padding: 8px; color: #0056b3; font-weight: bold; }
+        nav a:focus { outline: 3px solid #0056b3; outline-offset: 2px; }
 
         /* ── Flash message ─────────────────────────────────────────────── */
         .flash-msg {
@@ -96,7 +101,7 @@
         .danger:focus { outline-color: #a71d2a; }
 
         /* ── Form controls ─────────────────────────────────────────────── */
-        select, textarea, input[type="text"] {
+        select, textarea, input[type="text"], input[type="number"] {
             width: 100%;
             padding: 10px;
             margin-top: 10px;
@@ -105,7 +110,7 @@
             font-size: 1rem;
             box-sizing: border-box;
         }
-        select:focus, textarea:focus, input[type="text"]:focus {
+        select:focus, textarea:focus, input[type="text"]:focus, input[type="number"]:focus {
             outline: 3px solid #007bff;
             outline-offset: 1px;
         }
@@ -178,6 +183,13 @@
         .channel-row label { font-weight: bold; display: block; margin-bottom: 4px; }
         .channel-card { border: 1px solid #e2e2e2; border-radius: 6px; padding: 12px; margin-bottom: 12px; background: #fafafa; }
         .channel-card strong { display: block; margin-bottom: 8px; font-size: 1rem; }
+        .button-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+        .button-grid form button { margin-top: 0; }
+        .status-list { list-style: disc; padding-left: 1.4rem; }
+        .status-list li { display: list-item; border-bottom: 0; padding: 2px 0; }
+        .room-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; margin-top: 10px; }
+        .room-option { border: 1px solid #ddd; border-radius: 6px; padding: 8px; background: #fafafa; }
+        .room-option input { margin-right: 8px; transform: scale(1.2); }
 
         /* ── Live status region ────────────────────────────────────────── */
         #live-status { position: absolute; left: -9999px; }
@@ -209,6 +221,19 @@
 
     <header>
         <h1>Viper Vision Remote</h1>
+        <nav aria-label="Remote sections">
+            <ul>
+                <li><a href="#status-heading">System status</a></li>
+                <li><a href="#vacuum-heading">Vacuum controls</a></li>
+                <li><a href="#speakers-heading">Speaker targets</a></li>
+                <li><a href="#prompt-heading">AI profile manager</a></li>
+                <li><a href="#utils-heading">System utilities</a></li>
+                <li><a href="#fridge-heading">Fridge and freezer</a></li>
+                <li><a href="#broadcast-heading">Broadcast message</a></li>
+                <li><a href="#cinderella-studio-heading">Cinderella messages</a></li>
+                <li><a href="#activity-heading">Recent activity</a></li>
+            </ul>
+        </nav>
     </header>
 
     <main id="main-content">
@@ -229,6 +254,178 @@
                     {{ "DISARM SYSTEM" if config.is_armed else "ARM SYSTEM" }}
                 </button>
             </form>
+        </section>
+
+        <!-- ── Vacuum Controls ───────────────────────────────────────────── -->
+        <section aria-labelledby="vacuum-heading">
+            <h2 id="vacuum-heading">Vacuum Controls</h2>
+            <p class="field-hint">
+                Controls are sent through Home Assistant. Room cleaning uses Roborock map room IDs after you press Refresh room list.
+            </p>
+
+            {% if vacuum.ok %}
+            <form action="{{ url_for('remote_ui') }}" method="get">
+                <label for="vacuum_entity_picker">Selected vacuum</label>
+                <select id="vacuum_entity_picker" name="vacuum_entity" aria-describedby="vacuum-picker-hint">
+                    {% for vac in vacuum.vacuums %}
+                    <option value="{{ vac.entity_id }}" {{ 'selected' if vac.entity_id == vacuum.selected else '' }}>
+                        {{ vac.label }}, state {{ vac.state }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <p id="vacuum-picker-hint" class="sr-only">Choose a vacuum, then press Load selected vacuum.</p>
+                <button type="submit" class="secondary">Load selected vacuum</button>
+            </form>
+
+            <h3>Vacuum Status</h3>
+            <ul class="status-list" aria-label="Selected vacuum status">
+                {% for line in vacuum.status_lines %}
+                <li>{{ line }}</li>
+                {% endfor %}
+            </ul>
+
+            <h3>Basic Actions</h3>
+            <div class="button-grid" role="group" aria-label="Basic vacuum actions">
+                {% for service, label in [
+                    ('vacuum/start', 'Start cleaning'),
+                    ('vacuum/pause', 'Pause cleaning'),
+                    ('vacuum/stop', 'Stop cleaning'),
+                    ('vacuum/return_to_base', 'Return to dock'),
+                    ('vacuum/locate', 'Locate vacuum'),
+                    ('vacuum/clean_spot', 'Spot clean')
+                ] %}
+                <form action="{{ url_for('web_vacuum_action') }}" method="post">
+                    <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                    <input type="hidden" name="service" value="{{ service }}">
+                    <button type="submit" class="{{ 'secondary' if service != 'vacuum/stop' else 'danger' }}">{{ label }}</button>
+                </form>
+                {% endfor %}
+            </div>
+
+            {% if vacuum.fan_speeds %}
+            <h3>Suction Speed</h3>
+            <form action="{{ url_for('web_vacuum_fan_speed') }}" method="post">
+                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                <label for="vacuum_fan_speed">Vacuum suction speed</label>
+                <select id="vacuum_fan_speed" name="fan_speed">
+                    {% for speed in vacuum.fan_speeds %}
+                    <option value="{{ speed }}" {{ 'selected' if speed == vacuum.current_fan_speed else '' }}>{{ speed }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit">Set suction speed</button>
+            </form>
+            {% endif %}
+
+            <h3>Roborock Settings</h3>
+            {% if vacuum.settings %}
+                {% for setting in vacuum.settings %}
+                <div class="channel-card">
+                    <strong>{{ setting.label }}</strong>
+                    <p class="field-hint">Current value: {{ setting.state }}</p>
+                    <form action="{{ url_for('web_vacuum_setting') }}" method="post">
+                        <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                        <input type="hidden" name="entity_id" value="{{ setting.entity_id }}">
+                        <input type="hidden" name="domain" value="{{ setting.domain }}">
+
+                        {% if setting.domain == 'select' %}
+                        <label for="vac-setting-{{ loop.index }}">Choose {{ setting.label }}</label>
+                        <select id="vac-setting-{{ loop.index }}" name="option">
+                            {% for option in setting.options %}
+                            <option value="{{ option }}" {{ 'selected' if option == setting.state else '' }}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit">Apply {{ setting.label }}</button>
+                        {% elif setting.domain == 'number' %}
+                        <label for="vac-setting-{{ loop.index }}">Value for {{ setting.label }}</label>
+                        <input
+                            type="number"
+                            id="vac-setting-{{ loop.index }}"
+                            name="value"
+                            value="{{ setting.state }}"
+                            min="{{ setting.min }}"
+                            max="{{ setting.max }}"
+                            step="{{ setting.step }}"
+                        >
+                        <button type="submit">Set {{ setting.label }}</button>
+                        {% elif setting.domain == 'switch' %}
+                        <div class="button-grid" role="group" aria-label="{{ setting.label }} switch controls">
+                            <button type="submit" name="turn_on" value="1">Turn on {{ setting.label }}</button>
+                            <button type="submit" name="turn_on" value="0" class="secondary">Turn off {{ setting.label }}</button>
+                        </div>
+                        {% endif %}
+                    </form>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p>No extra Roborock settings were found for this vacuum.</p>
+            {% endif %}
+
+            <h3>Room Cleaning</h3>
+            <form action="{{ url_for('web_vacuum_rooms') }}" method="post">
+                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                <button type="submit" class="secondary">Refresh room list</button>
+            </form>
+
+            {% if vacuum.rooms %}
+            <form action="{{ url_for('web_vacuum_clean_rooms') }}" method="post">
+                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                <fieldset>
+                    <legend>Choose rooms to clean</legend>
+                    <div class="room-grid">
+                        {% for room in vacuum.rooms %}
+                        <label class="room-option" for="room-{{ loop.index }}">
+                            <input
+                                type="checkbox"
+                                id="room-{{ loop.index }}"
+                                name="segments"
+                                value="{{ room.segment }}"
+                            >
+                            {{ room.name }}{% if room.map and room.map != 'Current map' %}, {{ room.map }}{% endif %}, room ID {{ room.segment }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </fieldset>
+                <label for="vacuum_room_repeat">Repeat count, 1 to 3</label>
+                <input type="number" id="vacuum_room_repeat" name="repeat" min="1" max="3" step="1" value="1">
+                <button type="submit">Clean selected rooms</button>
+            </form>
+            {% else %}
+            <p class="field-hint">No room list is loaded yet. Press Refresh room list first.</p>
+            {% endif %}
+
+            <h3>Advanced Vacuum Commands</h3>
+            <form action="{{ url_for('web_vacuum_advanced') }}" method="post">
+                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                <label for="vacuum_command_name">Command name</label>
+                <input type="text" id="vacuum_command_name" name="command" placeholder="Example: app_segment_clean" autocomplete="off">
+                <label for="vacuum_command_params">Parameters JSON, optional</label>
+                <textarea id="vacuum_command_params" name="params" placeholder='Example: [{"segments":[7],"repeat":1}]'></textarea>
+                <button type="submit">Send advanced vacuum command</button>
+            </form>
+
+            <form action="{{ url_for('web_vacuum_goto') }}" method="post" style="margin-top: 15px;">
+                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                <fieldset>
+                    <legend>Send vacuum to map coordinates</legend>
+                    <div class="channel-row">
+                        <div>
+                            <label for="vacuum_goto_x">X coordinate</label>
+                            <input type="number" id="vacuum_goto_x" name="x" value="25500" step="1">
+                        </div>
+                        <div>
+                            <label for="vacuum_goto_y">Y coordinate</label>
+                            <input type="number" id="vacuum_goto_y" name="y" value="25500" step="1">
+                        </div>
+                    </div>
+                    <button type="submit" class="secondary">Send vacuum to coordinates</button>
+                </fieldset>
+            </form>
+            {% else %}
+            <p>{{ vacuum.message }}</p>
+            <form action="{{ url_for('remote_ui') }}" method="get">
+                <button type="submit" class="secondary">Refresh vacuum controls</button>
+            </form>
+            {% endif %}
         </section>
 
         <!-- ── Speaker Targets ───────────────────────────────────────────── -->
@@ -462,6 +659,7 @@
                 </div>
                 <button type="submit">Save Quiet Hours</button>
             </form>
+        </section>
 
         <!-- ── Fridge & Freezer Channel Settings ──────────────────────────── -->
         <section aria-labelledby="fridge-heading">

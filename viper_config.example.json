@@ -144,6 +144,7 @@
     },
     "cinderella_enabled": true,
     "cinderella_ai_mode": false,
+    "vacuum_rooms": {},
     "cinderella_ai_prompt": "You are a dry, witty narrator for a robot vacuum cleaner named Cinderella. Generate exactly ONE short, funny sentence (under 20 words) reacting to the following robot event. Be creative, unexpected, and self-aware. Event: {event}. Source: {source}. Error detail: {error}. Reply with the sentence only \u2014 no quotes, no punctuation after the period.",
     "prompts": {
         "Standard": "Analyze this security camera frame. Describe people and actions in a natural sentence. Mention clothing/packages. Under 25 words.",
