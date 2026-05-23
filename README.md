@@ -2,7 +2,7 @@
 
 Viper Vision is a Windows-first smart home notification and control system. It connects Home Assistant, Ring doorbell events, live RTSP camera streams, Gemini vision, configurable text-to-speech, speaker playback, refrigerator alerts, and Roborock vacuum controls into one accessible desktop app and web remote.
 
-Version `1.2` adds a beginner-friendly Home Assistant setup path. Viper can now listen directly to Home Assistant state changes, so new users can get started without editing YAML automations, installing Samba, or copying Home Assistant packages.
+Version `1.2.3` adds a beginner-friendly Home Assistant setup path plus focus and setup-flow fixes. Viper can now listen directly to Home Assistant state changes, so new users can get started without editing YAML automations, installing Samba, or copying Home Assistant packages.
 
 ## What Viper Vision Does
 
@@ -81,7 +81,7 @@ Recommended:
 - A static IP address for the Windows PC running Viper.
 - A static IP address for Home Assistant.
 - Home Assistant Roborock integration if using vacuum controls.
-- Home Assistant Ring, go2rtc, or another RTSP source if using doorbell vision.
+- Mosquitto Broker and Ring-MQTT with Video Streaming if using Ring doorbell vision.
 - A screen reader such as JAWS, NVDA, or Windows Narrator if you rely on speech feedback.
 
 ## Install Options
@@ -92,7 +92,7 @@ You can run Viper two ways.
 
 This is easiest for most users.
 
-1. Download the latest `ViperVision-v1.2-Setup.exe` from the GitHub release.
+1. Download the latest `ViperVision-v1.2.3-Setup.exe` from the GitHub release.
 2. Run the installer.
 3. Choose whether to create a desktop shortcut.
 4. Launch Viper Vision from the Start menu or desktop shortcut.
@@ -113,14 +113,15 @@ Use this path if you just installed Home Assistant and want the quickest route.
 
 1. In Home Assistant, open your user profile and create a long-lived access token.
 2. Start Viper Vision.
-3. Open **Utilities**, then **Home Assistant Setup**.
-4. Press **Find HA**. If Viper cannot find it, enter the Home Assistant host manually, such as `homeassistant.local` or the HA IP address.
-5. Paste the long-lived access token and your Gemini API key.
-6. Press **Test & Discover** so Viper can read Home Assistant entities.
-7. For each doorbell, choose the Home Assistant trigger entity that changes when motion or a press happens.
-8. Enter or derive the matching live RTSP URL. For Ring/go2rtc this is usually `rtsp://YOUR_HA_IP:8554/YOUR_CAMERA_ID_live`.
-9. Press **Test Front RTSP** and **Test Back RTSP**. Doorbell AI needs these live RTSP tests to pass.
-10. Press **Save**.
+3. On first run, use the setup wizard. Later, open the **Home Assistant** tab and press **Open Setup Wizard**.
+4. Use **Home Assistant Connection** to find or install Home Assistant, paste the long-lived token, and discover devices.
+5. Use **Ring In Home Assistant** so Ring doorbell trigger entities appear.
+6. Use **Ring-MQTT Live Video** to install or check Mosquitto and Ring-MQTT with Video Streaming.
+7. Use **Test Doorbell Cameras** to find Ring-MQTT RTSP streams from logs/topics, choose the front and back streams in combo boxes, save them, and test either door again on the same page.
+8. Use **Confirm Doorbell Triggers** to confirm front and back ding or motion entities.
+9. Use **Speakers and Audio** to discover speakers, check the speakers Viper may use, save them, and press **Test Checked Speakers** on the same page.
+10. Use **AI and Speech**, then run **Final Test**.
+11. Use optional refrigerator alerts or robot vacuum setup after the core doorbell setup works.
 
 After this, Viper listens directly to Home Assistant state changes. You do not need to install Samba, edit `automations.yaml`, or copy a package unless you prefer the advanced Home Assistant YAML workflow.
 
@@ -128,7 +129,15 @@ After this, Viper listens directly to Home Assistant state changes. You do not n
 
 Press `F1` in Viper to open the local HTML help manual. The files live in the `help` folder and are included in packaged builds.
 
-The **New User Setup Assistant** in the Utilities tab helps users who have not set up Home Assistant yet. It checks for VirtualBox, opens official Home Assistant and VirtualBox pages, searches for Home Assistant on the network, and then hands off to Viper's Home Assistant setup.
+The **Home Assistant** tab is the recommended beginner path. It opens a traditional Back/Next setup wizard focused on getting doorbells working first. The same tab has an accessible checklist that reports what has passed and what still needs setup.
+
+The Home Assistant install assistant is available from the setup wizard and from **Advanced**, **Advanced: Home Assistant Server Assistant**. It can install VirtualBox with `winget`, download the official Home Assistant OS VirtualBox image, create and start a VM named `Home Assistant`, find the Home Assistant IP address, open onboarding in the browser, and then hand off to Viper's Home Assistant setup. If `winget` or the automatic download fails, it opens the official download pages and lets the user choose a downloaded HAOS image manually.
+
+Before creating the VM, Viper asks how much RAM and disk space Home Assistant should use. The recommended defaults are 4096 MB RAM and 32 GB disk. Users with smaller computers can lower RAM to 2048 MB, and users who expect lots of add-ons, logs, recorder history, or camera-related tools can choose 64 GB or more disk space.
+
+The assistant also checks whether Windows hypervisor features may interfere with VirtualBox. The optional **Optimize Windows For VirtualBox** button is never automatic: it warns first, requires administrator permission, turns off Hyper-V-related features only if the user approves, and tells the user to reboot. This can affect WSL2, Docker Desktop, Windows Sandbox, and Hyper-V virtual machines until those Windows features are re-enabled.
+
+Viper cannot reserve a Home Assistant IP address inside every router, because router DHCP screens are all different. Instead, Viper uses bridged networking when possible and runs a lightweight background Home Assistant address recovery check. If the saved Home Assistant address stops responding and Home Assistant is found at a new local IP, Viper updates its saved address automatically.
 
 The Home Assistant setup dialog also includes a **Ring Setup Assistant** button. It checks the current discovery results and explains whether you need Ring trigger entities, RTSP setup, Mosquitto, or ring-mqtt.
 
@@ -136,7 +145,7 @@ The Home Assistant setup dialog also includes a **Ring Setup Assistant** button.
 
 Viper does not use Home Assistant snapshots for doorbell AI by default because snapshots can be stale. The doorbell path is designed around live RTSP streams. If a doorbell alert fires but the RTSP test fails, fix the RTSP source first.
 
-For Ring cameras, many setups expose streams through go2rtc with URLs like:
+For Ring cameras, Viper's supported live-video path is Ring-MQTT with Video Streaming, with URLs like:
 
 ```text
 rtsp://YOUR_HA_IP:8554/YOUR_CAMERA_ID_live
@@ -199,13 +208,13 @@ Private runtime files that should not be committed:
 ## First Launch
 
 1. Start Viper.
-2. If the app is missing required settings, the setup dialog opens.
-3. Enter Home Assistant and API details.
-4. Save.
-5. Use the **HA Status** tab to confirm Viper can reach Home Assistant.
-6. Use the **Devices & Chimes** tab to add speakers.
-7. Use the **Voice Behavior** tab to configure TTS.
-8. Use the **Vacuum** tab to load Roborock controls and rooms.
+2. If the app is missing required settings, the setup wizard opens.
+3. Follow the setup wizard in order: Home Assistant Connection, Ring In Home Assistant, Ring-MQTT Live Video, Test Doorbell Cameras, Confirm Doorbell Triggers, Speakers and Audio, AI and Speech, then Final Test.
+4. Use the **Home Assistant** tab checklist to confirm Viper can reach Home Assistant.
+5. Use **Speakers & Audio**, **Speakers & Chimes** to choose speakers and routing.
+6. Use **Speakers & Audio**, **Voice Behavior** to configure TTS.
+7. Use **Home Devices**, **Refrigerator & Ice** and **Robot Vacuum** only after the core doorbell setup works.
+8. Use **Diagnostics**, **Tests & Support**, **About Viper Vision And Data Folders** to find version, config, logs, and support bundle location.
 
 The local web remote is available at:
 
@@ -216,7 +225,7 @@ http://YOUR_VIPER_PC_IP:5050/remote
 Example:
 
 ```text
-http://192.168.4.56:5050/remote
+http://192.168.1.25:5050/remote
 ```
 
 ## Windows Firewall
@@ -282,7 +291,7 @@ You will enter this in Viper as `ha_ip`.
 Example:
 
 ```text
-192.168.4.49
+192.168.1.50
 ```
 
 ### 3. Create A Long-Lived Access Token
@@ -558,11 +567,11 @@ Viper needs RTSP URLs for front and back cameras.
 Examples:
 
 ```text
-rtsp://192.168.4.49:8554/front_camera_live
-rtsp://192.168.4.49:8554/back_camera_live
+rtsp://192.168.1.50:8554/front_camera_live
+rtsp://192.168.1.50:8554/back_camera_live
 ```
 
-Your exact URL depends on your camera bridge. Some users expose Ring cameras through Home Assistant add-ons such as go2rtc or ring-mqtt. Viper only needs a working RTSP URL.
+Your exact URL depends on Ring-MQTT's video streaming configuration. Viper only needs a working RTSP URL.
 
 Test RTSP before blaming Viper. You can test with VLC:
 
@@ -589,7 +598,7 @@ OFF
 Viper has setup tools to help find Ring MQTT topics. In the desktop app, open:
 
 ```text
-Utilities > Home Assistant Setup > Find Ring Topics
+Advanced > Advanced Home Assistant Setup > Ring-MQTT Advanced > Find Ring Topics
 ```
 
 If your Ring setup uses different topics, edit the Home Assistant automation manually.
@@ -599,7 +608,7 @@ If your Ring setup uses different topics, edit the Home Assistant automation man
 Open the desktop app and go to:
 
 ```text
-Devices & Chimes
+Speakers & Audio > Speakers & Chimes
 ```
 
 Add each speaker you want Viper to use.
@@ -619,7 +628,7 @@ Example:
 192.168.4.82
 ```
 
-Viper can also scan for Sonos speakers from the Utilities tab.
+Viper can also scan for Sonos speakers from the Advanced tab. The beginner speaker discovery path is in the setup wizard and in Speakers & Audio.
 
 ### Home Assistant Media Player
 
@@ -677,9 +686,9 @@ Supported formats:
 
 In the desktop app:
 
-1. Open **Devices & Chimes**.
+1. Open **Doorbell Vision**.
 2. Choose front and back chimes.
-3. Use **Test** to verify.
+3. Use **Test Front Door Chime** and **Test Back Door Chime** to verify.
 4. Save.
 
 ## Voice Behavior And TTS Setup
@@ -752,7 +761,7 @@ Viper logs API usage locally in:
 api_usage.json
 ```
 
-The Utilities tab has **Check API Cost**.
+The Diagnostics tab has **Check API Cost**.
 
 ## Pushover Setup
 
@@ -912,15 +921,15 @@ http://YOUR_VIPER_PC_IP:5050/remote
 Look for:
 
 ```text
-Cinderella Message Studio
+Robot Message Studio
 ```
 
-### Vacuum Controls
+### Robot Vacuum Controls
 
 Open the desktop app:
 
 ```text
-Vacuum
+Home Devices > Robot Vacuum
 ```
 
 Available controls depend on what Home Assistant exposes.
@@ -994,36 +1003,27 @@ In the web remote, room checkboxes are normal HTML checkboxes and should work wi
 
 Shows the main arm/disarm state.
 
-### Voice Behavior
+### Doorbell Vision
 
-Controls default TTS and per-alert voice settings.
+Controls doorbell chimes, full-flow tests, AI description styles, trigger status, and RTSP status.
 
-### Devices & Chimes
+### Speakers & Audio
 
-Add speakers, edit speaker routing, test speakers, and choose doorbell chimes.
+Voice Behavior controls default TTS and per-alert voice settings. Speakers & Chimes controls speaker routing, speaker tests, quiet hours, and speaker discovery.
 
-### Utilities
+### Home Devices
 
-Tools for:
+Refrigerator & Ice controls fridge/freezer channel behavior, chimes, water filter checks, and ice maker controls. Robot Vacuum controls Roborock actions, settings, room cleaning, advanced commands, and robot messages.
 
-- API cost check.
-- Doorbell battery check.
-- Refrigerator filter check.
-- Home Assistant setup.
-- HA package generation.
-- Sonos scan.
-- Home Assistant speaker scan.
-- Quiet hours.
+### Home Assistant
 
-### Fridge
+Contains the beginner setup checklist and Open Setup Wizard.
 
-Controls fridge/freezer channel behavior and chimes.
+### Diagnostics
 
-### Vacuum
+Tests & Support includes About Viper Vision, diagnostics, support bundles, API cost checks, battery checks, and filter checks.
 
-Controls Roborock actions, settings, room cleaning, and advanced commands.
-
-### Speed
+Speed reads the latest Viper log and summarizes timing:
 
 Reads the latest Viper log and summarizes timing:
 
@@ -1034,7 +1034,7 @@ Reads the latest Viper log and summarizes timing:
 - Sonos play request.
 - Gemini TTS median.
 
-### HA Status
+Home Assistant Status tests Home Assistant connection and checks important entities:
 
 Tests Home Assistant connection and checks important entities:
 
@@ -1043,7 +1043,11 @@ Tests Home Assistant connection and checks important entities:
 - ice maker,
 - Cinderella status,
 - Cinderella errors,
-- Roborock candidates.
+- Roborock entities.
+
+### Advanced
+
+Contains manual setup tools such as Advanced Home Assistant Setup, Home Assistant server assistant, YAML package export, Sonos scan, and Home Assistant speaker scan.
 
 ## Web Remote
 
@@ -1057,18 +1061,19 @@ It includes:
 
 - Section navigation.
 - System arm/disarm.
-- Vacuum controls.
+- Doorbell Vision status and chime tests.
+- Robot vacuum controls.
 - Room cleaning.
-- Speaker targets.
+- Speakers & Audio.
 - Speaker routing.
 - Add, rename, delete, and test speakers.
-- AI profile manager.
-- Utility buttons.
+- Doorbell AI profiles.
+- Diagnostics quick checks.
 - Quiet hours.
-- Fridge and freezer channel settings.
+- Refrigerator, freezer, and ice maker channel settings.
 - Manual broadcast.
-- Discovery tools.
-- Cinderella Message Studio.
+- Advanced discovery tools.
+- Robot Message Studio.
 - Recent activity.
 
 The web remote is designed to be screen-reader friendly:
@@ -1135,9 +1140,9 @@ Useful variables:
 ```text
 FLASK_PORT=5050
 SONOS_PORT=8090
-HA_IP=192.168.4.49
+HA_IP=192.168.1.50
 HA_PORT=8123
-PC_IP=192.168.4.56
+PC_IP=192.168.1.25
 GEMINI_API_KEY=
 HA_TOKEN=
 PUSHOVER_USER_KEY=
@@ -1233,8 +1238,35 @@ Check:
 - Home Assistant IP.
 - Port `8123`.
 - Long-lived token.
-- HA Status tab.
+- Diagnostics > Home Assistant Status.
 - Home Assistant is not using HTTPS only.
+
+### Home Assistant VM Runs But The Browser Hangs
+
+Check both Home Assistant ports:
+
+```text
+http://YOUR_HA_IP:8123
+http://YOUR_HA_IP:4357
+```
+
+If port `4357` opens but port `8123` hangs, VirtualBox and the Supervisor are alive, but Home Assistant Core is likely hung or overloaded. Viper diagnostics now reports this as a separate HA health state.
+
+For a longer watch, run:
+
+```powershell
+.\watch_ha_health.ps1
+```
+
+It writes `ha_health_watch.csv`. The important state is `core_hung_vm_alive`.
+
+If your Home Assistant VM is stored under Downloads, shut Home Assistant down cleanly, power off the VM, then run:
+
+```powershell
+.\harden_ha_virtualbox.ps1 -MoveOutOfDownloads
+```
+
+The hardening script refuses to run while the VM is running. It moves the VM to `C:\VMs`, enables safer disk settings, and keeps bridged networking.
 
 ### Doorbell Trigger Does Nothing
 
@@ -1369,7 +1401,7 @@ winget install --id JRSoftware.InnoSetup -e
 Installer output:
 
 ```text
-installer\ViperVision-v1.2-Setup.exe
+installer\ViperVision-v1.2.3-Setup.exe
 ```
 
 Do not commit:
@@ -1416,7 +1448,7 @@ The current suite checks:
 - select, number, and child-lock setting routes,
 - Cinderella dock-specific error message routing.
 
-## GitHub Release Checklist For 1.2
+## GitHub Release Checklist For 1.2.3
 
 Before committing:
 
@@ -1445,16 +1477,16 @@ Suggested commit:
 
 ```powershell
 git add README.md main.pyw templates/remote.html viper_config.py viper_config.example.json
-git commit -m "Release Viper Vision 1.2"
-git tag -a v1.2 -m "Viper Vision 1.2"
+git commit -m "Release Viper Vision 1.2.3"
+git tag -a v1.2.3 -m "Viper Vision 1.2.3"
 ```
 
 If publishing with GitHub CLI:
 
 ```powershell
 git push origin main
-git push origin v1.2
-gh release create v1.2 installer\ViperVision-v1.2-Setup.exe --title "Viper Vision 1.2" --notes "Viper Vision 1.2 release."
+git push origin v1.2.3
+gh release create v1.2.3 installer\ViperVision-v1.2.3-Setup.exe --title "Viper Vision 1.2.3" --notes "Viper Vision 1.2.3 release."
 ```
 
 ## Security

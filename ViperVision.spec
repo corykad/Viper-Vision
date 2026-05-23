@@ -8,6 +8,7 @@ block_cipher = None
 hiddenimports = []
 hiddenimports += collect_submodules("accessible_output2")
 hiddenimports += collect_submodules("edge_tts")
+hiddenimports += collect_submodules("keyring")
 hiddenimports += collect_submodules("paho")
 hiddenimports += collect_submodules("websockets")
 hiddenimports += [
@@ -17,12 +18,15 @@ hiddenimports += [
     "win32com.client",
     "pythoncom",
     "pywintypes",
+    "wx.html2",
 ]
 
 datas = [
     ("templates", "templates"),
     ("chimes", "chimes"),
     ("help", "help"),
+    ("watch_ha_health.ps1", "."),
+    ("harden_ha_virtualbox.ps1", "."),
 ]
 
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Viper Vision Voice Help</title>
+  <title>Voice And TTS Setup</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -13,21 +13,42 @@
     <p><a href="index.html">Back to help index</a></p>
   </header>
   <main id="main">
-    <h2>Default TTS Settings</h2>
-    <p>The default TTS engine applies to all alerts unless a category override is enabled.</p>
+    <h2>What TTS Does</h2>
+    <p>TTS is the voice Viper uses for doorbell descriptions, utility alerts, and manual broadcasts.</p>
 
-    <h2>Per-Alert Settings</h2>
-    <p>Doorbell alerts, utility alerts, and manual broadcasts can use the default voice or their own engine, voice, speed, and dynamic mood setting.</p>
+    <h2>Recommended Beginner Settings</h2>
+    <ul>
+      <li>Use Gemini if you like the Gemini voices and accept cloud latency.</li>
+      <li>Use Edge TTS if you want a fast free cloud voice.</li>
+      <li>Keep doorbell speed fast.</li>
+      <li>Keep utilities and broadcasts normal or brisk.</li>
+      <li>Leave Gemini warmup off unless you accept possible API charges.</li>
+    </ul>
 
-    <h2>Gemini TTS Warmup</h2>
-    <p>Gemini warmup can reduce first-alert delay, but it sends API requests and may be billed. Leave it off unless you accept that tradeoff.</p>
+    <h2>Per-Alert Categories</h2>
+    <ul>
+      <li><strong>Doorbell:</strong> short, urgent, fast speech.</li>
+      <li><strong>Utilities:</strong> fridge, freezer, battery, filter, and status messages.</li>
+      <li><strong>Manual broadcast:</strong> text you type and send to speakers.</li>
+    </ul>
 
-    <h2>Speed Choices</h2>
-    <p>Use faster speeds for doorbell alerts and normal or brisk speeds for utility messages. If speech becomes hard to understand, lower the category speed.</p>
+    <h2>Dynamic Mood</h2>
+    <p>Dynamic Mood lets Viper adjust speech style from the message. Urgent doorbell alerts can sound faster and more alert. Friendly messages can sound warmer. Utility warnings can sound calmer or firmer.</p>
+
+    <h2>Gemini Warmup And Cost</h2>
+    <p>Gemini warmup sends requests to Gemini to keep the connection ready. Those requests may be billed. Keep warmup off unless you choose lower first-alert delay over possible cost.</p>
+
+    <h2>If Speech Is Too Slow</h2>
+    <ol>
+      <li>Open Diagnostics.</li>
+      <li>Run speed diagnostics.</li>
+      <li>Compare camera capture, Gemini vision, TTS generation, and speaker playback.</li>
+      <li>If Gemini TTS is the slow part, use Edge TTS for doorbells and keep Gemini for utilities or broadcasts.</li>
+    </ol>
 
     <nav class="topic-nav" aria-label="Previous and next help topics">
       <p><a href="scenarios.html">Previous: Common Setup Scenarios</a></p>
-      <p><a href="speakers.html">Next: Speakers and Chimes</a></p>
+      <p><a href="speakers.html">Next: Choosing Speakers And Chimes</a></p>
     </nav>
   </main>
 </body>

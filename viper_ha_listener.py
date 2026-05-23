@@ -74,31 +74,16 @@ def normalize_state(value):
     return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
 
 
-def derive_rtsp_url(ha_ip, camera_id):
-    ha_ip = str(ha_ip or "").strip()
-    camera_id = str(camera_id or "").strip()
-    return f"rtsp://{ha_ip}:8554/{camera_id}_live" if ha_ip and camera_id else ""
-
-
-def _legacy_value(config, key):
-    value = config.get(key)
-    return str(value or "").strip()
-
-
 def default_doorbell_trigger(side, config):
     side = "back" if side == "back" else "front"
-    ha_ip = _legacy_value(config, "ha_ip")
-    camera_id = _legacy_value(config, f"{side}_camera_id")
-    rtsp_key = "rtsp_back" if side == "back" else "rtsp_front"
-    mqtt_key = "back_doorbell_mqtt_topic" if side == "back" else "front_doorbell_mqtt_topic"
     return {
-        "enabled": bool(_legacy_value(config, rtsp_key) or camera_id),
+        "enabled": False,
         "source": "ha_state",
         "trigger_entity_id": "",
         "active_states": list(DEFAULT_ACTIVE_STATES),
-        "rtsp_url": _legacy_value(config, rtsp_key) or derive_rtsp_url(ha_ip, camera_id),
-        "camera_id": camera_id,
-        "mqtt_topic": _legacy_value(config, mqtt_key),
+        "rtsp_url": "",
+        "camera_id": "",
+        "mqtt_topic": "",
     }
 
 

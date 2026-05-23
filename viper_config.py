@@ -9,6 +9,8 @@ import threading
 from copy import deepcopy
 from pathlib import Path
 
+import viper_secrets
+
 # ==========================================
 # PATH LOGIC (EXE VS SCRIPT)
 # ==========================================
@@ -17,12 +19,23 @@ def get_app_dir():
         return Path(sys._MEIPASS)
     return Path(__file__).parent.absolute()
 
+def get_user_data_dir():
+    root = os.getenv("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+    return Path(root) / "viper_vision_1.0"
+
+
 def get_data_dir():
+    app_data = get_user_data_dir()
     if getattr(sys, 'frozen', False):
-        app_data = Path(os.getenv("APPDATA")) / "viper_vision_1.0"
         app_data.mkdir(parents=True, exist_ok=True)
         return app_data
-    return Path(__file__).parent.absolute()
+
+    source_dir = Path(__file__).parent.absolute()
+    use_appdata = os.getenv("VIPER_USE_APPDATA_CONFIG", "").strip().lower() in {"1", "true", "yes", "on"}
+    if use_appdata or (app_data / "viper_config.json").exists():
+        app_data.mkdir(parents=True, exist_ok=True)
+        return app_data
+    return source_dir
 
 APP_DIR = get_app_dir()
 DATA_DIR = get_data_dir()
@@ -104,9 +117,26 @@ def ensure_default_assets():
 # Network & APIs
 FLASK_PORT = int(os.getenv("FLASK_PORT", "5050"))
 SONOS_PORT = int(os.getenv("SONOS_PORT", "8090"))
-HA_IP = os.getenv("HA_IP", "192.168.4.49")
+HA_IP = os.getenv("HA_IP", "")
 HA_PORT = os.getenv("HA_PORT", "8123")
-PC_IP = os.getenv("PC_IP", "192.168.4.56")
+
+
+def _detect_lan_ip() -> str:
+    """Return the LAN address other devices should use to reach Viper."""
+    try:
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            ip = sock.getsockname()[0]
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
+PC_IP = os.getenv("PC_IP", _detect_lan_ip())
 
 FRONT_CAMERA_ID = os.getenv("FRONT_CAMERA_ID", "")
 BACK_CAMERA_ID = os.getenv("BACK_CAMERA_ID", "")
@@ -142,7 +172,7 @@ RTSP_CONNECT_TIMEOUT_SECONDS = int(os.getenv("RTSP_CONNECT_TIMEOUT_SECONDS", "18
 # Tune these down if you see the system consistently falling back to timeout.
 #   Doorbell 3 (front, 1080p, faster processor): 50 KB threshold
 #   Doorbell 2nd Gen (back, 1080p, slower processor): 40 KB threshold
-FRONT_MIN_FRAME_BYTES = int(os.getenv("FRONT_MIN_FRAME_BYTES", str(30_000)))
+FRONT_MIN_FRAME_BYTES = int(os.getenv("FRONT_MIN_FRAME_BYTES", str(14_000)))
 BACK_MIN_FRAME_BYTES  = int(os.getenv("BACK_MIN_FRAME_BYTES",  str(14_000)))
 
 HA_TOKEN = os.getenv("HA_TOKEN")
@@ -150,9 +180,18 @@ GEMINI_API_KEY = os.getenv("GEMINI_KEY")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER")
 PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_TOKEN")
 
+SECRET_ENV_VARS = {
+    "ha_token": "HA_TOKEN",
+    "gemini_api_key": "GEMINI_KEY",
+    "pushover_user_key": "PUSHOVER_USER",
+    "pushover_api_token": "PUSHOVER_TOKEN",
+    "mqtt_password": "MQTT_PASSWORD",
+}
+
 # Refrigerator / ice maker entities
 ICE_MAKER_SWITCH_ENTITY = os.getenv("ICE_MAKER_SWITCH_ENTITY", "switch.refrigerator_cubed_ice")
 ICE_MAKER_KEEP_ON_ENTITY = os.getenv("ICE_MAKER_KEEP_ON_ENTITY", "input_boolean.keep_ice_maker_on")
+ICE_MAKER_COUNTER_ENTITY = os.getenv("ICE_MAKER_COUNTER_ENTITY", "counter.ice_usage_counter")
 
 # Dynamic Battery Discovery Keywords
 BATTERY_KEYWORDS = ["battery", "power_level"]
@@ -192,6 +231,39 @@ DEFAULT_SPEAKER_CONFIG = {
     "utilities": True,
     "fridge": True,
     "quiet_hours_exempt": False,
+}
+
+AI_DESCRIPTION_JOBS = ("front_photo", "back_photo", "manual_video", "smart_video", "detailed_video")
+AI_DESCRIPTION_STYLES = ("balanced", "fast_security", "people_movement", "packages_deliveries", "detailed_blind", "custom")
+DEFAULT_AI_DESCRIPTION_STYLES = {
+    "front_photo": "balanced",
+    "back_photo": "balanced",
+    "manual_video": "detailed_blind",
+    "smart_video": "fast_security",
+    "detailed_video": "detailed_blind",
+}
+
+AI_DESCRIPTION_STYLE_PROMPTS = {
+    "balanced": {
+        "photo": "Describe the doorbell camera image in one natural sentence. Mention people, actions, vehicles, animals, packages, and anything unusual. Keep it under 30 words.",
+        "video": "Describe the doorbell video in two or three complete sentences. Mention people, movement, direction of travel, vehicles, animals, packages, and anything that needs attention.",
+    },
+    "fast_security": {
+        "photo": "Give a fast security summary of this doorbell image. Say who or what is present and what they are doing. Keep it under 20 words.",
+        "video": "Give a fast security summary of this doorbell video. Focus on people, movement, direction of travel, and anything urgent. Use one or two complete sentences.",
+    },
+    "people_movement": {
+        "photo": "Describe any people in this doorbell image, including position, clothing, movement, and whether they are approaching or leaving. Keep it concise.",
+        "video": "Describe people and movement in this doorbell video. Include direction of travel, what changed, and whether anyone approaches the door. Use complete sentences.",
+    },
+    "packages_deliveries": {
+        "photo": "Check this doorbell image for deliveries, packages, bags, vehicles, and people carrying items. Mention if no package is visible.",
+        "video": "Check this doorbell video for deliveries, packages, bags, vehicles, and people carrying items. Say whether something was dropped off or picked up.",
+    },
+    "detailed_blind": {
+        "photo": "Describe this doorbell image for a blind homeowner. Include useful spatial details, people, vehicles, packages, animals, movement clues, and safety concerns. Keep it under 45 words.",
+        "video": "Describe this doorbell video for a blind homeowner. Include people, vehicles, animals, packages, motion, direction of travel, spatial details, and safety concerns. Use two to four complete sentences, about 35 to 90 words.",
+    },
 }
 
 CONFIG_SCHEMA = {
@@ -295,11 +367,14 @@ CONFIG_SCHEMA = {
         "google_tts_tld": "com",
         "front_chime": "",
         "back_chime": "",
+        "global_mute": False,
         "mute_local_pc": False,
         "enable_alexa": False,
         "ha_ip": "",
         "ha_port": HA_PORT,
         "ha_token": "",
+        "ha_vm_ram_mb": 4096,
+        "ha_vm_disk_gb": 32,
         "gemini_api_key": "",
         "pushover_enabled": False,
         "pushover_user_key": "",
@@ -315,7 +390,29 @@ CONFIG_SCHEMA = {
         "mqtt_port": "1883",
         "mqtt_username": "",
         "mqtt_password": "",
+        "show_advanced_ring_mqtt": False,
         "ha_listener_enabled": True,
+        "ice_maker_switch_entity": ICE_MAKER_SWITCH_ENTITY,
+        "ice_maker_keep_on_entity": ICE_MAKER_KEEP_ON_ENTITY,
+        "ice_maker_counter_entity": ICE_MAKER_COUNTER_ENTITY,
+        "setup_progress": {
+            "active": False,
+            "phase": "",
+            "phase_label": "",
+            "status": "",
+            "detail": "",
+            "percent": None,
+            "started_at": "",
+            "updated_at": "",
+            "last_error": "",
+            "next_action": "",
+        },
+        "setup_skips": {
+            "gemini": False,
+            "pushover": False,
+            "fridge": False,
+            "vacuum": False,
+        },
         "doorbell_triggers": {
             "front": {
                 "enabled": False,
@@ -335,6 +432,17 @@ CONFIG_SCHEMA = {
                 "camera_id": "",
                 "mqtt_topic": "",
             },
+        },
+        "doorbell_video_analysis": {
+            "mode": "fast",
+            "model": "gemini-3-flash-preview",
+            "smart_clip_seconds": 3,
+            "detailed_clip_seconds": 5,
+            "manual_clip_seconds": 6,
+            "max_manual_clip_seconds": 15,
+            "fps": 2,
+            "speak_followups": True,
+            "smart_cooldown_seconds": 60,
         },
         "quiet_hours_enabled": False,
         "quiet_hours_start": "22:00",
@@ -364,6 +472,39 @@ CONFIG_SCHEMA = {
         "prompts": {
             "Standard": "Analyze this security camera frame. Describe people and actions in a natural sentence. Mention clothing/packages. Under 25 words.",
             "Detailed": "Analyze this security camera frame. Describe people, actions, clothing, and environment in detail. Strictly under 40 words."
+        },
+        "doorbell_prompt_profiles": {
+            "front": "",
+            "back": "",
+        },
+        "active_video_prompt": "Manual Outside Check",
+        "video_prompts": {
+            "Manual Outside Check": (
+                "You are helping a blind homeowner understand what is happening outside. "
+                "Analyze this live doorbell video carefully. Mention people, vehicles, animals, packages, movement, direction of travel, and anything that may need attention. "
+                "Be concise but include enough detail to be useful. Reply with two to four complete sentences, about 35 to 90 words, and end with punctuation."
+            ),
+            "Smart Follow Up": (
+                "The first still image said: {first_description}. You are helping a blind homeowner understand the {location}. "
+                "Use this short video only to add missing useful details. If nothing meaningful changes, say: No extra detail from the video. Use complete sentences."
+            ),
+            "Detailed Doorbell Video": (
+                "You are helping a blind homeowner understand the {location}. Analyze this short security video. "
+                "Mention people, packages, vehicles, animals, movement, direction, spatial details, and safety concerns. Use two to four complete sentences, about 35 to 90 words."
+            ),
+        },
+        "doorbell_video_prompt_profiles": {
+            "manual": "Manual Outside Check",
+            "smart": "Smart Follow Up",
+            "detailed": "Detailed Doorbell Video",
+        },
+        "ai_description_styles": deepcopy(DEFAULT_AI_DESCRIPTION_STYLES),
+        "ai_custom_descriptions": {
+            "front_photo": "",
+            "back_photo": "",
+            "manual_video": "",
+            "smart_video": "",
+            "detailed_video": "",
         },
         "speakers": {},
         "cinderella_messages": {
@@ -435,7 +576,7 @@ CONFIG_SCHEMA = {
     "validation": {
         "broadcast_modes": sorted(BROADCAST_MODES),
         "time_format": "HH:MM",
-        "unknown_keys": "preserve",
+        "unknown_keys": "discard",
     },
 }
 
@@ -496,6 +637,29 @@ def _normalize_time(value, default):
     return value if TIME_RE.match(value) else default
 
 
+def _normalize_broadcast_mode_value(value, default="speak"):
+    text = _as_str(value, default).strip().lower()
+    text = text.replace("-", " ").replace("_", " ")
+    aliases = {
+        "speak": "speak",
+        "voice": "speak",
+        "spoken": "speak",
+        "speak message": "speak",
+        "chime": "chime",
+        "chime only": "chime",
+        "sound": "chime",
+        "sound only": "chime",
+        "tone": "chime",
+        "tone only": "chime",
+        "silent": "silent",
+        "mute": "silent",
+        "muted": "silent",
+        "off": "silent",
+        "log only": "silent",
+    }
+    return aliases.get(text, default if default in BROADCAST_MODES else "speak")
+
+
 def _normalize_prompt_map(value, default):
     if not isinstance(value, dict):
         return deepcopy(default)
@@ -505,6 +669,67 @@ def _normalize_prompt_map(value, default):
         if key:
             normalized[key] = _as_str(prompt)
     return normalized or deepcopy(default)
+
+
+def _normalize_prompt_profiles(value, default, prompts, allowed_keys):
+    raw = value if isinstance(value, dict) else {}
+    normalized = _deep_merge(default, raw)
+    first_prompt = next(iter(prompts), "")
+    for key in allowed_keys:
+        selected = _as_str(normalized.get(key), "").strip()
+        normalized[key] = selected if selected in prompts else (default.get(key) if default.get(key) in prompts else first_prompt)
+    return normalized
+
+
+def _known_ai_prompt_texts(defaults):
+    known = set()
+    for value in defaults.get("prompts", {}).values():
+        known.add(_as_str(value, "").strip())
+    for value in defaults.get("video_prompts", {}).values():
+        known.add(_as_str(value, "").strip())
+    for style_prompts in AI_DESCRIPTION_STYLE_PROMPTS.values():
+        known.add(style_prompts["photo"].strip())
+        known.add(style_prompts["video"].strip())
+    return {text for text in known if text}
+
+
+def _legacy_photo_prompt_for_job(normalized, job):
+    prompts = normalized.get("prompts", {})
+    profiles = normalized.get("doorbell_prompt_profiles", {})
+    side = "back" if job == "back_photo" else "front"
+    selected = profiles.get(side) or normalized.get("active_prompt") or next(iter(prompts), "")
+    return _as_str(prompts.get(selected), "").strip()
+
+
+def _legacy_video_prompt_for_job(normalized, job):
+    prompts = normalized.get("video_prompts", {})
+    profiles = normalized.get("doorbell_video_prompt_profiles", {})
+    mode = {"manual_video": "manual", "smart_video": "smart", "detailed_video": "detailed"}[job]
+    selected = profiles.get(mode) or normalized.get("active_video_prompt") or next(iter(prompts), "")
+    return _as_str(prompts.get(selected), "").strip()
+
+
+def _normalize_ai_descriptions(normalized, defaults):
+    styles_raw = normalized.get("ai_description_styles") if isinstance(normalized.get("ai_description_styles"), dict) else {}
+    custom_raw = normalized.get("ai_custom_descriptions") if isinstance(normalized.get("ai_custom_descriptions"), dict) else {}
+    styles = deepcopy(defaults["ai_description_styles"])
+    custom = deepcopy(defaults["ai_custom_descriptions"])
+    known = _known_ai_prompt_texts(defaults)
+
+    for job in AI_DESCRIPTION_JOBS:
+        style = _as_str(styles_raw.get(job), styles.get(job, "balanced")).strip().lower()
+        styles[job] = style if style in AI_DESCRIPTION_STYLES else DEFAULT_AI_DESCRIPTION_STYLES.get(job, "balanced")
+        custom[job] = _as_str(custom_raw.get(job), "").strip()
+
+        if not custom[job]:
+            legacy_text = _legacy_photo_prompt_for_job(normalized, job) if job.endswith("_photo") else _legacy_video_prompt_for_job(normalized, job)
+            if legacy_text and legacy_text not in known:
+                custom[job] = legacy_text
+                styles[job] = "custom"
+
+    normalized["ai_description_styles"] = styles
+    normalized["ai_custom_descriptions"] = custom
+    return normalized
 
 
 def _normalize_string_list(value, default):
@@ -538,7 +763,7 @@ def _normalize_broadcast_channels(value, default):
     for channel, settings in list(normalized.items()):
         if not isinstance(settings, dict):
             settings = {}
-        mode = _as_str(settings.get("mode", fallback["mode"]), fallback["mode"]).strip().lower()
+        mode = _normalize_broadcast_mode_value(settings.get("mode", fallback["mode"]), fallback["mode"])
         if mode not in BROADCAST_MODES:
             mode = fallback["mode"]
         normalized[channel] = {
@@ -682,18 +907,13 @@ def _normalize_doorbell_trigger(value, default, side, config_data):
     if source not in {"ha_state", "mqtt", "webhook"}:
         source = default["source"]
 
-    camera_key = f"{side}_camera_id"
-    rtsp_key = "rtsp_back" if side == "back" else "rtsp_front"
-    mqtt_key = "back_doorbell_mqtt_topic" if side == "back" else "front_doorbell_mqtt_topic"
-    camera_id = _as_str(normalized.get("camera_id") or config_data.get(camera_key), "").strip()
-    rtsp_url = _as_str(normalized.get("rtsp_url") or config_data.get(rtsp_key), "").strip()
-    mqtt_topic = _as_str(normalized.get("mqtt_topic") or config_data.get(mqtt_key), "").strip()
-    if not rtsp_url:
-        rtsp_url = _derive_rtsp_url(config_data.get("ha_ip"), camera_id)
+    camera_id = _as_str(normalized.get("camera_id"), "").strip()
+    rtsp_url = _as_str(normalized.get("rtsp_url"), "").strip()
+    mqtt_topic = _as_str(normalized.get("mqtt_topic"), "").strip()
 
     return {
         **normalized,
-        "enabled": _as_bool(normalized.get("enabled"), bool(rtsp_url or camera_id)),
+        "enabled": _as_bool(normalized.get("enabled"), bool(rtsp_url)),
         "source": source,
         "trigger_entity_id": _as_str(normalized.get("trigger_entity_id"), "").strip(),
         "active_states": _normalize_active_states(normalized.get("active_states"), default["active_states"]),
@@ -709,6 +929,31 @@ def _normalize_doorbell_triggers(value, default, config_data):
         "front": _normalize_doorbell_trigger(raw.get("front"), default["front"], "front", config_data),
         "back": _normalize_doorbell_trigger(raw.get("back"), default["back"], "back", config_data),
     }
+
+
+def _normalize_doorbell_video_analysis(value, default):
+    raw = value if isinstance(value, dict) else {}
+    normalized = _deep_merge(default, raw)
+    mode = _as_str(normalized.get("mode"), default["mode"]).strip().lower()
+    if mode not in {"fast", "smart", "detailed", "manual"}:
+        mode = default["mode"]
+    normalized["mode"] = mode
+    normalized["model"] = _as_str(normalized.get("model"), default["model"]).strip() or default["model"]
+    normalized["smart_clip_seconds"] = min(8, _as_int(normalized.get("smart_clip_seconds"), default["smart_clip_seconds"], minimum=2))
+    normalized["detailed_clip_seconds"] = min(10, _as_int(normalized.get("detailed_clip_seconds"), default["detailed_clip_seconds"], minimum=2))
+    max_manual = min(30, _as_int(normalized.get("max_manual_clip_seconds"), default["max_manual_clip_seconds"], minimum=5))
+    normalized["max_manual_clip_seconds"] = max_manual
+    normalized["manual_clip_seconds"] = min(
+        max_manual,
+        max(2, _as_int(normalized.get("manual_clip_seconds"), default["manual_clip_seconds"], minimum=2)),
+    )
+    normalized["fps"] = min(5, _as_int(normalized.get("fps"), default["fps"], minimum=1))
+    normalized["speak_followups"] = _as_bool(normalized.get("speak_followups"), default["speak_followups"])
+    normalized["smart_cooldown_seconds"] = min(
+        300,
+        _as_int(normalized.get("smart_cooldown_seconds"), default["smart_cooldown_seconds"], minimum=15),
+    )
+    return normalized
 
 
 def normalize_speaker_settings(config_data: dict):
@@ -752,12 +997,15 @@ def normalize_speaker_settings(config_data: dict):
 
 
 def validate_and_normalize_config(config_data):
-    """Merge user config with schema defaults, preserve unknown keys, and normalize known fields."""
+    """Merge user config with schema defaults and normalize known current-version fields."""
     defaults = get_default_config()
     if not isinstance(config_data, dict):
         config_data = {}
 
     normalized = _deep_merge(defaults, config_data)
+    # Current config is strict-schema: runtime/source markers and old unknown
+    # keys should not be written back into viper_config.json.
+    normalized = {key: normalized.get(key, deepcopy(default)) for key, default in defaults.items()}
     normalized["is_armed"] = _as_bool(normalized.get("is_armed"), defaults["is_armed"])
     normalized["active_prompt"] = _as_str(normalized.get("active_prompt"), defaults["active_prompt"]).strip() or defaults["active_prompt"]
     normalized["vision_engine"] = _as_str(normalized.get("vision_engine"), defaults["vision_engine"]).strip() or defaults["vision_engine"]
@@ -785,6 +1033,7 @@ def validate_and_normalize_config(config_data):
     normalized["google_tts_tld"] = _as_str(normalized.get("google_tts_tld"), defaults["google_tts_tld"]).strip() or defaults["google_tts_tld"]
     normalized["front_chime"] = _as_str(normalized.get("front_chime"), defaults["front_chime"]).strip()
     normalized["back_chime"] = _as_str(normalized.get("back_chime"), defaults["back_chime"]).strip()
+    normalized["global_mute"] = _as_bool(normalized.get("global_mute"), defaults["global_mute"])
     normalized["mute_local_pc"] = _as_bool(normalized.get("mute_local_pc"), defaults["mute_local_pc"])
     normalized["enable_alexa"] = _as_bool(normalized.get("enable_alexa"), defaults["enable_alexa"])
     normalized["ha_ip"] = _as_str(normalized.get("ha_ip"), defaults["ha_ip"]).strip() or defaults["ha_ip"]
@@ -805,11 +1054,22 @@ def validate_and_normalize_config(config_data):
     normalized["mqtt_port"] = _as_str(normalized.get("mqtt_port"), defaults["mqtt_port"]).strip() or defaults["mqtt_port"]
     normalized["mqtt_username"] = _as_str(normalized.get("mqtt_username"), defaults["mqtt_username"]).strip()
     normalized["mqtt_password"] = _as_str(normalized.get("mqtt_password"), defaults["mqtt_password"]).strip()
+    normalized["show_advanced_ring_mqtt"] = _as_bool(
+        normalized.get("show_advanced_ring_mqtt"),
+        defaults["show_advanced_ring_mqtt"],
+    )
     normalized["ha_listener_enabled"] = _as_bool(normalized.get("ha_listener_enabled"), defaults["ha_listener_enabled"])
+    normalized["ice_maker_switch_entity"] = _as_str(normalized.get("ice_maker_switch_entity"), defaults["ice_maker_switch_entity"]).strip() or defaults["ice_maker_switch_entity"]
+    normalized["ice_maker_keep_on_entity"] = _as_str(normalized.get("ice_maker_keep_on_entity"), defaults["ice_maker_keep_on_entity"]).strip() or defaults["ice_maker_keep_on_entity"]
+    normalized["ice_maker_counter_entity"] = _as_str(normalized.get("ice_maker_counter_entity"), defaults["ice_maker_counter_entity"]).strip() or defaults["ice_maker_counter_entity"]
     normalized["doorbell_triggers"] = _normalize_doorbell_triggers(
         normalized.get("doorbell_triggers"),
         defaults["doorbell_triggers"],
         normalized,
+    )
+    normalized["doorbell_video_analysis"] = _normalize_doorbell_video_analysis(
+        normalized.get("doorbell_video_analysis"),
+        defaults["doorbell_video_analysis"],
     )
     normalized["quiet_hours_enabled"] = _as_bool(normalized.get("quiet_hours_enabled"), defaults["quiet_hours_enabled"])
     normalized["quiet_hours_start"] = _normalize_time(normalized.get("quiet_hours_start"), defaults["quiet_hours_start"])
@@ -822,6 +1082,26 @@ def validate_and_normalize_config(config_data):
     normalized["prompts"] = _normalize_prompt_map(normalized.get("prompts"), defaults["prompts"])
     if normalized["active_prompt"] not in normalized["prompts"]:
         normalized["active_prompt"] = next(iter(normalized["prompts"]))
+    normalized["doorbell_prompt_profiles"] = _normalize_prompt_profiles(
+        normalized.get("doorbell_prompt_profiles"),
+        defaults["doorbell_prompt_profiles"],
+        normalized["prompts"],
+        ("front", "back"),
+    )
+    normalized["video_prompts"] = _normalize_prompt_map(normalized.get("video_prompts"), defaults["video_prompts"])
+    normalized["active_video_prompt"] = _as_str(
+        normalized.get("active_video_prompt"),
+        defaults["active_video_prompt"],
+    ).strip() or defaults["active_video_prompt"]
+    if normalized["active_video_prompt"] not in normalized["video_prompts"]:
+        normalized["active_video_prompt"] = next(iter(normalized["video_prompts"]))
+    normalized["doorbell_video_prompt_profiles"] = _normalize_prompt_profiles(
+        normalized.get("doorbell_video_prompt_profiles"),
+        defaults["doorbell_video_prompt_profiles"],
+        normalized["video_prompts"],
+        ("manual", "smart", "detailed"),
+    )
+    normalized = _normalize_ai_descriptions(normalized, defaults)
     normalized["cinderella_messages"] = _normalize_cinderella_messages(normalized.get("cinderella_messages"), defaults["cinderella_messages"])
     return normalize_speaker_settings(normalized)
 
@@ -850,13 +1130,71 @@ def load_config():
     with _config_cache_lock:
         if _config_cache is not None:
             return deepcopy(_config_cache)
-        _config_cache = validate_and_normalize_config(read_config_file())
+        raw = read_config_file()
+        normalized = validate_and_normalize_config(raw)
+        protected = protect_config_secrets(normalized)
+        if protected != raw:
+            try:
+                write_config_file(protected)
+            except Exception:
+                logging.warning("Could not write normalized current-version config.", exc_info=True)
+        _config_cache = protected
         return deepcopy(_config_cache)
 
 
 def read_config():
     """Public safe-read helper. Kept separate from load_config for newer callers."""
     return load_config()
+
+
+def _secret_from_env(name):
+    env_name = SECRET_ENV_VARS.get(name, "")
+    return (os.getenv(env_name, "") if env_name else "").strip()
+
+
+def get_secret_value(name, config_data=None, *, include_env=True):
+    """Resolve a secret without requiring it to live in viper_config.json."""
+    original_data = config_data if isinstance(config_data, dict) else {}
+    if config_data is None:
+        try:
+            original_data = json.loads(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
+        except Exception:
+            original_data = {}
+    data = validate_and_normalize_config(config_data) if config_data is not None else load_config()
+    if include_env:
+        env_value = _secret_from_env(name)
+        if env_value:
+            return env_value
+    stored = viper_secrets.get_secret(name)
+    if stored:
+        return stored
+    return data.get(name) or ""
+
+
+def protect_config_secrets(config_data):
+    """Move plain config secrets into Windows Credential Manager when possible."""
+    protected = deepcopy(config_data)
+    for name in SECRET_ENV_VARS:
+        value = (protected.get(name) or "").strip()
+        if not value:
+            continue
+        if viper_secrets.set_secret(name, value):
+            protected[name] = ""
+    return protected
+
+
+def secret_storage_status(config_data=None):
+    data = validate_and_normalize_config(config_data) if config_data is not None else load_config()
+    status = viper_secrets.storage_status()
+    status["config_plaintext"] = {
+        name: bool((data.get(name) or "").strip())
+        for name in SECRET_ENV_VARS
+    }
+    status["environment"] = {
+        name: bool(_secret_from_env(name))
+        for name in SECRET_ENV_VARS
+    }
+    return status
 
 
 def get_ha_settings(config_data=None, *, include_env=True):
@@ -866,12 +1204,12 @@ def get_ha_settings(config_data=None, *, include_env=True):
         return {
             "ha_ip": data.get("ha_ip") or "",
             "ha_port": data.get("ha_port") or "8123",
-            "ha_token": data.get("ha_token") or "",
+            "ha_token": get_secret_value("ha_token", data, include_env=False),
         }
     return {
         "ha_ip": data.get("ha_ip") or HA_IP,
         "ha_port": data.get("ha_port") or HA_PORT,
-        "ha_token": data.get("ha_token") or HA_TOKEN,
+        "ha_token": get_secret_value("ha_token", data, include_env=True),
     }
 
 
@@ -879,16 +1217,18 @@ def get_api_settings(config_data=None, *, include_env=True):
     """Return Gemini and Pushover settings. Pushover is optional."""
     data = validate_and_normalize_config(config_data) if config_data is not None else load_config()
     if not include_env:
+        user_key = get_secret_value("pushover_user_key", data, include_env=False)
+        api_token = get_secret_value("pushover_api_token", data, include_env=False)
         return {
-            "gemini_api_key": data.get("gemini_api_key") or "",
-            "pushover_enabled": bool(data.get("pushover_enabled")),
-            "pushover_user_key": data.get("pushover_user_key") or "",
-            "pushover_api_token": data.get("pushover_api_token") or "",
+            "gemini_api_key": get_secret_value("gemini_api_key", data, include_env=False),
+            "pushover_enabled": bool(data.get("pushover_enabled") or (user_key and api_token)),
+            "pushover_user_key": user_key,
+            "pushover_api_token": api_token,
         }
-    user_key = data.get("pushover_user_key") or PUSHOVER_USER_KEY or ""
-    api_token = data.get("pushover_api_token") or PUSHOVER_API_TOKEN or ""
+    user_key = get_secret_value("pushover_user_key", data, include_env=True)
+    api_token = get_secret_value("pushover_api_token", data, include_env=True)
     return {
-        "gemini_api_key": data.get("gemini_api_key") or GEMINI_API_KEY or "",
+        "gemini_api_key": get_secret_value("gemini_api_key", data, include_env=True),
         "pushover_enabled": bool(data.get("pushover_enabled") or (user_key and api_token)),
         "pushover_user_key": user_key,
         "pushover_api_token": api_token,
@@ -919,6 +1259,12 @@ def get_resolved_doorbell_settings(config_data=None, *, include_env=True):
       RTSP: saved URL -> env URL -> HA host + camera ID -> blank
       MQTT topic: saved topic -> env topic -> Ring root + camera ID -> blank
     """
+    original_data = config_data if isinstance(config_data, dict) else {}
+    if config_data is None:
+        try:
+            original_data = json.loads(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
+        except Exception:
+            original_data = {}
     data = validate_and_normalize_config(config_data) if config_data is not None else load_config()
     ha_settings = get_ha_settings(data, include_env=include_env)
     ha_ip = ha_settings.get("ha_ip") or ""
@@ -934,18 +1280,30 @@ def get_resolved_doorbell_settings(config_data=None, *, include_env=True):
     triggers = data.get("doorbell_triggers") if isinstance(data.get("doorbell_triggers"), dict) else {}
     front_trigger = triggers.get("front") if isinstance(triggers.get("front"), dict) else {}
     back_trigger = triggers.get("back") if isinstance(triggers.get("back"), dict) else {}
+    original_triggers = original_data.get("doorbell_triggers") if isinstance(original_data.get("doorbell_triggers"), dict) else {}
+    original_front_trigger = original_triggers.get("front") if isinstance(original_triggers.get("front"), dict) else {}
+    original_back_trigger = original_triggers.get("back") if isinstance(original_triggers.get("back"), dict) else {}
+
+    configured_rtsp_front = (
+        original_front_trigger.get("rtsp_url")
+        or original_data.get("rtsp_front")
+        or env_rtsp_front
+        or ""
+    )
+    configured_rtsp_back = (
+        original_back_trigger.get("rtsp_url")
+        or original_data.get("rtsp_back")
+        or env_rtsp_back
+        or ""
+    )
 
     resolved_rtsp_front = (
-        front_trigger.get("rtsp_url")
-        or data.get("rtsp_front")
-        or env_rtsp_front
+        configured_rtsp_front
         or _derive_rtsp_url(ha_ip, front_camera_id)
         or ""
     )
     resolved_rtsp_back = (
-        back_trigger.get("rtsp_url")
-        or data.get("rtsp_back")
-        or env_rtsp_back
+        configured_rtsp_back
         or _derive_rtsp_url(ha_ip, back_camera_id)
         or ""
     )
@@ -967,6 +1325,8 @@ def get_resolved_doorbell_settings(config_data=None, *, include_env=True):
     return {
         "rtsp_front": resolved_rtsp_front,
         "rtsp_back": resolved_rtsp_back,
+        "configured_rtsp_front": configured_rtsp_front,
+        "configured_rtsp_back": configured_rtsp_back,
         "front_doorbell_mqtt_topic": resolved_front_topic,
         "back_doorbell_mqtt_topic": resolved_back_topic,
         "front_camera_id": front_camera_id or "",
@@ -975,7 +1335,7 @@ def get_resolved_doorbell_settings(config_data=None, *, include_env=True):
         "mqtt_host": data.get("mqtt_host") or (ha_ip if include_env else "") or "",
         "mqtt_port": data.get("mqtt_port") or "1883",
         "mqtt_username": data.get("mqtt_username") or "",
-        "mqtt_password": data.get("mqtt_password") or "",
+        "mqtt_password": get_secret_value("mqtt_password", data, include_env=include_env),
         "raw_rtsp_front": data.get("rtsp_front") or "",
         "raw_rtsp_back": data.get("rtsp_back") or "",
         "front_trigger_entity_id": front_trigger.get("trigger_entity_id", ""),
@@ -999,9 +1359,170 @@ def get_doorbell_settings(config_data=None, *, include_env=True):
     return get_resolved_doorbell_settings(config_data, include_env=include_env)
 
 
+def get_doorbell_photo_prompt(config_data=None, side="front"):
+    job = "back_photo" if side == "back" else "front_photo"
+    location = "back door" if side == "back" else "front door"
+    return get_ai_description_prompt(config_data, job, side=side, location=location)
+
+
+def get_doorbell_video_prompt(config_data=None, mode="manual", **context):
+    mode_key = (mode or "manual").strip().lower()
+    job = {
+        "smart": "smart_video",
+        "detailed": "detailed_video",
+    }.get(mode_key, "manual_video")
+    return get_ai_description_prompt(config_data, job, **context)
+
+
+def get_ai_description_prompt(config_data=None, job="front_photo", **context):
+    data = validate_and_normalize_config(config_data) if config_data is not None else load_config()
+    job = job if job in AI_DESCRIPTION_JOBS else "front_photo"
+    styles = data.get("ai_description_styles", {})
+    custom = data.get("ai_custom_descriptions", {})
+    style = styles.get(job, DEFAULT_AI_DESCRIPTION_STYLES.get(job, "balanced"))
+    if style == "custom":
+        template = custom.get(job, "").strip()
+        if not template:
+            style = DEFAULT_AI_DESCRIPTION_STYLES.get(job, "balanced")
+    if style != "custom":
+        kind = "photo" if job.endswith("_photo") else "video"
+        template = AI_DESCRIPTION_STYLE_PROMPTS.get(style, AI_DESCRIPTION_STYLE_PROMPTS["balanced"])[kind]
+    safe_context = {
+        "location": context.get("location") or "the door",
+        "first_description": context.get("first_description") or "",
+        "side": context.get("side") or "",
+    }
+    try:
+        return template.format(**safe_context)
+    except Exception:
+        return template
+
+
+def get_speaker_settings(config_data=None, *, include_env=True):
+    """Return normalized speaker routing and quiet-hours settings.
+
+    This is the public read path for speaker UI and diagnostics. It keeps the
+    raw config shape intact for compatibility, but callers get predictable
+    speaker dictionaries and useful counts.
+    """
+    data = validate_and_normalize_config(config_data) if config_data is not None else load_config()
+    speakers = deepcopy(data.get("speakers") if isinstance(data.get("speakers"), dict) else {})
+    enabled = {
+        name: speaker
+        for name, speaker in speakers.items()
+        if isinstance(speaker, dict) and speaker.get("enabled", True)
+    }
+    return {
+        "speakers": speakers,
+        "enabled_speakers": enabled,
+        "speaker_count": len(speakers),
+        "enabled_count": len(enabled),
+        "quiet_hours_enabled": bool(data.get("quiet_hours_enabled", False)),
+        "quiet_hours_start": data.get("quiet_hours_start") or "22:00",
+        "quiet_hours_end": data.get("quiet_hours_end") or "07:00",
+        "routes": {
+            "doorbell": [name for name, speaker in enabled.items() if speaker.get("doorbell", True)],
+            "utilities": [name for name, speaker in enabled.items() if speaker.get("utilities", True)],
+            "fridge": [name for name, speaker in enabled.items() if speaker.get("fridge", True)],
+            "quiet_hours_exempt": [name for name, speaker in enabled.items() if speaker.get("quiet_hours_exempt", False)],
+        },
+    }
+
+
+def get_audio_settings(config_data=None, *, include_env=True):
+    """Return normalized TTS, chime, and speaker-routing settings."""
+    data = validate_and_normalize_config(config_data) if config_data is not None else load_config()
+    api = get_api_settings(data, include_env=include_env)
+    speaker = get_speaker_settings(data, include_env=include_env)
+    tts_defaults = deepcopy(data.get("tts_defaults", {}))
+    tts_alerts = deepcopy(data.get("tts_alerts", {}))
+    effective_alerts = {}
+    for category in TTS_PROFILE_CATEGORIES:
+        alert = deepcopy(tts_alerts.get(category, {}))
+        effective = deepcopy(tts_defaults)
+        if alert.get("use_defaults", True):
+            # Keep category-specific speed/mood useful while inheriting engine
+            # and voice parameters from the default profile.
+            for key in ("speed", "dynamic_mood"):
+                if key in alert:
+                    effective[key] = alert[key]
+        else:
+            effective.update({k: v for k, v in alert.items() if k != "use_defaults"})
+        effective_alerts[category] = effective
+    return {
+        "tts_engine": data.get("tts_engine"),
+        "tts_simple": deepcopy(data.get("tts_simple", {})),
+        "tts_defaults": tts_defaults,
+        "tts_alerts": tts_alerts,
+        "effective_tts_alerts": effective_alerts,
+        "tts_profiles": deepcopy(data.get("tts_profiles", {})),
+        "edge_tts_voice": data.get("edge_tts_voice"),
+        "gemini_tts_voice": data.get("gemini_tts_voice"),
+        "gemini_tts_model": data.get("gemini_tts_model"),
+        "gemini_tts_keep_warm": bool(data.get("gemini_tts_keep_warm", False)),
+        "gemini_tts_heartbeat_seconds": data.get("gemini_tts_heartbeat_seconds"),
+        "gemini_tts_min_interval_seconds": data.get("gemini_tts_min_interval_seconds"),
+        "google_tts_tld": data.get("google_tts_tld"),
+        "local_voice_index": data.get("local_voice_index"),
+        "front_chime": data.get("front_chime") or "",
+        "back_chime": data.get("back_chime") or "",
+        "global_mute": bool(data.get("global_mute", False)),
+        "mute_local_pc": bool(data.get("mute_local_pc", False)),
+        "enable_alexa": bool(data.get("enable_alexa", False)),
+        "gemini_api_key_configured": bool(api.get("gemini_api_key")),
+        "speakers": speaker,
+    }
+
+
+def get_fridge_settings(config_data=None, *, include_env=True):
+    """Return normalized refrigerator, freezer, and ice-maker settings."""
+    data = validate_and_normalize_config(config_data) if config_data is not None else load_config()
+    channels = deepcopy(data.get("broadcast_channels") if isinstance(data.get("broadcast_channels"), dict) else {})
+    return {
+        "channels": channels,
+        "fridge_open": deepcopy(channels.get("fridge_open", {})),
+        "fridge_closed": deepcopy(channels.get("fridge_closed", {})),
+        "freezer_open": deepcopy(channels.get("freezer_open", {})),
+        "freezer_closed": deepcopy(channels.get("freezer_closed", {})),
+        "default_channel": deepcopy(channels.get("default", {})),
+        "ice_maker_switch_entity": data.get("ice_maker_switch_entity") or ICE_MAKER_SWITCH_ENTITY,
+        "ice_maker_keep_on_entity": data.get("ice_maker_keep_on_entity") or ICE_MAKER_KEEP_ON_ENTITY,
+        "ice_maker_counter_entity": data.get("ice_maker_counter_entity") or ICE_MAKER_COUNTER_ENTITY,
+    }
+
+
+def get_vacuum_settings(config_data=None, *, include_env=True):
+    """Return normalized Roborock/Cinderella settings."""
+    data = validate_and_normalize_config(config_data) if config_data is not None else load_config()
+    return {
+        "enabled": bool(data.get("cinderella_enabled", True)),
+        "ai_mode": bool(data.get("cinderella_ai_mode", False)),
+        "ai_prompt": data.get("cinderella_ai_prompt") or "",
+        "messages": deepcopy(data.get("cinderella_messages", {})),
+        "rooms": deepcopy(data.get("vacuum_rooms", {})),
+        "vacuum_error_codes": list(ROBOROCK_VACUUM_ERROR_CODES),
+        "dock_error_codes": list(ROBOROCK_DOCK_ERROR_CODES),
+    }
+
+
+def get_runtime_settings(config_data=None, *, include_env=True):
+    """Return the product-area settings bundle used by UI and diagnostics."""
+    data = validate_and_normalize_config(config_data) if config_data is not None else load_config()
+    return {
+        "home_assistant": get_ha_settings(data, include_env=include_env),
+        "api": get_api_settings(data, include_env=include_env),
+        "doorbell": get_doorbell_settings(data, include_env=include_env),
+        "audio": get_audio_settings(data, include_env=include_env),
+        "speakers": get_speaker_settings(data, include_env=include_env),
+        "fridge": get_fridge_settings(data, include_env=include_env),
+        "vacuum": get_vacuum_settings(data, include_env=include_env),
+    }
+
+
 def write_config_file(config_data: dict, path=CONFIG_FILE):
     """Validate and atomically write config to disk. Returns the normalized config."""
     normalized = validate_and_normalize_config(config_data)
+    normalized = protect_config_secrets(normalized)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
         prefix=f"{path.stem}_",
@@ -1040,6 +1561,7 @@ def save_config(config_data):
     """Update in-memory cache immediately, flush latest version to disk in the background."""
     global _config_cache, _config_write_version
     config_data = validate_and_normalize_config(config_data)
+    config_data = protect_config_secrets(config_data)
     with _config_cache_lock:
         _config_cache = deepcopy(config_data)
     with _config_write_lock:
@@ -1057,6 +1579,7 @@ def write_config(config_data):
     """Synchronously validate, atomically write, update cache, and sync globals."""
     global _config_cache, _config_write_version
     config_data = validate_and_normalize_config(config_data)
+    config_data = protect_config_secrets(config_data)
     with _config_write_lock:
         _config_write_version += 1
         config_data = write_config_file(config_data)
@@ -1103,8 +1626,8 @@ def sync_globals_from_config():
             data = load_config()
             HA_IP = data.get("ha_ip") or HA_IP
             HA_PORT = data.get("ha_port") or HA_PORT
-            HA_TOKEN = data.get("ha_token") or HA_TOKEN
-            GEMINI_API_KEY = data.get("gemini_api_key") or GEMINI_API_KEY
+            HA_TOKEN = get_secret_value("ha_token", data, include_env=True) or HA_TOKEN
+            GEMINI_API_KEY = get_secret_value("gemini_api_key", data, include_env=True) or GEMINI_API_KEY
             doorbell = get_resolved_doorbell_settings(data, include_env=True)
             FRONT_CAMERA_ID = doorbell.get("front_camera_id") or FRONT_CAMERA_ID
             BACK_CAMERA_ID = doorbell.get("back_camera_id") or BACK_CAMERA_ID
@@ -1112,8 +1635,8 @@ def sync_globals_from_config():
             RTSP_FRONT = doorbell.get("rtsp_front") or ""
             RTSP_BACK = doorbell.get("rtsp_back") or ""
             if data.get("pushover_enabled"):
-                PUSHOVER_USER_KEY = data.get("pushover_user_key") or PUSHOVER_USER_KEY
-                PUSHOVER_API_TOKEN = data.get("pushover_api_token") or PUSHOVER_API_TOKEN
+                PUSHOVER_USER_KEY = get_secret_value("pushover_user_key", data, include_env=True) or PUSHOVER_USER_KEY
+                PUSHOVER_API_TOKEN = get_secret_value("pushover_api_token", data, include_env=True) or PUSHOVER_API_TOKEN
             else:
                 PUSHOVER_USER_KEY = ""
                 PUSHOVER_API_TOKEN = ""

@@ -13,72 +13,38 @@
     <p><a href="index.html">Back to help index</a></p>
   </header>
   <main id="main">
-    <h2>What This Is For</h2>
-    <p>Viper has a local remote web page for broadcasts, speaker controls, Cinderella messages, and quick status checks. Tailscale lets you open that page from your own phone or laptop when you are away from home, without opening a router port to the public internet.</p>
+    <h2>What This Is</h2>
+    <p>Viper has a remote web page for broadcasts, speaker controls, robot messages, and quick checks. Tailscale lets your own phone or laptop open that page without exposing Viper to the public internet.</p>
 
-    <h2>Recommended Security Choice</h2>
-    <p>Use normal Tailscale private access. Do not use Tailscale Funnel for Viper unless you intentionally want to publish the Viper web page outside your private tailnet.</p>
+    <h2>Do This After Local Setup Works</h2>
+    <p>Set up doorbells and speakers locally first. Add Tailscale after Viper works on the home network.</p>
 
-    <h2>Install Tailscale On The Viper Computer</h2>
+    <h2>Step By Step</h2>
     <ol>
-      <li>On the Windows computer running Viper, open the official Tailscale Windows install page.</li>
-      <li>Install Tailscale.</li>
+      <li>Install Tailscale on the Windows computer running Viper.</li>
       <li>Sign in to Tailscale.</li>
-      <li>Confirm the computer appears in your Tailscale admin console or Tailscale app.</li>
-      <li>Leave Viper running.</li>
+      <li>Install Tailscale on your phone, tablet, or remote computer.</li>
+      <li>Sign in with the same Tailscale account, or share the Viper computer to that user.</li>
+      <li>On the Viper computer, open <code>http://127.0.0.1:5050/remote</code>. Confirm it works locally.</li>
+      <li>Find the Viper computer's Tailscale IP. It usually starts with <code>100.</code>.</li>
+      <li>On the remote device, open <code>http://TAILSCALE_IP:5050/remote</code>.</li>
     </ol>
 
-    <h2>Install Tailscale On The Remote Device</h2>
-    <ol>
-      <li>Install Tailscale on the phone, tablet, or laptop you want to use remotely.</li>
-      <li>Sign in with the same Tailscale account, or accept a machine sharing invitation from the Viper computer's tailnet.</li>
-      <li>Confirm the remote device shows as connected.</li>
-    </ol>
-
-    <h2>Find The Viper Computer's Tailscale Address</h2>
-    <p>On the Viper computer, open the Tailscale app and find its Tailscale IP address. It usually starts with <code>100.</code>. You can also use the machine name if MagicDNS is enabled.</p>
-
-    <h2>Open The Remote Page</h2>
-    <p>From the remote device, open one of these addresses:</p>
-    <pre><code>http://TAILSCALE_IP:5050/remote
-http://MACHINE-NAME:5050/remote</code></pre>
-    <p>Replace <code>TAILSCALE_IP</code> with the Viper computer's Tailscale IP. Replace <code>MACHINE-NAME</code> with the Viper computer's Tailscale name if MagicDNS works in your tailnet.</p>
-
-    <h2>Test Checklist</h2>
-    <ol>
-      <li>Open Viper locally on the Windows computer.</li>
-      <li>Open <code>http://127.0.0.1:5050/remote</code> on the Viper computer.</li>
-      <li>If local access works, open <code>http://TAILSCALE_IP:5050/remote</code> from the remote device.</li>
-      <li>Send a short manual broadcast.</li>
-      <li>Check that the expected speaker or chime responds.</li>
-    </ol>
+    <h2>Security Recommendation</h2>
+    <p>Use normal private Tailscale access. Do not use Tailscale Funnel for Viper unless you understand that Funnel can expose a service outside your private tailnet.</p>
 
     <h2>If It Does Not Open</h2>
     <ul>
       <li>Make sure Viper is running.</li>
-      <li>Make sure both devices are connected in Tailscale.</li>
-      <li>Try the Tailscale IP instead of the machine name.</li>
-      <li>Try the local page on the Viper computer: <code>http://127.0.0.1:5050/remote</code>.</li>
-      <li>Check Windows Firewall. Allow Python or Viper Vision to accept private network connections.</li>
-      <li>Do not use <code>https</code> unless you have separately configured a proxy or Tailscale Serve. Viper's built-in web server uses <code>http</code>.</li>
-    </ul>
-
-    <h2>Sharing With Another Person</h2>
-    <p>If another person needs access, share only the Viper computer through Tailscale. Tailscale machine sharing gives the other person access to the shared computer, not your whole tailnet.</p>
-
-    <h2>Funnel And Serve</h2>
-    <p>Tailscale Serve can publish a local service inside your private tailnet. Tailscale Funnel can publish a service to the public internet. For Viper, private tailnet access is the safer default. Use Funnel only if you understand the exposure and have a separate access-control plan.</p>
-
-    <h2>Official Links</h2>
-    <ul>
-      <li><a href="https://tailscale.com/docs/install/windows">Install Tailscale on Windows</a></li>
-      <li><a href="https://tailscale.com/kb/1084/sharing">Share a machine with another user</a></li>
-      <li><a href="https://tailscale.com/kb/1223/funnel">Tailscale Funnel and Serve</a></li>
+      <li>Make sure both devices show connected in Tailscale.</li>
+      <li>Try the Tailscale IP instead of the computer name.</li>
+      <li>Check Windows Firewall and allow Viper or Python on private networks.</li>
+      <li>Use <code>http</code>, not <code>https</code>, unless you configured a proxy separately.</li>
     </ul>
 
     <nav class="topic-nav" aria-label="Previous and next help topics">
-      <p><a href="ha-install.html">Previous: Installing Home Assistant For Viper</a></p>
-      <p><a href="ring-setup.html">Next: Ring, RTSP, Mosquitto, and ring-mqtt</a></p>
+      <p><a href="ha-install.html">Previous: Installing Home Assistant</a></p>
+      <p><a href="ring-setup.html">Next: Ring Doorbells And Live Video</a></p>
     </nav>
   </main>
 </body>

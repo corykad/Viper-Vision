@@ -223,28 +223,33 @@
         <h1>Viper Vision Remote</h1>
         <nav aria-label="Remote sections">
             <ul>
-                <li><a href="#status-heading">System status</a></li>
-                <li><a href="#vacuum-heading">Vacuum controls</a></li>
-                <li><a href="#speakers-heading">Speaker targets</a></li>
-                <li><a href="#prompt-heading">AI profile manager</a></li>
-                <li><a href="#utils-heading">System utilities</a></li>
+                <li><a href="#dashboard-heading">Dashboard</a></li>
+                <li><a href="#setup-status-heading">Setup Status</a></li>
+                <li><a href="#doorbell-heading">Doorbell Vision</a></li>
+                <li><a href="#speakers-heading">Speakers &amp; Audio</a></li>
+                <li><a href="#broadcast-heading">Manual Broadcast</a></li>
+                <li><a href="#fridge-heading">Refrigerator &amp; Ice</a></li>
+                <li><a href="#vacuum-heading">Robot Vacuum</a></li>
+                <li><a href="#cinderella-studio-heading">Robot Messages</a></li>
                 <li><a href="#diagnostics-heading">Diagnostics</a></li>
-                <li><a href="#fridge-heading">Fridge and freezer</a></li>
-                <li><a href="#broadcast-heading">Broadcast message</a></li>
-                <li><a href="#cinderella-studio-heading">Cinderella messages</a></li>
-                <li><a href="#activity-heading">Recent activity</a></li>
+                <li><a href="#scan-heading">Advanced Discovery</a></li>
+                <li><a href="#activity-heading">Recent Activity</a></li>
             </ul>
         </nav>
     </header>
 
     <main id="main-content">
 
-        <!-- ── System Status ─────────────────────────────────────────────── -->
-        <section aria-labelledby="status-heading">
-            <h2 id="status-heading">System Status</h2>
+        <!-- ── Dashboard ─────────────────────────────────────────────────── -->
+        <section aria-labelledby="dashboard-heading">
+            <h2 id="dashboard-heading">Dashboard</h2>
             <p>
                 Status:
                 <strong id="arm-status-text">{{ "ARMED" if config.is_armed else "DISARMED" }}</strong>
+            </p>
+            <p>
+                Global mute:
+                <strong id="global-mute-status-text">{{ "ON" if config.get('global_mute', False) else "OFF" }}</strong>
             </p>
             <form action="{{ url_for('web_toggle_arm') }}" method="post">
                 <button
@@ -255,11 +260,164 @@
                     {{ "DISARM SYSTEM" if config.is_armed else "ARM SYSTEM" }}
                 </button>
             </form>
+            <form action="{{ url_for('web_toggle_global_mute') }}" method="post">
+                <input type="hidden" name="global_mute" value="{{ '0' if config.get('global_mute', False) else '1' }}">
+                <button
+                    type="submit"
+                    class="{{ 'danger' if not config.get('global_mute', False) else 'secondary' }}"
+                    aria-describedby="global-mute-status-text"
+                >
+                    {{ "Turn Off Global Mute" if config.get('global_mute', False) else "Turn On Global Mute" }}
+                </button>
+            </form>
+            <p class="field-hint">
+                Global mute logs activity but suppresses Viper chimes, speech, speaker tests, broadcasts, doorbell audio, and status speech.
+            </p>
+        </section>
+
+        <section aria-labelledby="setup-status-heading">
+            <h2 id="setup-status-heading">Setup Status</h2>
+            <p class="field-hint">
+                This is the same PASS/FIX setup summary used by the desktop setup screen. The remote page can refresh status, run the safe smoke test, restore skipped optional items, and create a support bundle.
+            </p>
+            <h3>Next Action</h3>
+            <pre style="white-space: pre-wrap; background:#f8f9fa; border:1px solid #ddd; border-radius:6px; padding:12px;">{{ setup_status_summary }}</pre>
+            <h3>Full Setup Checklist</h3>
+            <pre style="white-space: pre-wrap; background:#f8f9fa; border:1px solid #ddd; border-radius:6px; padding:12px; max-height: 360px; overflow:auto;">{{ setup_checklist_summary }}</pre>
+            {% if setup_smoke_report %}
+            <h3>Latest Safe Smoke Test</h3>
+            <pre style="white-space: pre-wrap; background:#f8f9fa; border:1px solid #ddd; border-radius:6px; padding:12px;">{{ setup_smoke_report }}</pre>
+            {% endif %}
+            <div class="button-grid" role="group" aria-label="Setup status actions">
+                <form action="{{ url_for('remote_ui') }}" method="get">
+                    <button type="submit" class="secondary">Refresh Setup Status</button>
+                </form>
+                <form action="{{ url_for('web_setup_smoke') }}" method="post">
+                    <button type="submit">Run Safe Setup Smoke Test</button>
+                </form>
+                <form action="{{ url_for('web_restore_optional_setup') }}" method="post">
+                    <button type="submit" class="secondary">Restore Optional Items</button>
+                </form>
+                <form action="{{ url_for('web_support_bundle') }}" method="post">
+                    <button type="submit" class="secondary">Create Support Bundle</button>
+                </form>
+            </div>
+        </section>
+
+        <!-- ── Doorbell Vision ───────────────────────────────────────────── -->
+        <section aria-labelledby="doorbell-heading">
+            <h2 id="doorbell-heading">Doorbell Vision</h2>
+            <p class="field-hint">
+                Review the front and back doorbell setup Viper is using, then test or save the instant chime sounds.
+                Full Home Assistant and Ring-MQTT setup is handled in the desktop wizard.
+            </p>
+
+            {% set doorbell_cfg = config.get('doorbell_triggers', {}) %}
+            {% set front_door = doorbell_cfg.get('front', {}) %}
+            {% set back_door = doorbell_cfg.get('back', {}) %}
+            <ul class="status-list" aria-label="Doorbell Vision status">
+                <li>Front door enabled: {{ 'Yes' if front_door.get('enabled', True) else 'No' }}</li>
+                <li>Front trigger entity: {{ front_door.get('trigger_entity_id') or config.get('ring_front_binary_sensor') or 'Not configured' }}</li>
+                <li>Front live RTSP URL: {{ front_door.get('rtsp_url') or config.get('rtsp_front') or 'Not configured' }}</li>
+                <li>Back door enabled: {{ 'Yes' if back_door.get('enabled', True) else 'No' }}</li>
+                <li>Back trigger entity: {{ back_door.get('trigger_entity_id') or config.get('ring_back_binary_sensor') or 'Not configured' }}</li>
+                <li>Back live RTSP URL: {{ back_door.get('rtsp_url') or config.get('rtsp_back') or 'Not configured' }}</li>
+            </ul>
+
+            <form action="{{ url_for('web_save_chimes') }}" method="post">
+                <fieldset>
+                    <legend>Doorbell chimes</legend>
+                    <div class="channel-row">
+                        <div>
+                            <label for="front_chime">Front door chime</label>
+                            <select id="front_chime" name="front_chime">
+                                {% for chime in chimes %}
+                                <option value="{{ chime }}" {{ 'selected' if ((not config.get('front_chime') and chime == '(Default)') or config.get('front_chime') == chime) else '' }}>{{ chime }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="back_chime">Back door chime</label>
+                            <select id="back_chime" name="back_chime">
+                                {% for chime in chimes %}
+                                <option value="{{ chime }}" {{ 'selected' if ((not config.get('back_chime') and chime == '(Default)') or config.get('back_chime') == chime) else '' }}>{{ chime }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="button-grid">
+                        <button type="submit"
+                                class="secondary"
+                                formaction="{{ url_for('web_test_chime', door='front') }}"
+                                formmethod="post">
+                            Test Front Door Chime
+                        </button>
+                        <button type="submit"
+                                class="secondary"
+                                formaction="{{ url_for('web_test_chime', door='back') }}"
+                                formmethod="post">
+                            Test Back Door Chime
+                        </button>
+                        <button type="submit">Save Doorbell Chimes</button>
+                    </div>
+                </fieldset>
+            </form>
+
+            <form action="{{ url_for('web_save_doorbell_video_settings') }}" method="post">
+                <fieldset>
+                    <legend>Doorbell video analysis</legend>
+                    <p class="field-hint">
+                        Fast is still image only. Smart speaks the fast still image first and only sends a short video when the first answer is unclear.
+                        Detailed sends video after every doorbell alert. Manual sends video only when you press one of the analyze buttons below.
+                    </p>
+                    <label for="video_mode">Video analysis mode</label>
+                    <select id="video_mode" name="video_mode">
+                        {% for value, label in doorbell_video_modes.items() %}
+                        <option value="{{ value }}" {{ 'selected' if value == doorbell_video_settings.mode else '' }}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+
+                    <label for="manual_clip_seconds">Manual video length in seconds</label>
+                    <input
+                        id="manual_clip_seconds"
+                        name="manual_clip_seconds"
+                        type="number"
+                        min="2"
+                        max="{{ doorbell_video_settings.max_manual_clip_seconds }}"
+                        value="{{ doorbell_video_settings.manual_clip_seconds }}"
+                        aria-describedby="manual-video-hint"
+                    >
+                    <p id="manual-video-hint" class="field-hint">
+                        This only controls on-demand manual analysis. Smart mode stays strict: 3 seconds, 2 frames per second, and one follow-up per camera per minute.
+                    </p>
+                    <button type="submit">Save Doorbell Video Mode</button>
+                </fieldset>
+            </form>
+
+            <div class="button-grid" role="group" aria-label="Manual doorbell video analysis">
+                <form action="{{ url_for('web_analyze_doorbell_video', side='front') }}" method="post">
+                    <input type="hidden" name="manual_clip_seconds" value="{{ doorbell_video_settings.manual_clip_seconds }}">
+                    <button type="submit" class="secondary">Analyze Front Camera Video Now</button>
+                </form>
+                <form action="{{ url_for('web_analyze_doorbell_video', side='back') }}" method="post">
+                    <input type="hidden" name="manual_clip_seconds" value="{{ doorbell_video_settings.manual_clip_seconds }}">
+                    <button type="submit" class="secondary">Analyze Back Camera Video Now</button>
+                </form>
+            </div>
+
+            {% if last_video_analysis %}
+            <h3>Latest Video Analysis</h3>
+            <ul class="status-list" aria-label="Latest doorbell video analysis results">
+                {% for side, result in last_video_analysis.items() %}
+                <li>{{ side|title }} camera: {{ result.description }} Source {{ result.source }}. Elapsed {{ '%.1f'|format(result.elapsed) }} seconds.</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
         </section>
 
         <!-- ── Vacuum Controls ───────────────────────────────────────────── -->
         <section aria-labelledby="vacuum-heading">
-            <h2 id="vacuum-heading">Vacuum Controls</h2>
+            <h2 id="vacuum-heading">Robot Vacuum Controls</h2>
             <p class="field-hint">
                 Controls are sent through Home Assistant. Room cleaning uses Roborock map room IDs after you press Refresh room list.
             </p>
@@ -349,10 +507,8 @@
                         >
                         <button type="submit">Set {{ setting.label }}</button>
                         {% elif setting.domain == 'switch' %}
-                        <div class="button-grid" role="group" aria-label="{{ setting.label }} switch controls">
-                            <button type="submit" name="turn_on" value="1">Turn on {{ setting.label }}</button>
-                            <button type="submit" name="turn_on" value="0" class="secondary">Turn off {{ setting.label }}</button>
-                        </div>
+                        <input type="hidden" name="turn_on" value="{{ setting.turn_on }}">
+                        <button type="submit">{{ setting.button_label }} {{ setting.label }}</button>
                         {% endif %}
                     </form>
                 </div>
@@ -429,9 +585,10 @@
             {% endif %}
         </section>
 
-        <!-- ── Speaker Targets ───────────────────────────────────────────── -->
+        <!-- ── Speakers & Audio ──────────────────────────────────────────── -->
         <section aria-labelledby="speakers-heading">
-            <h2 id="speakers-heading">Speaker Targets</h2>
+            <h2 id="speakers-heading">Speakers &amp; Audio</h2>
+            <p class="field-hint">Choose which speakers Viper may use and what each speaker is allowed to play.</p>
 
             {% if config.speakers %}
             <ul role="list" aria-label="Configured speakers">
@@ -582,47 +739,9 @@
             </div>
         </section>
 
-        <!-- ── AI Profile Manager ─────────────────────────────────────────── -->
-        <section aria-labelledby="prompt-heading">
-            <h2 id="prompt-heading">AI Profile Manager</h2>
-
-            <!-- Profile switcher — explicit button so arrow keys don't
-                 accidentally fire mid-navigation -->
-            <form action="{{ url_for('web_switch_prompt') }}" method="post">
-                <fieldset>
-                    <legend class="sr-only">Switch active AI profile</legend>
-                    <label for="profile_select">Active profile:</label>
-                    <select id="profile_select" name="profile_name" aria-describedby="profile-hint">
-                        {% for p_name in config.prompts.keys() %}
-                        <option value="{{ p_name }}" {{ 'selected' if p_name == config.active_prompt else '' }}>{{ p_name }}</option>
-                        {% endfor %}
-                    </select>
-                    <p id="profile-hint" class="sr-only">Select a profile then press Switch Profile to activate it.</p>
-                    <button type="submit">Switch Profile</button>
-                </fieldset>
-            </form>
-
-            <!-- Prompt editor — label includes active profile name for context -->
-            <form action="{{ url_for('web_save_prompt') }}" method="post" style="margin-top: 15px;">
-                <fieldset>
-                    <legend class="sr-only">Edit prompt for {{ config.active_prompt }}</legend>
-                    <label for="prompt_text_area">
-                        Prompt text for <strong>{{ config.active_prompt }}</strong>:
-                    </label>
-                    <textarea
-                        id="prompt_text_area"
-                        name="prompt_text"
-                        aria-describedby="prompt-hint"
-                    >{{ config.prompts[config.active_prompt] }}</textarea>
-                    <p id="prompt-hint" class="sr-only">Edit the AI instruction text, then press Save Changes.</p>
-                    <button type="submit">Save Changes</button>
-                </fieldset>
-            </form>
-        </section>
-
-        <!-- ── System Utilities ───────────────────────────────────────────── -->
+        <!-- ── Diagnostics Quick Checks ──────────────────────────────────── -->
         <section aria-labelledby="utils-heading">
-            <h2 id="utils-heading">System Utilities</h2>
+            <h2 id="utils-heading">Diagnostics Quick Checks</h2>
             <p class="sr-only">Results will be announced through your speakers after pressing a button.</p>
             <div class="row">
                 <form action="{{ url_for('web_api_check') }}" method="post" style="flex: 1;">
@@ -643,6 +762,7 @@
         <section aria-labelledby="diagnostics-heading">
             <h2 id="diagnostics-heading">Diagnostics</h2>
             <p class="field-hint">Diagnostics stay local. Support bundles redact tokens, API keys, passwords, and Ring identifiers before writing the zip.</p>
+            <pre style="white-space: pre-wrap; background:#f8f9fa; border:1px solid #ddd; border-radius:6px; padding:12px;">{{ diagnostics_summary }}</pre>
             <div class="row">
                 <form action="{{ url_for('web_diagnostics') }}" method="get" style="flex: 1;">
                     <input type="hidden" name="check_ha" value="1">
@@ -676,9 +796,9 @@
             </form>
         </section>
 
-        <!-- ── Fridge & Freezer Channel Settings ──────────────────────────── -->
+        <!-- ── Refrigerator, Freezer, And Ice Maker ──────────────────────── -->
         <section aria-labelledby="fridge-heading">
-            <h2 id="fridge-heading">Fridge &amp; Freezer</h2>
+            <h2 id="fridge-heading">Refrigerator, Freezer, And Ice Maker</h2>
             <p class="field-hint">
                 Set what happens on speakers when each door event fires from Home Assistant.
                 <strong>Chime only</strong> plays the selected sound file with no speech.
@@ -737,12 +857,15 @@
                     {% endfor %}
 
 
-                    <div class="row" style="margin-top: 12px;">
-                        <form action="{{ url_for('web_ice_maker_on') }}" method="post" style="flex: 1;">
-                            <button type="submit">Turn Ice Maker On</button>
-                        </form>
-                        <form action="{{ url_for('web_ice_maker_off') }}" method="post" style="flex: 1;">
-                            <button type="submit" class="secondary">Turn Ice Maker Off</button>
+                    <div style="margin-top: 12px;">
+                        <p role="status" aria-live="polite">
+                            Ice maker: {{ ice_maker.get('summary', 'status unknown') }}
+                            Counter: {{ ice_maker.get('counter_text', 'not checked') }}.
+                        </p>
+                        <form action="{{ url_for('web_ice_maker_toggle') }}" method="post">
+                            <button type="submit" aria-label="{{ ice_maker.get('button_label', 'Turn Ice Maker On') }}">
+                                {{ ice_maker.get('button_label', 'Turn Ice Maker On') }}
+                            </button>
                         </form>
                     </div>
 
@@ -751,9 +874,9 @@
             </form>
         </section>
 
-        <!-- ── Broadcast Message ──────────────────────────────────────────── -->
+        <!-- ── Manual Broadcast ──────────────────────────────────────────── -->
         <section aria-labelledby="broadcast-heading">
-            <h2 id="broadcast-heading">Broadcast Message</h2>
+            <h2 id="broadcast-heading">Manual Broadcast</h2>
             <form action="{{ url_for('web_broadcast') }}" method="post">
                 <input type="hidden" name="channel" value="manual">
                 <label for="broadcast_text">Manual broadcast (always speaks on all speakers):</label>
@@ -768,9 +891,9 @@
             </form>
         </section>
 
-        <!-- ── Discovery Tools ────────────────────────────────────────────── -->
+        <!-- ── Advanced Discovery Tools ──────────────────────────────────── -->
         <section aria-labelledby="scan-heading">
-            <h2 id="scan-heading">Discovery Tools</h2>
+            <h2 id="scan-heading">Advanced Discovery Tools</h2>
             <p class="sr-only">Scan results appear as notifications and are announced through your speakers.</p>
             <div class="row">
                 <form action="{{ url_for('web_scan_sonos') }}" method="post" style="flex: 1;">
@@ -782,9 +905,9 @@
             </div>
         </section>
 
-        <!-- ── Cinderella Message Studio ──────────────────────────────────── -->
+        <!-- ── Robot Message Studio ──────────────────────────────────────── -->
         <section aria-labelledby="cinderella-studio-heading">
-            <h2 id="cinderella-studio-heading">Cinderella Message Studio</h2>
+            <h2 id="cinderella-studio-heading">Robot Message Studio</h2>
             <p class="studio-help">
                 One line equals one possible message. Viper picks randomly. Save each section separately.
                 Error templates may include <code>{error}</code> which is replaced with the actual error code.

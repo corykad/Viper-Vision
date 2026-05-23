@@ -344,7 +344,21 @@ def _get_cached_url(message: str, config: dict) -> str | None:
 def invalidate_phrase_cache():
 
     """Call this after saving a TTS engine/voice change so the cache rebuilds."""
-    threading.Thread(target=_build_phrase_cache, daemon=True).start()
+    global _phrase_cache_refresh_inflight
+    with _phrase_cache_lock:
+        if _phrase_cache_refresh_inflight:
+            return
+        _phrase_cache_refresh_inflight = True
+
+    def _refresh():
+        global _phrase_cache_refresh_inflight
+        try:
+            _build_phrase_cache()
+        finally:
+            with _phrase_cache_lock:
+                _phrase_cache_refresh_inflight = False
+
+    threading.Thread(target=_refresh, daemon=True).start()
 
 
 # ==========================================
@@ -501,11 +515,18 @@ def get_available_windows_voices():
     except Exception:
         return ["Default System Voice"]
 
+def _global_mute_enabled(config=None):
+    config = cfg.load_config() if config is None else config
+    return bool(config.get("global_mute", False))
+
 def speak_hd_pc(message):
     """Uses the specific voice index saved in config to speak on the physical PC."""
     def _run_speak():
         try:
             config = cfg.load_config()
+            if _global_mute_enabled(config):
+                logging.info("[GLOBAL MUTE] Skipping local PC speech.")
+                return
             if config.get("mute_local_pc", False):
                 return
             voice_idx = config.get("local_voice_index", 1)
@@ -870,6 +891,18 @@ def _safe_sonos_play(speaker, uri, tag="SONOS"):
         speaker.play_uri(uri)
         logging.info("[%s TIMING - %s] play_uri submitted in %.2fs", tag, speaker.ip_address, time.time() - started)
     except Exception as e:
+        message = str(e)
+        if "701" in message or "transition not available" in message.lower():
+            logging.warning("[%s RETRY - %s] Sonos transition was busy; stopping and retrying once.", tag, speaker.ip_address)
+            try:
+                speaker.stop()
+                time.sleep(0.25)
+                speaker.play_uri(uri)
+                logging.info("[%s TIMING - %s] retry play_uri submitted in %.2fs", tag, speaker.ip_address, time.time() - started)
+                return
+            except Exception as retry_error:
+                logging.error(f"[{tag} ERROR - {speaker.ip_address}]: retry failed after transition error: {retry_error}")
+                return
         logging.error(f"[{tag} ERROR - {speaker.ip_address}]: {e}")
 
 
@@ -1081,6 +1114,10 @@ def _chime_url(filename: str) -> str:
 
 def play_broadcast_chime(filename, channel="fridge"):
     """Play a fridge/freezer channel chime on speakers that allow that category."""
+    config = cfg.load_config()
+    if _global_mute_enabled(config):
+        logging.info("[GLOBAL MUTE] Skipping broadcast chime for channel=%r.", channel)
+        return
     if filename == "(Default)" or not filename:
         chime_url = "http://codeskulptor-demos.commondatastorage.googleapis.com/descent/gotitem.mp3"
     else:
@@ -1089,10 +1126,9 @@ def play_broadcast_chime(filename, channel="fridge"):
             logging.warning("[CHIME] Could not resolve broadcast chime: %r", filename)
             return
 
-    config = cfg.load_config()
     headers = _ha_auth_headers()
     context = {"channel": channel}
-    ha_targets, sonos_targets, _alexa_targets, _category, _quiet = _collect_targets_for_context(config, context)
+    ha_targets, sonos_targets, alexa_targets, _category, _quiet = _collect_targets_for_context(config, context)
 
     for ip in sonos_targets:
         try:
@@ -1103,8 +1139,14 @@ def play_broadcast_chime(filename, channel="fridge"):
 
     for entity in ha_targets:
         threading.Thread(target=_safe_ha_play, args=(entity, chime_url, headers), daemon=True).start()
+    for entity in alexa_targets:
+        threading.Thread(target=_safe_alexa_play, args=(entity, chime_url, headers), daemon=True).start()
 
 def test_specific_chime(filename, door_type):
+    config = cfg.load_config()
+    if _global_mute_enabled(config):
+        logging.info("[GLOBAL MUTE] Skipping test chime for door=%r.", door_type)
+        return
     if filename == "(Default)" or not filename:
         chime_url = "http://codeskulptor-demos.commondatastorage.googleapis.com/pang/pop.mp3" if door_type == "back" else "http://codeskulptor-demos.commondatastorage.googleapis.com/descent/gotitem.mp3"
     else:
@@ -1112,15 +1154,18 @@ def test_specific_chime(filename, door_type):
         if not chime_url:
             return
 
-    speakers = prep_sonos_speakers()
+    ha_targets, sonos_targets, alexa_targets, _category, _quiet = _collect_targets_for_context(
+        config,
+        {"channel": "doorbell", "event": "back" if str(door_type).lower() == "back" else "front"},
+    )
+    speakers = prep_sonos_speakers(target_ips=sonos_targets)
     for s in speakers:
         threading.Thread(target=_safe_sonos_play, args=(s, chime_url, "SONOS CHIME"), daemon=True).start()
 
-    cfg.sync_globals_from_config()
     headers = _ha_auth_headers()
-    for entity in cfg.TARGET_SPEAKERS:
+    for entity in ha_targets:
         threading.Thread(target=_safe_ha_play, args=(entity, chime_url, headers), daemon=True).start()
-    for entity in cfg.ALEXA_DEVICES:
+    for entity in alexa_targets:
         threading.Thread(target=_safe_alexa_play, args=(entity, chime_url, headers), daemon=True).start()
 
 
@@ -1128,6 +1173,9 @@ def test_specific_chime(filename, door_type):
 def sonos_instant_chime(location="front door", trace_id=None):
     started = time.time()
     config = cfg.load_config()
+    if _global_mute_enabled(config):
+        logging.info("[GLOBAL MUTE] Skipping instant doorbell chime for location=%r trace=%s.", location, trace_id or "")
+        return
     if "back" in location.lower():
         custom_file = config.get("back_chime", "")
         fallback_url = "http://codeskulptor-demos.commondatastorage.googleapis.com/pang/pop.mp3"
@@ -1151,6 +1199,11 @@ def sonos_instant_chime(location="front door", trace_id=None):
     )
     for s in speakers:
         threading.Thread(target=_safe_sonos_play, args=(s, chime_url, "SONOS INSTANT CHIME"), daemon=True).start()
+    headers = _ha_auth_headers()
+    for entity in _ha_targets:
+        threading.Thread(target=_safe_ha_play, args=(entity, chime_url, headers), daemon=True).start()
+    for entity in _alexa_targets:
+        threading.Thread(target=_safe_alexa_play, args=(entity, chime_url, headers), daemon=True).start()
     logging.info("[CHIME TIMING] trace=%s location=%s submitted elapsed=%.2fs", trace_id or "", location, time.time() - started)
 
 
@@ -1175,6 +1228,9 @@ def _dispatch_to_sonos(url, tag="SONOS DISPATCH", targets=None):
 
 def sonos_speak_verdict(message):
     config = cfg.load_config()
+    if _global_mute_enabled(config):
+        logging.info("[GLOBAL MUTE] Skipping Sonos verdict speech.")
+        return
     file_name = _generate_network_tts_file(message, "verdict", config)
     if not file_name:
         return
@@ -1187,6 +1243,9 @@ def sonos_speak_verdict(message):
 def announce_specific_speaker(spk_type, spk_id, message):
     headers = _ha_auth_headers()
     config = cfg.load_config()
+    if _global_mute_enabled(config):
+        logging.info("[GLOBAL MUTE] Skipping specific speaker announcement for type=%r id=%r.", spk_type, spk_id)
+        return
 
     if spk_type == "alexa":
         headers = _ha_auth_headers()
@@ -1211,6 +1270,32 @@ def announce_specific_speaker(spk_type, spk_id, message):
 network_speech_queue = queue.PriorityQueue()
 _spooler_counter = 0
 spooler_lock = threading.Lock()
+_recent_announcement_lock = threading.Lock()
+_recent_announcement_times = {}
+_URGENT_DUPLICATE_WINDOW_SECONDS = 5.0
+
+
+def _announcement_duplicate_key(message, context):
+    context = context or {}
+    channel = context.get("channel") or "general"
+    event = context.get("event") or ""
+    normalized_message = " ".join(str(message or "").strip().lower().split())
+    return channel, event, normalized_message
+
+
+def _recently_announced(message, context, window_seconds=_URGENT_DUPLICATE_WINDOW_SECONDS):
+    key = _announcement_duplicate_key(message, context)
+    now = time.time()
+    with _recent_announcement_lock:
+        last = _recent_announcement_times.get(key, 0.0)
+        if now - last < window_seconds:
+            return True
+        _recent_announcement_times[key] = now
+        stale_before = now - 60.0
+        for stale_key, seen_at in list(_recent_announcement_times.items()):
+            if seen_at < stale_before:
+                _recent_announcement_times.pop(stale_key, None)
+    return False
 
 
 def _parse_hhmm(value: str):
@@ -1363,8 +1448,17 @@ def announce_all(message, urgent=False, context=None):
     alerts bypass routine queue traffic."""
     label = _context_label(context)
     channel = (context or {}).get("channel") if context else None
+    if _global_mute_enabled():
+        logging.info("[GLOBAL MUTE] Skipping queued announcement for %s.", label)
+        return
 
     if urgent and channel == "doorbell":
+        if _recently_announced(message, context):
+            logging.info(
+                "[AUDIO QUEUE] Suppressed duplicate immediate dispatch for %s message=%r",
+                label, message,
+            )
+            return
         logging.info(
             "[AUDIO QUEUE] Immediate dispatch for %s urgent=%s message=%r",
             label, urgent, message,
@@ -1426,6 +1520,9 @@ def play_notification(category, text, push=False):
         return
 
     config = cfg.load_config()
+    if _global_mute_enabled(config):
+        logging.info("[GLOBAL MUTE] Skipping notification category=%s.", category)
+        return
     settings = resolve_tts_settings(category, config)
     logging.info(
         "[NOTIFICATION TIMING] category=%s engine=%s speed=%s chars=%d",
@@ -1471,6 +1568,15 @@ def _execute_announce_all(message, urgent=False, context=None):
     dispatch_started = time.time()
     # Single load_config() call — all branches share this snapshot.
     config = cfg.load_config()
+    if _global_mute_enabled(config):
+        logging.info("[GLOBAL MUTE] Skipping audio dispatch for %s.", _context_label(context))
+        return {
+            "ha": [],
+            "sonos": [],
+            "alexa": [],
+            "wait_for_idle": False,
+            "muted": True,
+        }
     tts_settings = (context or {}).get("tts_settings")
     if not tts_settings and (context or {}).get("channel") == "cinderella":
         tts_settings = resolve_tts_settings("utilities", config)
@@ -1518,6 +1624,21 @@ def _execute_announce_all(message, urgent=False, context=None):
 
     if config.get("enable_alexa", False) and alexa_targets:
         threading.Thread(target=_safe_alexa_announce, args=(message, alexa_targets, headers), daemon=True).start()
+
+    if not (ha_targets or sonos_targets or alexa_targets):
+        logging.warning(
+            "[AUDIO DISPATCH] No network speaker targets for %s category=%s. "
+            "Skipping network TTS generation and playback.",
+            label,
+            category,
+        )
+        return {
+            "ha": [],
+            "sonos": [],
+            "alexa": [],
+            "wait_for_idle": False,
+            "no_targets": True,
+        }
 
     # Check static phrase cache first — skip TTS generation entirely if we have
     # a pre-built file for this message and the engine/voice hasn't changed.

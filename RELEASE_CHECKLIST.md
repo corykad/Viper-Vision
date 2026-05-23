@@ -1,4 +1,4 @@
-# Viper Vision v1.2 Release Checklist
+# Viper Vision v1.2.3 Release Checklist
 
 Use this checklist before committing, tagging, or showing Viper Vision to anyone.
 
@@ -26,11 +26,11 @@ Build the installer:
 
 Confirm:
 
-- `installer\ViperVision-v1.2-Setup.exe` exists.
+- `installer\ViperVision-v1.2.3-Setup.exe` exists.
 - `dist\ViperVision\ViperVision.exe` exists.
 - `dist\ViperVision\_internal\ffmpeg.exe` exists.
 - `dist\ViperVision\_internal\help\index.html` exists.
-- `ViperVision.iss` still reports version `1.2`.
+- `ViperVision.iss` still reports version `1.2.3`.
 
 ## Installer Smoke Test
 
@@ -42,7 +42,7 @@ Run the repeatable smoke script after building the installer:
 .\smoke_installer.ps1
 ```
 
-1. Run `installer\ViperVision-v1.2-Setup.exe`.
+1. Run `installer\ViperVision-v1.2.3-Setup.exe`.
 2. Launch Viper Vision.
 3. Confirm the New User Setup Assistant opens if no config exists.
 4. Press F1 and confirm local help opens.
@@ -102,19 +102,43 @@ Roborock:
 
 Diagnostics:
 
-- Run Diagnostics from desktop Utilities.
-- Create Support Bundle from desktop Utilities.
+- Run Diagnostics from desktop Diagnostics, Tests & Support.
+- Run Diagnostics with Home Assistant checking enabled and confirm it reports both HA Core and HA Observer health.
+- Create Support Bundle from desktop Diagnostics, Tests & Support.
+- Open About Viper Vision And Data Folders and confirm version, data folder, config file, log file, support bundle location, and remote URL are readable.
 - Show Diagnostics from web remote.
 - Create Support Bundle from web remote.
 - Confirm `ha_token`, Gemini key, Pushover keys, MQTT password, Ring camera IDs, and Ring topic roots are not visible in the bundle.
 
+Home Assistant hang watch:
+
+- Start `.\watch_ha_health.ps1` before a long test run.
+- If Home Assistant appears frozen, check whether the CSV says `core_hung_vm_alive`.
+- If the VM is powered off, run `.\harden_ha_virtualbox.ps1 -MoveOutOfDownloads` to move the VM out of Downloads and apply safer disk settings.
+
 ## Known Limitations To Tell Users
 
-- Viper does not install Home Assistant, VirtualBox, Mosquitto, or ring-mqtt automatically.
+- Viper can guide VirtualBox/Home Assistant OS setup on Windows x64 and can install Mosquitto/Ring-MQTT through Home Assistant Supervisor when the Home Assistant token has permission. Users may still prefer Home Assistant Green, a mini PC, or an existing Home Assistant server.
 - Gemini warmup may create billable API requests.
 - Doorbell AI requires a live RTSP stream; Home Assistant snapshots are not used by default.
 - Some Roborock controls only appear if Home Assistant exposes matching entities.
 - Windows SmartScreen may warn because the installer is unsigned.
+- If Home Assistant Observer on port `4357` is healthy but port `8123` hangs, the VM is alive and Home Assistant Core is the likely problem.
+
+## Fresh-PC Screen Reader Acceptance Script
+
+Use this script with JAWS or NVDA before calling the installer ready.
+
+1. Launch Viper from the Start menu.
+2. Confirm speech/focus lands on an enabled Viper setup window, not "Viper Vision unavailable."
+3. Tab through the setup wizard and confirm every button has a clear action label.
+4. Press Alt+Tab away and back to the setup wizard. Confirm focus returns to an enabled Viper window.
+5. Open Diagnostics, Tests & Support.
+6. Press About Viper Vision And Data Folders.
+7. Confirm the About dialog reads version, data folder, config file, log file, support bundle location, and remote URL.
+8. Press Copy Data Folder and confirm the path can be pasted.
+9. Press Open Remote and confirm the remote page headings match the desktop product areas.
+10. Close Viper cleanly, relaunch, and confirm there is no previous-crash warning.
 
 ## Support Instructions
 
@@ -123,7 +147,10 @@ Ask users for:
 - What they were trying to do.
 - What happened instead.
 - Whether Home Assistant opens in their browser.
+- Whether `http://home-assistant-ip:4357` opens when `http://home-assistant-ip:8123` does not.
 - Whether they can open `http://localhost:5050/remote`.
-- A Viper support bundle created from Utilities, Create Support Bundle.
+- Viper version and data folder from Diagnostics, About Viper Vision And Data Folders.
+- A Viper support bundle created from Diagnostics, Tests & Support, Create Support Report To Email Developer.
+- The latest `ha_health_watch.csv` if they ran the watcher.
 
 Do not ask users to paste API keys, Home Assistant tokens, MQTT passwords, or full Ring IDs.

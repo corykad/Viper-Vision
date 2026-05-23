@@ -9,59 +9,90 @@
 <body>
   <a class="skip" href="#main">Skip to main content</a>
   <header>
-    <h1>Installing Home Assistant For Viper Vision</h1>
+    <h1>Installing Home Assistant If You Do Not Have It</h1>
     <p><a href="index.html">Back to help index</a></p>
   </header>
   <main id="main">
-    <h2>Best Beginner Choice</h2>
-    <p>The smoothest long-term setup is usually a dedicated Home Assistant device, such as Home Assistant Green, Home Assistant Yellow, or a small mini PC. It keeps your smart home running even when your Windows computer restarts.</p>
+    <h2>Best Choice For Most Homes</h2>
+    <p>The most reliable Home Assistant setup is a dedicated device, such as Home Assistant Green or a small mini PC. It keeps running when the Windows computer restarts.</p>
+    <p>If you want to try Home Assistant on the same Windows computer as Viper, Viper can install Home Assistant OS in VirtualBox.</p>
 
-    <h2>Trying Home Assistant On This Windows PC</h2>
-    <p>For testing or a budget setup, use Home Assistant OS in VirtualBox. Viper does not bundle or silently install VirtualBox because that creates admin, licensing, antivirus, and machine-specific VM problems.</p>
-
-    <h2>What The Viper Assistant Can Do</h2>
+    <h2>What Viper Can Install</h2>
     <ul>
-      <li>Check whether VirtualBox is installed.</li>
-      <li>Open the official VirtualBox download page.</li>
-      <li>Open the official Home Assistant Windows installation guide.</li>
-      <li>Open the official Home Assistant OS release download page.</li>
-      <li>Look for Home Assistant on your network.</li>
-      <li>Hand off to Viper's Home Assistant setup once HA is reachable.</li>
+      <li>Oracle VirtualBox, using winget.</li>
+      <li>The official Home Assistant OS VirtualBox image.</li>
+      <li>A VirtualBox VM named Home Assistant.</li>
+    </ul>
+    <p>Viper does not bundle Home Assistant or VirtualBox inside the Viper installer. It downloads from official sources when you choose the install step.</p>
+
+    <h2>Before You Start</h2>
+    <ul>
+      <li>This automatic installer is for Windows x64 computers.</li>
+      <li>Windows ARM, Raspberry Pi, Mac, and other ARM devices need a different Home Assistant install method.</li>
+      <li>VirtualBox may be less stable if Hyper-V, Windows Hypervisor Platform, Virtual Machine Platform, WSL2, Docker Desktop, or Windows Sandbox are active.</li>
+      <li>Viper offers an optional Optimize Windows For VirtualBox button. It warns first, requires administrator permission, and requires a reboot.</li>
     </ul>
 
-    <h2>Windows VirtualBox Setup</h2>
+    <h2>Step By Step</h2>
     <ol>
-      <li>Open Viper, Utilities, New User Setup Assistant.</li>
-      <li>Press Open HA Windows Guide.</li>
-      <li>Press Open VirtualBox Download and install VirtualBox from Oracle.</li>
-      <li>Press Open HA OS Download and download the VirtualBox image listed by Home Assistant.</li>
-      <li>Follow the official Home Assistant Windows guide to create or import the VM.</li>
-      <li>Start the VM.</li>
-      <li>Wait for Home Assistant to finish first boot. This can take several minutes.</li>
-      <li>Open <code>http://homeassistant.local:8123</code> in a browser.</li>
-      <li>Complete Home Assistant onboarding and create your owner account.</li>
-      <li>In Home Assistant, open your user profile and create a long-lived access token.</li>
-      <li>Return to Viper and press Find Home Assistant.</li>
-      <li>Press Continue To Viper Setup.</li>
+      <li>Open Viper's setup wizard.</li>
+      <li>Go to the Home Assistant step.</li>
+      <li>Press Check This PC And Home Assistant.</li>
+      <li>If VirtualBox is missing, press Install VirtualBox.</li>
+      <li>If Viper reports Windows hypervisor features may cause VirtualBox problems, press Optimize Windows For VirtualBox only if you accept the tradeoff. This can affect WSL2 and Docker Desktop until those Windows features are re-enabled.</li>
+      <li>If you used Optimize Windows For VirtualBox, reboot Windows before continuing.</li>
+      <li>Press Install Home Assistant.</li>
+      <li>Choose RAM and disk space. Recommended: 4096 MB RAM and 32 GB disk.</li>
+      <li>Read the review summary. It shows selected RAM, disk, install folder, drive-space status, and the expected first-boot wait.</li>
+      <li>Choose Yes to continue.</li>
+      <li>Wait while Viper downloads Home Assistant OS, creates the VM, starts it, and checks readiness.</li>
+      <li>When Viper says Home Assistant is ready, press Open Home Assistant Account Setup.</li>
+      <li>Create your Home Assistant owner account in the browser.</li>
+      <li>Create a long-lived access token and return to Viper.</li>
     </ol>
 
-    <h2>Network Notes</h2>
-    <p>If Viper cannot find Home Assistant, try entering the Home Assistant IP manually. The VM must be reachable from Windows. If VirtualBox networking is set in a way that isolates the VM, Home Assistant may work in the VM but not be visible to Viper.</p>
-
-    <h2>What Not To Install Unless Needed</h2>
-    <p>You do not need Samba, File Editor, Mosquitto, or ring-mqtt just to connect Viper to Home Assistant. Mosquitto and ring-mqtt are only needed for certain Ring setups. See the Ring setup help page.</p>
-
-    <h2>Official Links</h2>
+    <h2>Choosing RAM</h2>
     <ul>
-      <li><a href="https://www.home-assistant.io/installation/windows/">Home Assistant Windows installation guide</a></li>
-      <li><a href="https://www.virtualbox.org/wiki/Downloads">VirtualBox download page</a></li>
-      <li><a href="https://github.com/home-assistant/operating-system/releases/latest">Home Assistant OS releases</a></li>
-      <li><a href="https://developers.home-assistant.io/docs/auth_api/">Home Assistant token documentation</a></li>
+      <li>2048 MB: minimum, for testing or very small computers.</li>
+      <li>4096 MB: recommended for most users.</li>
+      <li>6144 MB or 8192 MB: useful if the PC has enough RAM and Home Assistant will run many integrations or add-ons.</li>
+    </ul>
+
+    <h2>Choosing Disk Space</h2>
+    <ul>
+      <li>16 GB: minimum testing size.</li>
+      <li>32 GB: recommended for most users.</li>
+      <li>64 GB or more: better if you expect lots of add-ons, logs, recorder history, or camera-related tools.</li>
+    </ul>
+
+    <h2>Why First Boot Takes So Long</h2>
+    <p>After the VM starts, Home Assistant may still download and prepare Home Assistant Core. The browser can show a high percentage for a long time. Viper waits up to 25 minutes and keeps reporting progress.</p>
+
+    <h2>Home Assistant IP Address</h2>
+    <p>Viper uses bridged networking when VirtualBox exposes a bridged adapter. That usually gives Home Assistant its own local IP address.</p>
+    <p>Viper cannot reserve an IP inside every router, because routers all work differently. Instead, Viper keeps checking the saved Home Assistant address while it runs. If the old address stops responding and Home Assistant is found at a new local IP, Viper updates the saved address.</p>
+
+    <h2>Manual Download Fallback</h2>
+    <ol>
+      <li>Press Open HA OS Download.</li>
+      <li>Download the VirtualBox image from the Home Assistant OS releases page.</li>
+      <li>Return to Viper and press Choose Downloaded HA OS Image.</li>
+      <li>Choose the downloaded zip, VDI, or OVA file.</li>
+      <li>Choose RAM and disk space.</li>
+      <li>Review the summary and continue.</li>
+    </ol>
+
+    <h2>What Viper Does Not Do</h2>
+    <ul>
+      <li>Viper does not create your Home Assistant owner account.</li>
+      <li>Viper does not store your Home Assistant password.</li>
+      <li>Viper does not bypass Home Assistant onboarding.</li>
+      <li>Viper does not change Windows virtualization settings without asking first.</li>
     </ul>
 
     <nav class="topic-nav" aria-label="Previous and next help topics">
-      <p><a href="setup.html">Previous: Start Here: First Setup</a></p>
-      <p><a href="tailscale-remote.html">Next: Remote Web Access With Tailscale</a></p>
+      <p><a href="setup.html">Previous: First Setup</a></p>
+      <p><a href="ring-setup.html">Next: Ring Doorbells And Live Video</a></p>
     </nav>
   </main>
 </body>

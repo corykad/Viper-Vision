@@ -3,6 +3,7 @@ edge-tts
 Flask
 google-genai
 gTTS
+keyring
 paho-mqtt
 Pillow
 pyinstaller

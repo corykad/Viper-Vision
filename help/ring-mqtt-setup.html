@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mosquitto And Ring-MQTT Step By Step</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to main content</a>
+  <header>
+    <h1>Mosquitto And Ring-MQTT Step By Step</h1>
+    <p><a href="index.html">Back to help index</a></p>
+  </header>
+  <main id="main">
+    <h2>What This Page Is For</h2>
+    <p>Use this page if Viper needs Ring live video. Mosquitto and Ring-MQTT are the path Viper supports for Ring RTSP streams.</p>
+
+    <h2>What The Pieces Mean</h2>
+    <ul>
+      <li><strong>Mosquitto:</strong> the message broker inside Home Assistant.</li>
+      <li><strong>Ring-MQTT with Video Streaming:</strong> signs in to Ring and exposes Ring camera streams.</li>
+      <li><strong>RTSP:</strong> the live video URL Viper uses for Gemini vision.</li>
+    </ul>
+
+    <h2>Recommended Viper Path</h2>
+    <ol>
+      <li>Open the Viper setup wizard.</li>
+      <li>Go to Ring-MQTT Live Video.</li>
+      <li>Press the button to install Ring-MQTT requirements.</li>
+      <li>If Viper says Mosquitto or Ring-MQTT is already installed, that is fine. Viper should move to the login guide.</li>
+      <li>Viper configures Ring-MQTT port 8554 when Home Assistant allows it.</li>
+      <li>Viper opens the Ring-MQTT app page in your normal browser.</li>
+    </ol>
+
+    <h2>Important Browser Step</h2>
+    <p>The Ring-MQTT login page usually does not open directly. Viper opens the Ring-MQTT app page first.</p>
+    <ol>
+      <li>If Home Assistant asks you to log in, log in to Home Assistant.</li>
+      <li>If you land on the wrong Home Assistant page after login, return to Viper and press Open Ring-MQTT App Page In Browser again.</li>
+      <li>On the Ring-MQTT app page, tab to Open Web UI.</li>
+      <li>Press Open Web UI.</li>
+      <li>The Ring-MQTT web page opens.</li>
+      <li>Sign in to Ring there.</li>
+    </ol>
+
+    <h2>If You Must Install Manually</h2>
+    <ol>
+      <li>Open Home Assistant.</li>
+      <li>Go to Settings, Apps. Older versions may call this Add-ons or Add-on Store.</li>
+      <li>Install Mosquitto Broker.</li>
+      <li>Turn on Start on boot and Watchdog for Mosquitto.</li>
+      <li>Start Mosquitto.</li>
+      <li>Add the Ring-MQTT repository: <code>https://github.com/tsightler/ring-mqtt-ha-addon</code></li>
+      <li>Install Ring-MQTT with Video Streaming.</li>
+      <li>Turn on Start on boot and Watchdog for Ring-MQTT.</li>
+      <li>Make sure Ring-MQTT network port <code>8554/tcp</code> maps to host port <code>8554</code>.</li>
+      <li>Start Ring-MQTT.</li>
+      <li>Open its Web UI and sign in to Ring.</li>
+    </ol>
+
+    <h2>MQTT Username And Password</h2>
+    <p>Some setups use Home Assistant's built-in authentication for Mosquitto. Other setups use a dedicated MQTT user. If Viper asks for MQTT credentials, enter the same MQTT host, port, username, and password Ring-MQTT uses.</p>
+    <p>For most Home Assistant OS setups, MQTT host is the Home Assistant IP and port is <code>1883</code>.</p>
+
+    <h2>Finding Streams</h2>
+    <ol>
+      <li>Make sure Ring-MQTT is running and logged in to Ring.</li>
+      <li>Return to Viper.</li>
+      <li>Press Find Ring MQTT Streams or Find And Test Doorbell Cameras.</li>
+      <li>Viper reads Ring-MQTT logs, Home Assistant attributes, and MQTT topics.</li>
+      <li>Viper shows only streams it can turn into real RTSP URLs.</li>
+      <li>Choose which stream belongs to each door and test it.</li>
+    </ol>
+
+    <h2>Console Fallback For Screen Reader Problems</h2>
+    <p>If the Home Assistant Apps page cannot be used with your screen reader, use the Home Assistant VM console. At the <code>ha &gt;</code> prompt, these are the basic commands:</p>
+    <pre><code>addons repositories add https://github.com/tsightler/ring-mqtt-ha-addon
+addons reload
+addons install core_mosquitto
+addons list</code></pre>
+    <p>After <code>addons list</code>, find the Ring-MQTT slug and install it with <code>addons install SLUG_HERE</code>. If you are using Terminal or SSH instead of the VM console, put <code>ha</code> before each command.</p>
+
+    <h2>What Viper Never Stores</h2>
+    <ul>
+      <li>Ring email.</li>
+      <li>Ring password.</li>
+      <li>Ring two-factor code.</li>
+      <li>Ring refresh token.</li>
+    </ul>
+
+    <h2>If Viper Finds No Streams</h2>
+    <ul>
+      <li>Confirm Ring-MQTT is logged in to Ring.</li>
+      <li>Confirm Ring-MQTT with Video Streaming is installed, not the non-video version.</li>
+      <li>Confirm port 8554 is exposed in the Ring-MQTT app configuration.</li>
+      <li>Restart Ring-MQTT after changing the port.</li>
+      <li>Press a Ring doorbell or trigger motion, then try stream discovery again.</li>
+      <li>Open Diagnostics and create a support bundle if it still fails.</li>
+    </ul>
+
+    <nav class="topic-nav" aria-label="Previous and next help topics">
+      <p><a href="ring-setup.html">Previous: Ring Doorbells And Live Video</a></p>
+      <p><a href="scenarios.html">Next: Common Setup Scenarios</a></p>
+    </nav>
+  </main>
+</body>
+</html>

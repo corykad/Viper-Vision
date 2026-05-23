@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Viper Vision Vacuum Help</title>
+  <title>Roborock Vacuum Controls</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -13,25 +13,43 @@
     <p><a href="index.html">Back to help index</a></p>
   </header>
   <main id="main">
-    <h2>Basic Controls</h2>
-    <p>Use Start, Pause, Stop, Return to dock, Locate, and Spot clean from the Vacuum tab.</p>
+    <h2>Before You Use This</h2>
+    <ol>
+      <li>Add the Roborock integration in Home Assistant.</li>
+      <li>Let Viper discover Home Assistant devices.</li>
+      <li>Open Home Devices, Robot Vacuum.</li>
+    </ol>
 
-    <h2>Suction And Mop Settings</h2>
-    <p>Viper discovers Roborock select, number, and child lock entities from Home Assistant. Only controls Home Assistant exposes can be shown.</p>
+    <h2>Safe First Tests</h2>
+    <ol>
+      <li>Press refresh or discover controls.</li>
+      <li>Try Locate first. That confirms Viper can reach the vacuum without starting a cleaning job.</li>
+      <li>Try Return to dock if the robot is away from the dock.</li>
+    </ol>
+
+    <h2>Cleaning Controls</h2>
+    <p>Viper can show Start, Pause, Stop, Return to dock, Locate, Spot clean, suction, mop mode, mop intensity, and child lock when Home Assistant exposes those controls.</p>
 
     <h2>Room Cleaning</h2>
     <ol>
-      <li>Choose your vacuum entity.</li>
+      <li>Choose the vacuum entity.</li>
       <li>Press Refresh room list.</li>
-      <li>Use arrow keys to move through rooms.</li>
-      <li>Press Space to check or uncheck rooms.</li>
+      <li>Tab or arrow through the rooms.</li>
+      <li>Press Space to check or uncheck each room.</li>
       <li>Choose repeat count.</li>
       <li>Press Clean selected rooms.</li>
     </ol>
+    <p>Viper saves discovered room IDs. If you remap the house in Roborock, refresh rooms again.</p>
+
+    <h2>Cinderella Messages</h2>
+    <p>Cinderella messages are the funny robot vacuum status messages. You can edit message buckets for departure, washing, emptying, drying, returning, victory, paused, status updates, vacuum errors, dock errors, and specific errors.</p>
+
+    <h2>If A Control Is Missing</h2>
+    <p>Viper can only use controls Home Assistant exposes. If a suction or mop option is missing, check the Roborock integration in Home Assistant first.</p>
 
     <nav class="topic-nav" aria-label="Previous and next help topics">
-      <p><a href="speakers.html">Previous: Speakers and Chimes</a></p>
-      <p><a href="troubleshooting.html">Next: Troubleshooting and Speed</a></p>
+      <p><a href="speakers.html">Previous: Choosing Speakers And Chimes</a></p>
+      <p><a href="troubleshooting.html">Next: Troubleshooting And Speed</a></p>
     </nav>
   </main>
 </body>

@@ -17,7 +17,10 @@ env/
 viper_config.json
 api_usage.json
 viper_full_debug.log
+viper_last_crash*.txt
 viper_dashboard_log.txt
+viper_config.before-*.json
+viper_config*.tmp
 *.log
 
 # Generated audio/media
@@ -29,16 +32,20 @@ utility_*.mp3
 utility_*.wav
 warmup.mp3
 static_phrase_*.mp3
+video_*.mp4
 
 # Captured camera frames
 fast_*.jpg
 latest_*.jpg
 *_fallback.jpg
+rtsp_test/
+smoke_test/
 
 # Build output
 build/
 dist/
 installer/
+release_check_reports/
 *.zip
 *.exe
 *.msi

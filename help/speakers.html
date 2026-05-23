@@ -3,31 +3,57 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Viper Vision Speakers Help</title>
+  <title>Choosing Speakers And Chimes</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <a class="skip" href="#main">Skip to main content</a>
   <header>
-    <h1>Speakers And Chimes</h1>
+    <h1>Choosing Speakers And Chimes</h1>
     <p><a href="index.html">Back to help index</a></p>
   </header>
   <main id="main">
+    <h2>During First Setup</h2>
+    <ol>
+      <li>Go to the Speakers and Audio step in the wizard.</li>
+      <li>Press the discovery button.</li>
+      <li>Tab through the speaker checkboxes.</li>
+      <li>Press Space to check each speaker Viper should use.</li>
+      <li>Leave speakers unchecked if you do not want Viper to use them.</li>
+      <li>Choose the routes for the checked speakers.</li>
+      <li>Press Save Selected Speakers.</li>
+      <li>Press Test Checked Speakers.</li>
+    </ol>
+
     <h2>Speaker Types</h2>
     <ul>
-      <li>Home Assistant media player entity.</li>
-      <li>Sonos speaker IP address.</li>
-      <li>Alexa media player entity if your Home Assistant setup supports it.</li>
+      <li>Home Assistant media player entities.</li>
+      <li>Sonos speakers by IP address.</li>
+      <li>Alexa media player entities, if your Home Assistant setup supports them.</li>
     </ul>
 
-    <h2>Routing</h2>
-    <p>Each speaker can receive doorbell, utility, fridge/freezer, and quiet-hours-exempt alerts. Select a speaker, then choose its routing checkboxes.</p>
+    <h2>Routes</h2>
+    <p>Routes decide what each speaker is allowed to play.</p>
+    <ul>
+      <li><strong>Doorbell:</strong> doorbell chimes and doorbell AI speech.</li>
+      <li><strong>Utilities:</strong> general house alerts and status messages.</li>
+      <li><strong>Fridge/freezer:</strong> refrigerator and freezer chimes or announcements.</li>
+      <li><strong>Quiet-hours exempt:</strong> allows urgent alerts on that speaker even during quiet hours.</li>
+    </ul>
 
-    <h2>Chimes</h2>
-    <p>Front and back doors can use different chimes. Fridge and freezer channels can speak, chime, or stay silent.</p>
+    <h2>Chime-Only Alerts</h2>
+    <p>Fridge and freezer channels can be set to speak, chime, or silent. If a channel is set to chime, Viper should play only the chime and should not generate TTS.</p>
+
+    <h2>If You Hear Nothing</h2>
+    <ol>
+      <li>Make sure at least one speaker is checked and saved.</li>
+      <li>Run Test Checked Speakers.</li>
+      <li>Confirm the speaker is powered on and reachable from Home Assistant or the network.</li>
+      <li>Open Diagnostics and run speaker tests.</li>
+    </ol>
 
     <nav class="topic-nav" aria-label="Previous and next help topics">
-      <p><a href="tts.html">Previous: Voice and TTS Setup</a></p>
+      <p><a href="tts.html">Previous: Voice And TTS Setup</a></p>
       <p><a href="vacuum.html">Next: Roborock Vacuum Controls</a></p>
     </nav>
   </main>

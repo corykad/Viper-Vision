@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Viper Vision Troubleshooting</title>
+  <title>Troubleshooting And Speed</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -13,29 +13,64 @@
     <p><a href="index.html">Back to help index</a></p>
   </header>
   <main id="main">
-    <h2>Home Assistant Not Found</h2>
-    <p>Try entering <code>homeassistant.local</code>, the Home Assistant IP address, and port <code>8123</code>. Confirm the Windows PC and Home Assistant are on the same network.</p>
+    <h2>Start With Diagnostics</h2>
+    <ol>
+      <li>Open Diagnostics in Viper.</li>
+      <li>Run Diagnostics.</li>
+      <li>Read the status box from top to bottom.</li>
+      <li>If you need help, create a support bundle. Viper redacts secrets before zipping logs.</li>
+    </ol>
+
+    <h2>Home Assistant Is Not Found</h2>
+    <ol>
+      <li>Open Home Assistant in your browser if you know the address.</li>
+      <li>If it opens, copy the IP or host into Viper.</li>
+      <li>Make sure the port is 8123.</li>
+      <li>Create a fresh long-lived token and paste it into Viper.</li>
+      <li>Press Connect And Discover Devices.</li>
+    </ol>
+
+    <h2>Home Assistant VM Runs But The Web Page Hangs</h2>
+    <p>Try both addresses:</p>
+    <pre><code>http://YOUR_HOME_ASSISTANT_IP:8123
+http://YOUR_HOME_ASSISTANT_IP:4357</code></pre>
+    <p>If 4357 opens but 8123 hangs, the VM is alive and Home Assistant Core is likely stuck. Run diagnostics and check Home Assistant logs.</p>
 
     <h2>Token Rejected</h2>
-    <p>Create a new long-lived access token from your Home Assistant user profile and paste it into Viper.</p>
+    <p>Create a new long-lived token from the same Home Assistant account you use in the browser. Paste the new token into Viper and try discovery again.</p>
 
-    <h2>No Trigger Entities</h2>
-    <p>Install or fix the relevant Home Assistant integration. For Ring, try the Ring integration first, then Mosquitto and ring-mqtt if needed.</p>
+    <h2>No Ring Trigger Entities</h2>
+    <p>Fix the Home Assistant Ring integration first. Ring-MQTT gives live video, but the normal Ring integration is often the easiest trigger source.</p>
 
-    <h2>RTSP Test Fails</h2>
-    <p>Confirm the URL opens in another RTSP client, confirm go2rtc or ring-mqtt is running, and confirm Viper's bundled FFmpeg is present in the installed app.</p>
+    <h2>No Ring RTSP Streams</h2>
+    <ol>
+      <li>Confirm Mosquitto is running.</li>
+      <li>Confirm Ring-MQTT with Video Streaming is installed.</li>
+      <li>Confirm Ring-MQTT is logged in to Ring.</li>
+      <li>Confirm Ring-MQTT port 8554 is exposed.</li>
+      <li>Restart Ring-MQTT after changing port settings.</li>
+      <li>Press Find And Test Doorbell Cameras again.</li>
+    </ol>
 
-    <h2>Doorbell Speech Is Slow</h2>
-    <p>Open the Speed tab and press Refresh speed diagnostics. Compare RTSP capture, Gemini vision, Gemini TTS, and speaker playback times.</p>
+    <h2>No Sound</h2>
+    <ol>
+      <li>Make sure at least one speaker is checked and saved.</li>
+      <li>Run Test Checked Speakers.</li>
+      <li>Check the route for that speaker: doorbell, utilities, fridge/freezer, or quiet-hours exemption.</li>
+      <li>If fridge/freezer is set to chime, expect a chime, not speech.</li>
+      <li>Open Diagnostics and run speaker tests.</li>
+    </ol>
 
-    <h2>Remote Web Page Does Not Open Over Tailscale</h2>
-    <p>Confirm Tailscale is running and signed in on both devices. On the remote device, open Viper using the Viper computer's Tailscale IP and port <code>5050</code>. Example: <code>http://100.x.y.z:5050/remote</code>. If it works at home but not over Tailscale, check Windows Firewall and make sure Viper is running.</p>
+    <h2>Doorbell Speech Or AI Is Slow</h2>
+    <ol>
+      <li>Open Diagnostics.</li>
+      <li>Run speed diagnostics.</li>
+      <li>Compare RTSP capture, Gemini vision, TTS generation, and speaker playback.</li>
+      <li>If Gemini TTS is slow, use Edge TTS for doorbells and Gemini for less urgent messages.</li>
+    </ol>
 
-    <h2>Gemini Warmup Costs</h2>
-    <p>Gemini warmup sends requests to the API. Those requests may count as billable API usage. Leave warmup off unless you want the lowest first-alert latency and accept possible cost.</p>
-
-    <h2>Logs</h2>
-    <p>Installed builds store logs under <code>%APPDATA%\viper_vision_1.0</code>. Source runs store logs in the project folder.</p>
+    <h2>Logs And Support Bundle</h2>
+    <p>Open Diagnostics, Tests and Support, then About Viper Vision And Data Folders. That page shows the config file, log folder, support bundle folder, and local remote URL.</p>
 
     <nav class="topic-nav" aria-label="Previous and next help topics">
       <p><a href="vacuum.html">Previous: Roborock Vacuum Controls</a></p>

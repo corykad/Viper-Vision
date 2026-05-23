@@ -58,6 +58,56 @@ _MAX_IMAGE_DIM = 800
 # than enough to catch a 5fps stream the moment a good frame lands.
 _FRAME_POLL_INTERVAL = 0.05
 
+VIDEO_ANALYSIS_MODES = ("fast", "smart", "detailed", "manual")
+VIDEO_ANALYSIS_LABELS = {
+    "fast": "Fast mode: still image only",
+    "smart": "Smart mode: fast still image first, bounded video follow-up only when needed",
+    "detailed": "Detailed mode: fast still image first, video follow-up on every alert",
+    "manual": "Manual mode: video only when you press an analyze button",
+}
+VIDEO_ANALYSIS_MODEL = "gemini-3-flash-preview"
+_video_followup_last = {"front": 0.0, "back": 0.0}
+_video_followup_lock = threading.Lock()
+
+
+def normalize_video_analysis_settings(config_data=None):
+    defaults = cfg.get_default_config().get("doorbell_video_analysis", {})
+    raw_config = config_data if isinstance(config_data, dict) else cfg.load_config()
+    raw = raw_config.get("doorbell_video_analysis") if isinstance(raw_config.get("doorbell_video_analysis"), dict) else {}
+    settings = {**defaults, **raw}
+    mode = str(settings.get("mode") or defaults.get("mode", "fast")).strip().lower()
+    if mode not in VIDEO_ANALYSIS_MODES:
+        mode = "fast"
+
+    def bounded_int(name, default, minimum, maximum):
+        try:
+            value = int(settings.get(name, default))
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, min(maximum, value))
+
+    max_manual = bounded_int("max_manual_clip_seconds", 15, 5, 30)
+    return {
+        "mode": mode,
+        "model": str(settings.get("model") or VIDEO_ANALYSIS_MODEL).strip() or VIDEO_ANALYSIS_MODEL,
+        "smart_clip_seconds": bounded_int("smart_clip_seconds", 3, 2, 8),
+        "detailed_clip_seconds": bounded_int("detailed_clip_seconds", 5, 2, 10),
+        "manual_clip_seconds": max(2, min(max_manual, bounded_int("manual_clip_seconds", 6, 2, max_manual))),
+        "max_manual_clip_seconds": max_manual,
+        "fps": bounded_int("fps", 2, 1, 5),
+        "speak_followups": bool(settings.get("speak_followups", True)),
+        "smart_cooldown_seconds": bounded_int("smart_cooldown_seconds", 60, 15, 300),
+    }
+
+
+def clamp_manual_video_seconds(value, config_data=None):
+    settings = normalize_video_analysis_settings(config_data)
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        seconds = settings["manual_clip_seconds"]
+    return max(2, min(settings["max_manual_clip_seconds"], seconds))
+
 
 def _capture_single_frame_fallback(rtsp_url: str, output_file: Path, timeout: float | None = None) -> str | None:
     """Last-resort frame grab: ask FFmpeg for one frame directly.
@@ -270,6 +320,247 @@ def grab_frame(
     return chosen
 
 
+def _cleanup_old_video_clips(output_dir: Path, max_age_seconds: int = 3600):
+    now = time.time()
+    for path in output_dir.glob("video_*.mp4"):
+        try:
+            if now - path.stat().st_mtime > max_age_seconds:
+                path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def capture_video_clip(
+    rtsp_url: str,
+    output_dir: Path,
+    prefix: str,
+    seconds: int = 4,
+    fps: int = 2,
+    scale_width: int = 640,
+    timeout: float | None = None,
+) -> str | None:
+    """Capture a short, bounded RTSP clip for Gemini video analysis."""
+    seconds = max(2, min(30, int(seconds or 4)))
+    fps = max(1, min(5, int(fps or 2)))
+    if timeout is None:
+        timeout = max(float(cfg.RTSP_CONNECT_TIMEOUT_SECONDS) + seconds + 8.0, seconds + 12.0)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _cleanup_old_video_clips(output_dir)
+    output_file = output_dir / f"video_{prefix}_{int(time.time() * 1000)}.mp4"
+    vf_filter = f"fps={fps},scale={scale_width}:-2"
+    cmd = [
+        _FFMPEG_BIN, "-y",
+        "-fflags", "nobuffer",
+        "-flags", "low_delay",
+        "-rtsp_transport", "tcp",
+        "-i", rtsp_url,
+        "-t", str(seconds),
+        "-an",
+        "-vf", vf_filter,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-pix_fmt", "yuv420p",
+        str(output_file),
+    ]
+    started = time.time()
+    logging.info("[VIDEO ANALYSIS] capture_start prefix=%s seconds=%s fps=%s", prefix, seconds, fps)
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+        elapsed = time.time() - started
+        size = output_file.stat().st_size if output_file.exists() else 0
+        logging.info(
+            "[VIDEO ANALYSIS] capture_done prefix=%s success=%s elapsed=%.2fs bytes=%s",
+            prefix, result.returncode == 0 and size > 5000, elapsed, size,
+        )
+        if result.returncode == 0 and size > 5000:
+            return str(output_file)
+    except Exception as e:
+        logging.error("[VIDEO ANALYSIS] capture_failed prefix=%s after %.2fs: %s", prefix, time.time() - started, e)
+    try:
+        output_file.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return None
+
+
+def analyze_video_clip(video_path: str, prompt: str, model_name: str = VIDEO_ANALYSIS_MODEL, fps: int = 2) -> str:
+    started = time.time()
+    try:
+        with open(video_path, "rb") as f:
+            video_bytes = f.read()
+        prompt = _enrich_video_analysis_prompt(prompt)
+        contents = types.Content(
+            parts=[
+                types.Part(
+                    inline_data=types.Blob(mime_type="video/mp4", data=video_bytes),
+                    video_metadata=types.VideoMetadata(fps=max(1, min(5, int(fps or 2)))),
+                ),
+                types.Part(text=prompt),
+            ]
+        )
+        res = _generate_video_description(contents, model_name, len(video_bytes), max_output_tokens=448)
+        text = res.text.strip() if res and res.text else ""
+        if _looks_like_cut_off_video_response(text) or _looks_like_low_detail_video_response(text):
+            reason = "incomplete" if _looks_like_cut_off_video_response(text) else "too_brief"
+            logging.warning("[VIDEO ANALYSIS] weak_response reason=%s text=%r; retrying once with richer prompt", reason, text)
+            retry_contents = types.Content(
+                parts=[
+                    contents.parts[0],
+                    types.Part(
+                        text=(
+                            prompt
+                            + "\n\nThe previous answer was too short or incomplete: "
+                              f"{text!r}. Rewatch the same video and give a more useful description. "
+                              "Use 2 to 4 complete sentences and about 35 to 90 words unless there is truly nothing visible. "
+                              "Include who or what is visible, where they are in the frame, what is moving, direction of travel, "
+                              "important objects such as packages or vehicles, and any safety concern. End with punctuation."
+                        )
+                    ),
+                ]
+            )
+            res = _generate_video_description(retry_contents, model_name, len(video_bytes), max_output_tokens=640)
+            text = res.text.strip() if res and res.text else text
+        return text or "I could not describe the video."
+    except Exception as e:
+        logging.error("[VIDEO ANALYSIS] analyze_failed model=%s after %.2fs: %s", model_name, time.time() - started, e)
+        return f"Video analysis failed: {e}"
+
+
+def _enrich_video_analysis_prompt(prompt: str) -> str:
+    base = (prompt or "").strip()
+    return (
+        base
+        + "\n\nVideo answer requirements: describe this for a blind homeowner. "
+          "Do not answer with only a few words. Prefer 2 to 4 complete sentences and about 35 to 90 words for manual or detailed video checks. "
+          "Mention people, vehicles, animals, packages, spatial position, movement direction, and safety concerns when visible. "
+          "If the original prompt explicitly allows 'No extra detail from the video' and nothing meaningful changes, that exact short answer is allowed."
+    )
+
+
+def _generate_video_description(contents, model_name: str, byte_count: int, max_output_tokens: int = 256):
+    started = time.time()
+    res = get_gemini_client().models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You describe home security camera video for a blind homeowner. "
+                    "Be concrete and useful. Include visible subjects, spatial position, motion or direction, "
+                    "notable objects, and safety concerns. Avoid terse answers unless there is truly no useful detail. "
+                    "Finish every sentence."
+                ),
+                temperature=0.2,
+                max_output_tokens=max_output_tokens,
+            ),
+        )
+    elapsed = time.time() - started
+    finish_reason = ""
+    try:
+        if res and res.candidates:
+            finish_reason = str(getattr(res.candidates[0], "finish_reason", "") or "")
+    except Exception as e:
+        logging.debug("Could not read video analysis finish reason: %s", e)
+    logging.info(
+        "[VIDEO ANALYSIS] model=%s took %.2fs bytes=%s finish_reason=%s output_words=%s",
+        model_name,
+        elapsed,
+        byte_count,
+        finish_reason,
+        len((res.text or "").split()) if res and res.text else 0,
+    )
+    if res and res.usage_metadata:
+        log_api_usage(res.usage_metadata)
+    return res
+
+
+def _looks_like_cut_off_video_response(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return True
+    if len(cleaned.split()) < 6 and not cleaned.endswith((".", "!", "?")):
+        return True
+    if cleaned[-1] not in ".!?":
+        tail = cleaned.lower().split()[-1]
+        if tail in {"a", "an", "the", "your", "front", "back", "with", "near", "on", "in", "at", "to", "and", "or", "of"}:
+            return True
+    return False
+
+
+def _looks_like_low_detail_video_response(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return True
+    lowered = cleaned.lower().strip()
+    allowed_short = {
+        "no extra detail from the video.",
+        "no extra detail from the video",
+    }
+    if lowered in allowed_short:
+        return False
+    words = cleaned.split()
+    word_count = len(words)
+    if word_count < 10:
+        return True
+    detail_markers = {
+        "left", "right", "front", "back", "porch", "door", "driveway", "yard", "walkway",
+        "approach", "approaching", "leaving", "walking", "standing", "moving", "direction",
+        "person", "people", "vehicle", "car", "truck", "package", "delivery", "animal",
+        "dog", "cat", "carrying", "wearing", "near", "beside", "behind", "toward", "away",
+    }
+    marker_hits = sum(1 for word in words if word.strip(".,!?;:()[]{}\"'").lower() in detail_markers)
+    generic_phrases = (
+        "a person walks by",
+        "someone is outside",
+        "there is motion",
+        "motion detected",
+        "a person is visible",
+        "nothing much happens",
+    )
+    if any(phrase in lowered for phrase in generic_phrases):
+        return True
+    return word_count < 22 and marker_hits < 2
+
+
+def analyze_rtsp_video(
+    rtsp_url: str,
+    side: str = "front",
+    seconds: int | None = None,
+    prompt: str | None = None,
+    config_data=None,
+    trace_id: str | None = None,
+):
+    settings = normalize_video_analysis_settings(config_data)
+    seconds = clamp_manual_video_seconds(seconds, config_data) if seconds is not None else settings["manual_clip_seconds"]
+    prompt = prompt or (
+        "You are helping a blind homeowner understand what is happening outside. "
+        "Describe people, vehicles, animals, packages, motion, direction of travel, and safety concerns. "
+        "Be clear and useful. Reply with one or two complete sentences. If nothing important happens, say so."
+    )
+    trace = trace_id or f"manual-video-{side}-{int(time.time() * 1000)}"
+    started = time.time()
+    clip_path = capture_video_clip(
+        rtsp_url,
+        cfg.DATA_DIR,
+        prefix=f"{side}_{trace}",
+        seconds=seconds,
+        fps=settings["fps"],
+    )
+    if not clip_path:
+        return {
+            "ok": False,
+            "description": "I could not capture live video from that camera.",
+            "elapsed": time.time() - started,
+            "clip_path": "",
+        }
+    description = analyze_video_clip(clip_path, prompt, model_name=settings["model"], fps=settings["fps"])
+    return {
+        "ok": not description.lower().startswith("video analysis failed"),
+        "description": description,
+        "elapsed": time.time() - started,
+        "clip_path": clip_path,
+    }
+
+
 # ==========================================
 # AI DESCRIPTION
 # ==========================================
@@ -377,6 +668,78 @@ def _description_is_weak(text: str) -> bool:
 
     return concrete_hits == 0
 
+
+def _description_is_service_unavailable(text: str) -> bool:
+    return (text or "").strip().lower() == "the ai service is currently unavailable."
+
+
+def _description_needs_video_followup(text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    if _description_is_weak(lowered) or _description_is_service_unavailable(lowered):
+        return True
+    escalation_markers = (
+        "no one", "no person", "no people", "nothing important", "unable",
+        "unavailable", "cannot determine", "can't determine", "not visible",
+        "dark", "blurred", "partial", "obscured", "motion", "movement",
+        "unclear", "hard to tell", "can't tell", "cannot tell",
+    )
+    return any(marker in lowered for marker in escalation_markers)
+
+
+def should_run_automatic_video_followup(mode: str, description: str, side: str, config_data=None) -> bool:
+    settings = normalize_video_analysis_settings(config_data)
+    mode = (mode or settings["mode"]).strip().lower()
+    if mode in {"fast", "manual"}:
+        return False
+    if mode == "detailed":
+        return True
+    if mode != "smart":
+        return False
+    if not _description_needs_video_followup(description):
+        return False
+    now = time.time()
+    cooldown = settings["smart_cooldown_seconds"]
+    key = "back" if side == "back" else "front"
+    with _video_followup_lock:
+        if now - _video_followup_last.get(key, 0.0) < cooldown:
+            logging.info("[VIDEO ANALYSIS] smart_followup_suppressed side=%s cooldown=%ss", key, cooldown)
+            return False
+        _video_followup_last[key] = now
+    return True
+
+
+def _video_followup_prompt(location: str, first_description: str, mode: str, config_data=None) -> str:
+    configured = cfg.get_doorbell_video_prompt(
+        config_data,
+        mode="detailed" if mode == "detailed" else "smart",
+        location=location,
+        first_description=first_description,
+    )
+    if configured:
+        return configured
+    if mode == "detailed":
+        return (
+            f"You are helping a blind homeowner understand the {location}. "
+            "Analyze this short security video. Mention people, packages, vehicles, animals, movement, direction, and safety concerns. "
+            "Keep it under 45 words and use complete sentences."
+        )
+    return (
+        f"The first still image said: {first_description}. "
+        f"You are helping a blind homeowner understand the {location}. "
+        "Use this short video only to add missing useful details. "
+        "If nothing meaningful changes, say: No extra detail from the video. Use complete sentences."
+    )
+
+
+def _video_followup_adds_value(first_description: str, followup: str) -> bool:
+    lowered = (followup or "").strip().lower()
+    if not lowered:
+        return False
+    if lowered in {"no extra detail from the video.", "no extra detail from the video"}:
+        return False
+    if "no extra detail" in lowered and not _description_is_weak(first_description):
+        return False
+    return True
 
 
 def get_best_gemini_description(image_path, prompt):
@@ -563,14 +926,23 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
             trace_id, key, time.time() - capture_started, time.time() - time_start_total, bool(fast_frame),
         )
 
-        active_p   = current_config.get("active_prompt", "Standard")
-        sys_prompt = current_config["prompts"].get(active_p, "Describe the scene.")
+        sys_prompt = cfg.get_doorbell_photo_prompt(current_config, key) or "Describe the scene."
 
         if fast_frame:
             first_model = "gemini-2.5-flash"
             description = get_gemini_description(fast_frame, sys_prompt, model_name=first_model)
             weak_first_pass = _description_is_weak(description)
-            if weak_first_pass:
+            if _description_is_service_unavailable(description):
+                logging.warning("[AI SELECT] Fast-pass AI service unavailable; trying backup model before speech")
+                refined_description = get_gemini_description(fast_frame, sys_prompt, model_name="gemini-3-flash-preview")
+                if not _description_is_weak(refined_description):
+                    description = refined_description
+                    weak_first_pass = False
+                    logging.info("[AI SELECT] Backup model recovered doorbell speech before notification")
+                else:
+                    weak_first_pass = True
+                    logging.warning("[AI SELECT] Backup model did not recover before speech")
+            elif weak_first_pass:
                 logging.warning(
                     "[AI SELECT] Fast-pass result looked weak; speaking it now and refining in background"
                 )
@@ -593,6 +965,45 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
         )
         if dash_app:
             dash_app.notify(description, priority=1, interrupt=True)
+
+        video_settings = normalize_video_analysis_settings(current_config)
+        video_mode = video_settings["mode"]
+
+        def background_video_followup_pipeline():
+            try:
+                seconds = (
+                    video_settings["detailed_clip_seconds"]
+                    if video_mode == "detailed"
+                    else video_settings["smart_clip_seconds"]
+                )
+                prompt = _video_followup_prompt(location, description, video_mode, current_config)
+                result = analyze_rtsp_video(
+                    rtsp_url,
+                    side=key,
+                    seconds=seconds,
+                    prompt=prompt,
+                    config_data=current_config,
+                    trace_id=trace_id,
+                )
+                followup = result.get("description") or "Video follow-up did not return a description."
+                logging.info(
+                    "[VIDEO ANALYSIS] followup_done trace=%s event=%s mode=%s ok=%s elapsed=%.2fs text=%r",
+                    trace_id, key, video_mode, result.get("ok"), result.get("elapsed", 0.0), followup,
+                )
+                if dash_app and hasattr(dash_app, "record_video_analysis_result"):
+                    dash_app.record_video_analysis_result(key, followup, result, source=f"automatic {video_mode}")
+                if video_settings.get("speak_followups", True) and _video_followup_adds_value(description, followup):
+                    audio.play_notification("doorbell", f"Video follow-up: {followup}")
+                    if dash_app:
+                        dash_app.notify(f"Video follow-up: {followup}", priority=1, interrupt=True)
+            except Exception:
+                logging.exception("[VIDEO ANALYSIS] followup_failed trace=%s event=%s", trace_id, key)
+
+        if should_run_automatic_video_followup(video_mode, description, key, current_config):
+            logging.info("[VIDEO ANALYSIS] followup_submitted trace=%s event=%s mode=%s", trace_id, key, video_mode)
+            executor.submit(background_video_followup_pipeline)
+        else:
+            logging.info("[VIDEO ANALYSIS] automatic_followup_skipped trace=%s event=%s mode=%s", trace_id, key, video_mode)
 
         # ── STAGE 2: BACKGROUND PUSHOVER / HD REFINEMENT ──────────────────
         def background_pushover_pipeline():

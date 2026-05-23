@@ -1,5 +1,6 @@
 import logging
 import socket
+import time
 from copy import deepcopy
 from urllib.parse import urlparse
 
@@ -9,6 +10,7 @@ import viper_config as cfg
 
 
 DEFAULT_TIMEOUT = 8
+OBSERVER_PORT = "4357"
 
 DISCOVERY_CATEGORIES = [
     "media_players",
@@ -43,6 +45,8 @@ SUMMARY_ATTRIBUTE_KEYS = [
     "platform",
     "source",
     "source_list",
+    "stream_Source",
+    "stream_source",
     "supported_features",
     "unit_of_measurement",
 ]
@@ -96,8 +100,15 @@ def _error(error, message, *, status_code=None, exception=None, **extra):
 
 
 def _request_json(path, *, token=None, ha_ip=None, ha_port=None, timeout=DEFAULT_TIMEOUT):
-    url = f"{_ha_base_url(ha_ip, ha_port)}{path}"
     settings = cfg.get_ha_settings()
+    resolved_host = ha_ip or settings["ha_ip"]
+    resolved_port = ha_port or settings["ha_port"] or "8123"
+    if not resolved_host:
+        return _error(
+            "missing_host",
+            "Home Assistant host is not configured. Use Find Home Assistant or enter the IP address.",
+        )
+    url = f"http://{resolved_host}:{resolved_port}{path}"
     resolved_token = token if token is not None else settings["ha_token"]
     if not resolved_token:
         return _error("missing_token", "Home Assistant access token is not configured.", url=url)
@@ -149,6 +160,27 @@ def normalize_ha_host(value):
     return text, "8123"
 
 
+def resolve_host_to_ip(host):
+    """Return the numeric IP for a host name when it can be resolved."""
+    text = str(host or "").strip()
+    if not text:
+        return ""
+    parsed_host, _ = normalize_ha_host(text)
+    host = parsed_host or text
+    try:
+        socket.inet_aton(host)
+        return host
+    except OSError:
+        pass
+    try:
+        resolved = socket.gethostbyname(host)
+    except OSError:
+        return ""
+    if resolved and not resolved.startswith("127."):
+        return resolved
+    return ""
+
+
 def candidate_ha_hosts(seed_host="", seed_port="8123"):
     candidates = []
     seen = set()
@@ -195,7 +227,31 @@ def find_home_assistant(*, token=None, seed_host="", seed_port="8123", timeout=2
             ok_with_token = bool(token) and response.status_code == 200
             attempts.append({**candidate, "url": url, "status_code": response.status_code})
             if ok_with_token or (not token and ok_without_token):
-                return _ok({"ha_ip": host, "ha_port": port, "attempts": attempts, "auth_ok": ok_with_token})
+                resolved_host = resolve_host_to_ip(host) or host
+                return _ok(
+                    {
+                        "ha_ip": resolved_host,
+                        "ha_host": host,
+                        "ha_url": f"http://{resolved_host}:{port}",
+                        "ha_port": port,
+                        "attempts": attempts,
+                        "auth_ok": ok_with_token,
+                    }
+                )
+            if token and response.status_code in {401, 403}:
+                resolved_host = resolve_host_to_ip(host) or host
+                return _ok(
+                    {
+                        "ha_ip": resolved_host,
+                        "ha_host": host,
+                        "ha_url": f"http://{resolved_host}:{port}",
+                        "ha_port": port,
+                        "attempts": attempts,
+                        "auth_ok": False,
+                        "auth_error": "bad_token",
+                        "message": "Home Assistant was found, but it rejected the access token.",
+                    }
+                )
         except requests.exceptions.RequestException as e:
             attempts.append({**candidate, "error": str(e)})
     return _error("not_found", "Home Assistant was not found automatically.", attempts=attempts)
@@ -212,6 +268,112 @@ def test_ha_connection(*, token=None, ha_ip=None, ha_port=None, timeout=DEFAULT_
     if not states:
         return _error("empty_result", "Home Assistant returned no entities.", url=result.get("url"))
     return _ok({"entity_count": len(states)}, status_code=result.get("status_code"), url=result.get("url"))
+
+
+def _probe_url(url, *, timeout=5, headers=None, expected_statuses=None):
+    started = time.perf_counter()
+    try:
+        response = requests.get(url, headers=headers or {}, timeout=timeout)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        ok = response.status_code in (expected_statuses or {200})
+        return {
+            "ok": ok,
+            "url": url,
+            "status_code": response.status_code,
+            "elapsed_ms": elapsed_ms,
+            "error": None,
+            "message": f"HTTP {response.status_code} in {elapsed_ms} ms.",
+        }
+    except requests.exceptions.Timeout:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return {
+            "ok": False,
+            "url": url,
+            "status_code": None,
+            "elapsed_ms": elapsed_ms,
+            "error": "timeout",
+            "message": f"Timed out after {elapsed_ms} ms.",
+        }
+    except requests.exceptions.ConnectionError as e:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return {
+            "ok": False,
+            "url": url,
+            "status_code": None,
+            "elapsed_ms": elapsed_ms,
+            "error": "unreachable",
+            "message": str(e),
+        }
+    except requests.exceptions.RequestException as e:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return {
+            "ok": False,
+            "url": url,
+            "status_code": None,
+            "elapsed_ms": elapsed_ms,
+            "error": "request_failed",
+            "message": str(e),
+        }
+
+
+def check_ha_core_health(*, ha_ip=None, ha_port=None, token=None, timeout=5):
+    """Compare Home Assistant Core and Observer responsiveness.
+
+    Observer on port 4357 can stay healthy even when Core on port 8123 is hung.
+    A 401/403 from /api/ is considered Core-responsive because HA answered.
+    """
+    settings = cfg.get_ha_settings()
+    host = ha_ip or settings["ha_ip"]
+    port = str(ha_port or settings["ha_port"] or "8123")
+    if not host:
+        return {
+            "checked": True,
+            "ok": False,
+            "state": "missing_host",
+            "message": "Home Assistant host is not configured.",
+            "core": {},
+            "observer": {},
+        }
+
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    core = _probe_url(
+        f"http://{host}:{port}/api/",
+        timeout=timeout,
+        headers=headers,
+        expected_statuses={200, 401, 403},
+    )
+    observer = _probe_url(
+        f"http://{host}:{OBSERVER_PORT}/",
+        timeout=timeout,
+        expected_statuses={200},
+    )
+
+    if core["ok"] and observer["ok"]:
+        state = "healthy"
+        message = "Home Assistant Core and Observer are responding."
+        ok = True
+    elif not core["ok"] and observer["ok"]:
+        state = "core_hung"
+        message = "Home Assistant Observer is responding, but Core is not. The VM is alive; HA Core is likely hung or overloaded."
+        ok = False
+    elif core["ok"] and not observer["ok"]:
+        state = "core_only"
+        message = "Home Assistant Core is responding, but Observer is not."
+        ok = True
+    else:
+        state = "unreachable"
+        message = "Home Assistant Core and Observer are both unreachable from this PC."
+        ok = False
+
+    return {
+        "checked": True,
+        "ok": ok,
+        "state": state,
+        "message": message,
+        "host": host,
+        "core": core,
+        "observer": observer,
+    }
 
 
 def get_ha_states(*, token=None, ha_ip=None, ha_port=None, timeout=DEFAULT_TIMEOUT):

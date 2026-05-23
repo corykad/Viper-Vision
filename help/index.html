@@ -10,50 +10,76 @@
   <a class="skip" href="#main">Skip to main content</a>
   <header>
     <h1>Viper Vision Help</h1>
-    <p>Press F1 anywhere in Viper to open this help. These pages are plain HTML so screen readers can use headings, links, and lists normally.</p>
+    <p>These help pages are written for new users. Press F1 in Viper to open help for the area you are using.</p>
   </header>
   <nav aria-label="Help topics">
-    <h2>Topics</h2>
+    <h2>Start Here</h2>
+    <ol>
+      <li><a href="setup.html">First Setup: The Whole Process</a></li>
+      <li><a href="ha-install.html">Installing Home Assistant If You Do Not Have It</a></li>
+      <li><a href="ring-setup.html">Ring Doorbells And Live Video</a></li>
+      <li><a href="ring-mqtt-setup.html">Mosquitto And Ring-MQTT Step By Step</a></li>
+      <li><a href="speakers.html">Choosing Speakers And Chimes</a></li>
+    </ol>
+    <h2>After The Basics Work</h2>
     <ul>
-      <li><a href="setup.html">Start Here: First Setup</a></li>
-      <li><a href="ha-install.html">Installing Home Assistant For Viper</a></li>
-      <li><a href="tailscale-remote.html">Remote Web Access With Tailscale</a></li>
-      <li><a href="ring-setup.html">Ring, RTSP, Mosquitto, and ring-mqtt</a></li>
+      <li><a href="tts.html">Voice And TTS Setup</a></li>
       <li><a href="scenarios.html">Common Setup Scenarios</a></li>
-      <li><a href="tts.html">Voice and TTS Setup</a></li>
-      <li><a href="speakers.html">Speakers and Chimes</a></li>
       <li><a href="vacuum.html">Roborock Vacuum Controls</a></li>
-      <li><a href="troubleshooting.html">Troubleshooting and Speed</a></li>
+      <li><a href="tailscale-remote.html">Remote Web Access With Tailscale</a></li>
+      <li><a href="troubleshooting.html">Troubleshooting And Speed</a></li>
     </ul>
   </nav>
   <main id="main">
-    <h2>What Viper Needs</h2>
+    <h2>The Short Version</h2>
+    <p>Viper Vision watches Home Assistant for events, grabs a live camera frame when a doorbell rings, asks Gemini what is happening, and plays chimes or speech on the speakers you choose.</p>
+
+    <h2>What You Need Before Viper Is Fully Working</h2>
     <ul>
-      <li>Home Assistant host, usually <code>homeassistant.local</code> or an IP address.</li>
+      <li>Home Assistant running on your network.</li>
       <li>A Home Assistant long-lived access token.</li>
-      <li>A Gemini API key for doorbell AI and Gemini speech.</li>
-      <li>At least one speaker target.</li>
-      <li>For doorbell AI, a Home Assistant trigger entity and a live RTSP URL.</li>
+      <li>A Gemini API key for AI vision and Gemini voices.</li>
+      <li>At least one speaker selected in Viper.</li>
+      <li>For Ring doorbells: Ring trigger entities in Home Assistant and Ring-MQTT live RTSP streams.</li>
     </ul>
 
-    <h2>Recommended v1.2 Setup</h2>
+    <h2>Recommended Setup Order</h2>
     <ol>
       <li>Open Viper Vision.</li>
-      <li>Open Utilities, then Home Assistant Setup.</li>
-      <li>Press Find HA.</li>
-      <li>Paste your Home Assistant long-lived access token and Gemini API key.</li>
-      <li>Press Test &amp; Discover.</li>
-      <li>Choose front and back doorbell trigger entities.</li>
-      <li>Enter or derive live RTSP URLs.</li>
-      <li>Press Test Front RTSP and Test Back RTSP.</li>
-      <li>Press Save.</li>
+      <li>Use the setup wizard. Do not start in Advanced unless support asks you to.</li>
+      <li>Connect to Home Assistant, or install Home Assistant if you do not have it.</li>
+      <li>Create your Home Assistant account in the browser.</li>
+      <li>Create and paste a long-lived access token.</li>
+      <li>Let Viper discover devices.</li>
+      <li>Sign in to Ring inside Home Assistant so doorbell trigger entities appear.</li>
+      <li>Install Mosquitto and Ring-MQTT so Viper can get live Ring video.</li>
+      <li>Let Viper find and test Ring-MQTT camera streams.</li>
+      <li>Choose and test speakers.</li>
+      <li>Run Final Test.</li>
     </ol>
 
-    <h2>Important Change In v1.2</h2>
-    <p>Viper can listen directly to Home Assistant state changes. New users do not need to edit Home Assistant YAML, install Samba, or copy package files just to get doorbell alerts working.</p>
+    <h2>What Success Looks Like</h2>
+    <ul>
+      <li>The Home Assistant checklist says the address, token, and live connection passed.</li>
+      <li>Doorbell trigger entities are selected for the doors you use.</li>
+      <li>Front and back camera tests say passed, or only the door you use says passed.</li>
+      <li>At least one speaker is checked and saved.</li>
+      <li>Test Everything finishes without a critical error.</li>
+    </ul>
 
-    <h2>Remote Web Access</h2>
-    <p>For access away from home, use Tailscale on the Viper computer and on your phone or laptop. See <a href="tailscale-remote.html">Remote Web Access With Tailscale</a>.</p>
+    <h2>Where Things Are In Viper</h2>
+    <ul>
+      <li><strong>Dashboard:</strong> arm or disarm Viper and see recent status.</li>
+      <li><strong>Doorbell Vision:</strong> doorbell tests, camera status, chimes, and AI description settings.</li>
+      <li><strong>Speakers and Audio:</strong> speakers, routing, quiet hours, and TTS voices.</li>
+      <li><strong>Home Devices:</strong> refrigerator, freezer, ice maker, and robot vacuum controls.</li>
+      <li><strong>Home Assistant:</strong> the setup wizard and setup checklist.</li>
+      <li><strong>Diagnostics:</strong> tests, logs, support bundle, and speed checks.</li>
+      <li><strong>Advanced:</strong> manual tools for users who know they need them.</li>
+    </ul>
+
+    <h2>Important Beginner Rule</h2>
+    <p>When in doubt, stay in the setup wizard. The wizard is designed to show the next button only after the current step is ready.</p>
   </main>
 </body>
 </html>
