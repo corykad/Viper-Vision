@@ -1,9 +1,7 @@
-import asyncio
 import json
 import logging
 import os
 import platform
-import random
 import re
 import secrets
 import shutil
@@ -24,7 +22,6 @@ from urllib.parse import quote, urlparse
 
 import requests
 import soco
-import websockets
 import wx
 import wx.adv
 try:
@@ -36,13 +33,18 @@ from flask import Flask, abort, flash, jsonify, redirect, render_template, reque
 from waitress import serve
 
 import viper_audio as audio
+import viper_broadcast as broadcast
+import viper_cinderella as cinderella
 import viper_config as cfg
 import viper_discovery as discovery
+import viper_ha_addons as ha_addons
 import viper_diagnostics as diagnostics
 import viper_ha_listener as ha_listener
 import viper_ha_package as ha_package
 import viper_ha_vm as ha_vm
 import viper_ring_discovery as ring_discovery
+import viper_speakers as speakers
+import viper_vacuum as vacuum
 import viper_vision as vision
 
 AI_DESCRIPTION_STYLE_LABELS = {
@@ -87,9 +89,19 @@ AI_DESCRIPTION_JOBS = [
     ),
 ]
 
-HIDDEN_VACUUM_SETTING_SUFFIXES = {
-    "_dock_empty_mode",
-}
+HIDDEN_VACUUM_SETTING_SUFFIXES = vacuum.HIDDEN_VACUUM_SETTING_SUFFIXES
+VACUUM_CLEANING_MODES = vacuum.VACUUM_CLEANING_MODES
+VACUUM_CLEANING_MODE_ORDER = vacuum.VACUUM_CLEANING_MODE_ORDER
+vacuum_basic_actions_for_state = vacuum.vacuum_basic_actions_for_state
+vacuum_cleaning_mode_service_calls = vacuum.vacuum_cleaning_mode_service_calls
+_ha_domain_from_entity_id = vacuum.ha_domain_from_entity_id
+_web_entity_name = vacuum.web_entity_name
+_web_short_entity_label = vacuum.web_short_entity_label
+_web_vacuum_tokens = vacuum.web_vacuum_tokens
+_web_looks_like_roborock = vacuum.web_looks_like_roborock
+_web_show_vacuum_setting = vacuum.web_show_vacuum_setting
+_is_hidden_vacuum_setting_entity_id = vacuum.is_hidden_vacuum_setting_entity_id
+_normalize_vacuum_cleaning_mode = vacuum.normalize_vacuum_cleaning_mode
 
 # --- THREAD POOL & SAFE SHUTDOWN LOGIC ---
 executor = ThreadPoolExecutor(max_workers=12)
@@ -606,58 +618,7 @@ TTS_PROFILE_LABELS = {
     "manual": "Manual Broadcasts",
 }
 
-CINDERELLA_STATUS_EVENT_MAP = {
-    "starting": "departure",
-    "cleaning": "departure",
-    "spot_cleaning": "departure",
-    "zoned_cleaning": "departure",
-    "zone_cleaning": "departure",
-    "segment_cleaning": "departure",
-    "mapping": "departure",
-    "patrol": "departure",
-    "robot_status_mopping": "departure",
-    "clean_mop_cleaning": "departure",
-    "clean_mop_mopping": "departure",
-    "segment_mopping": "departure",
-    "segment_clean_mop_cleaning": "departure",
-    "segment_clean_mop_mopping": "departure",
-    "zoned_mopping": "departure",
-    "zoned_clean_mop_cleaning": "departure",
-    "zoned_clean_mop_mopping": "departure",
-    "washing_mop": "washing",
-    "washing_the_mop": "washing",
-    "washing_the_mop_2": "washing",
-    "back_to_dock_washing_duster": "washing",
-    "emptying": "emptying",
-    "emptying_bin": "emptying",
-    "emptying_dustbin": "emptying",
-    "emptying_the_bin": "emptying",
-    "returning": "returning",
-    "returning_home": "returning",
-    "docking": "returning",
-    "going_to_target": "returning",
-    "going_to_wash_the_mop": "returning",
-    "attaching_the_mop": "returning",
-    "detaching_the_mop": "returning",
-    "air_drying_stopping": "returning",
-    "charging": "victory",
-    "docked": "victory",
-    "charging_complete": "victory",
-    "idle": "victory",
-    "paused": "paused",
-    "remote_control_active": "paused",
-    "manual_mode": "paused",
-    "in_call": "paused",
-    "locked": "paused",
-    "unknown": "status_update",
-    "charger_disconnected": "status_update",
-    "charging_problem": "status_update",
-    "error": "status_update",
-    "shutting_down": "status_update",
-    "updating": "status_update",
-    "device_offline": "status_update",
-    "egg_attack": "status_update",
-}
+CINDERELLA_STATUS_EVENT_MAP = cinderella.CINDERELLA_STATUS_EVENT_MAP
 
 DIALECTS = {
     "American": "com",
@@ -712,10 +673,7 @@ threading.Thread(target=monitor_plumbing, daemon=True).start()
 
 def ensure_cinderella_message_config(config_obj: dict) -> dict:
     default_messages = cfg.get_default_config().get("cinderella_messages", {})
-    current = config_obj.get("cinderella_messages", {}) if isinstance(config_obj, dict) else {}
-    merged = cfg._deep_merge(default_messages, current)
-    config_obj["cinderella_messages"] = merged
-    return merged
+    return cinderella.ensure_message_config(config_obj, default_messages, cfg._deep_merge)
 
 
 def choose_cinderella_message(event: str, error: str = "", source: str = "vacuum") -> str:
@@ -723,30 +681,8 @@ def choose_cinderella_message(event: str, error: str = "", source: str = "vacuum
         config_obj = cfg.load_config()
     else:
         config_obj = dash_app.config
-    messages = ensure_cinderella_message_config(config_obj)
-    error_key = (error or "").strip().lower().replace(" ", "_").replace("-", "_")
-    cleaned_error = error_key.replace("_", " ") if error_key else ""
-
-    event_key = (event or "").strip().lower().replace(" ", "_").replace("-", "_")
-    if event_key != "error":
-        event_key = CINDERELLA_STATUS_EVENT_MAP.get(event_key, event_key)
-
-    if event_key == "error":
-        specific = messages.get("specific_errors", {})
-        specific_keys = [f"dock_{error_key}", error_key] if source == "dock" else [error_key]
-        for specific_key in specific_keys:
-            if specific_key and specific_key in specific and specific[specific_key]:
-                return random.choice([m for m in specific[specific_key] if str(m).strip()])
-        template_key = "dock_error_templates" if source == "dock" else "vacuum_error_templates"
-        templates = [m for m in messages.get(template_key, []) if str(m).strip()]
-        if not templates:
-            templates = ["Cinderella has an issue: {error}."]
-        return random.choice(templates).format(error=cleaned_error or "unknown issue")
-
-    choices = [m for m in messages.get(event_key, []) if str(m).strip()]
-    if choices:
-        return random.choice(choices)
-    return ""
+    ensure_cinderella_message_config(config_obj)
+    return cinderella.choose_message(config_obj, event, error=error, source=source)
 
 def _json_or_redirect(message: str, ok: bool = True, status_code: int = 200):
     wants_json = request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.accept_mimetypes.best == "application/json"
@@ -755,80 +691,11 @@ def _json_or_redirect(message: str, ok: bool = True, status_code: int = 200):
     flash(message)
     return redirect(url_for("remote_ui"))
 
-def _resolve_channel_settings(channel: str, config: dict) -> dict:
-    """Return mode+chime for the given channel with a graceful fallback chain.
-
-    Fallback order:
-      fridge_open / fridge_closed  →  fridge  →  default
-      freezer_open / freezer_closed →  freezer →  default
-      anything else                →  default
-    """
-    channels = config.get("broadcast_channels", {})
-    ch_key = (channel or "").lower()
-
-    # Walk the fallback chain
-    candidates = [ch_key]
-    if ch_key in ("fridge_open", "fridge_closed"):
-        candidates.append("fridge")
-    elif ch_key in ("freezer_open", "freezer_closed"):
-        candidates.append("freezer")
-    candidates.append("default")
-
-    for key in candidates:
-        if key in channels:
-            entry = channels[key]
-            return {"mode": entry.get("mode", "speak"), "chime": entry.get("chime", "")}
-
-    return {"mode": "speak", "chime": ""}
-
-
-def _normalize_broadcast_mode(mode) -> str:
-    """Normalize saved/UI mode labels into the internal mode names."""
-    text = str(mode or "speak").strip().lower()
-    text = text.replace("-", " ").replace("_", " ")
-    aliases = {
-        "speak": "speak",
-        "voice": "speak",
-        "spoken": "speak",
-        "speak message": "speak",
-        "chime": "chime",
-        "chime only": "chime",
-        "sound": "chime",
-        "sound only": "chime",
-        "tone": "chime",
-        "tone only": "chime",
-        "silent": "silent",
-        "mute": "silent",
-        "muted": "silent",
-        "off": "silent",
-        "log only": "silent",
-    }
-    return aliases.get(text, "speak")
-
-
-def _normalize_broadcast_message_text(message: str) -> str:
-    return " ".join(str(message or "").strip().lower().rstrip(".!").split())
-
-
-def _infer_fridge_channel_from_message(message: str) -> str:
-    normalized = _normalize_broadcast_message_text(message)
-    return {
-        "the fridge door is open": "fridge_open",
-        "the fridge door is closed": "fridge_closed",
-        "the refrigerator door is open": "fridge_open",
-        "the refrigerator door is closed": "fridge_closed",
-        "the freezer door is open": "freezer_open",
-        "the freezer door is closed": "freezer_closed",
-    }.get(normalized, "")
-
-
-def _resolve_broadcast_channel(channel: str, message: str) -> str:
-    requested = str(channel or "").strip().lower()
-    if requested in {"", "default", "manual"}:
-        inferred = _infer_fridge_channel_from_message(message)
-        if inferred:
-            return inferred
-    return requested
+_resolve_channel_settings = broadcast.resolve_channel_settings
+_normalize_broadcast_mode = broadcast.normalize_broadcast_mode
+_normalize_broadcast_message_text = broadcast.normalize_broadcast_message_text
+_infer_fridge_channel_from_message = broadcast.infer_fridge_channel_from_message
+_resolve_broadcast_channel = broadcast.resolve_broadcast_channel
 
 
 def _notify_dashboard_async(*args, **kwargs):
@@ -839,110 +706,17 @@ def _notify_dashboard_async(*args, **kwargs):
 
 
 def _dispatch_broadcast_message(raw_message: str, push: bool = False, channel: str = "") -> dict:
-    """Dispatch a broadcast according to its channel's configured behaviour.
-
-    channel=""/"default" → global default
-    channel="fridge_open" etc → per-state fridge/freezer control
-    channel="manual"          → always speak (GUI / manual web UI)
-
-    This helper is deliberately independent of Flask request/response state so
-    the web UI, legacy Home Assistant automations, and the direct HA listener
-    all use the same chime/speak/silent routing.
-    """
-    if dash_app is None or is_shutting_down.is_set():
-        return {"ok": False, "message": "System not ready or shutting down.", "status_code": 503}
-
-    msg = (raw_message or "").strip()
-    if not msg:
-        return {"ok": False, "message": "No message provided.", "status_code": 400}
-
-    try:
-        config = dash_app.config
-        if config.get("global_mute", False):
-            _notify_dashboard_async(
-                f"Global mute is on. Broadcast logged with no audio: {msg}",
-                priority=3, interrupt=True, speak=False,
-            )
-            logging.info("[GLOBAL MUTE] Broadcast logged only channel=%r message=%r", channel or "default", msg)
-            return {
-                "ok": True,
-                "message": f"Global mute is on. Broadcast logged with no audio: {msg}",
-                "status_code": 200,
-                "path": "muted",
-                "resolved_channel": _resolve_broadcast_channel(channel, msg),
-            }
-        requested_channel = str(channel or "").strip().lower()
-        resolved_channel = _resolve_broadcast_channel(channel, msg)
-
-        # User-entered manual broadcasts always speak. Legacy HA fridge/freezer
-        # messages can arrive as manual/default, so infer those before this branch.
-        if requested_channel == "manual" and resolved_channel == "manual":
-            ch_settings = {"mode": "speak", "chime": ""}
-        else:
-            ch_settings = _resolve_channel_settings(resolved_channel, config)
-
-        mode  = _normalize_broadcast_mode(ch_settings["mode"])
-        chime = ch_settings["chime"]
-        logging.info(
-            "[BROADCAST ROUTE] requested_channel=%r resolved_channel=%r mode=%s chime=%r path=%s message=%r",
-            requested_channel or "default",
-            resolved_channel or "default",
-            mode,
-            chime,
-            mode,
-            msg,
-        )
-
-        _notify_dashboard_async(
-            f"Broadcast [{resolved_channel or 'default'}] [{mode}]: {msg}",
-            priority=3, interrupt=True, speak=(mode == "speak"),
-        )
-
-        if mode == "silent":
-            logging.info("[BROADCAST] Silent channel=%r logged only: %r", resolved_channel, msg)
-            return {
-                "ok": True,
-                "message": f"Broadcast logged (silent): {msg}",
-                "status_code": 200,
-                "path": "silent",
-                "resolved_channel": resolved_channel,
-            }
-
-        if mode == "chime":
-            future = safe_submit(audio.play_broadcast_chime, chime, resolved_channel)
-            if future is None:
-                return {"ok": False, "message": "System shutting down.", "status_code": 503}
-            logging.info("[BROADCAST] Chime channel=%r chime=%r for: %r", resolved_channel, chime, msg)
-            return {
-                "ok": True,
-                "message": f"Chime played for: {msg}",
-                "status_code": 200,
-                "path": "chime",
-                "resolved_channel": resolved_channel,
-                "chime": chime,
-            }
-
-        # speak
-        broadcast_context = {
-            "channel": "broadcast",
-            "push": push,
-            "received_ts": time.time(),
-            "received_iso": datetime.now().isoformat(timespec="seconds"),
-        }
-        future = safe_submit(audio.play_notification, "manual", msg, push)
-        if future is None:
-            return {"ok": False, "message": "Broadcast rejected — system shutting down.", "status_code": 503}
-        return {
-            "ok": True,
-            "message": f"Broadcast sent: {msg}",
-            "status_code": 200,
-            "path": "speak",
-            "resolved_channel": resolved_channel,
-        }
-
-    except Exception as e:
-        logging.exception("Broadcast route failed")
-        return {"ok": False, "message": f"Broadcast failed: {e}", "status_code": 500}
+    return broadcast.dispatch_broadcast_message(
+        raw_message,
+        config=dash_app.config if dash_app is not None else {},
+        notify=_notify_dashboard_async,
+        submit=safe_submit,
+        play_notification=audio.play_notification,
+        play_broadcast_chime=audio.play_broadcast_chime,
+        system_ready=bool(dash_app is not None and not is_shutting_down.is_set()),
+        push=push,
+        channel=channel,
+    )
 
 
 def _broadcast_message(raw_message: str, push: bool = False, channel: str = ""):
@@ -1203,56 +977,6 @@ def web_restore_optional_setup():
         flash(f"Could not restore optional setup items: {e}")
     return redirect(url_for("remote_ui") + "#setup-status-heading")
 
-def _ha_domain_from_entity_id(entity_id):
-    return entity_id.split(".", 1)[0] if isinstance(entity_id, str) and "." in entity_id else ""
-
-def _web_entity_name(entity):
-    attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
-    return str(attrs.get("friendly_name") or entity.get("entity_id") or "")
-
-def _web_short_entity_label(entity):
-    name = _web_entity_name(entity)
-    entity_id = entity.get("entity_id", "")
-    return f"{name} ({entity_id})" if name and name != entity_id else entity_id
-
-def _web_vacuum_tokens(entity_id):
-    tokens = {"roborock", "cinderella", "saros", "qrevo", "q revo"}
-    if entity_id and "." in entity_id:
-        base = entity_id.split(".", 1)[1]
-        tokens.add(base.lower())
-        tokens.update(part for part in re.split(r"[_\s-]+", base.lower()) if len(part) >= 4)
-    return tokens
-
-def _web_looks_like_roborock(entity):
-    attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
-    text = " ".join(
-        str(part).lower()
-        for part in [
-            entity.get("entity_id"),
-            attrs.get("friendly_name"),
-            attrs.get("manufacturer"),
-            attrs.get("model"),
-            attrs.get("platform"),
-            attrs.get("integration"),
-        ]
-    )
-    return any(token in text for token in ["roborock", "cinderella", "saros", "qrevo", "q revo", "s7", "s8"])
-
-def _web_show_vacuum_setting(entity):
-    entity_id = entity.get("entity_id", "")
-    domain = _ha_domain_from_entity_id(entity_id)
-    if _is_hidden_vacuum_setting_entity_id(entity_id):
-        return False
-    if domain in {"select", "number"}:
-        return True
-    if domain == "switch" and "child_lock" in entity_id:
-        return True
-    return False
-
-def _is_hidden_vacuum_setting_entity_id(entity_id):
-    entity_id = str(entity_id or "").lower()
-    return any(entity_id.endswith(suffix) for suffix in HIDDEN_VACUUM_SETTING_SUFFIXES)
-
 def _web_vacuum_switch_next_action(state):
     state = str(state or "").strip().lower()
     turn_on = state != "on"
@@ -1269,9 +993,15 @@ def _build_web_vacuum_context():
         "vacuums": [],
         "selected": "",
         "selected_entity": None,
+        "state": "unknown",
+        "actions": [],
         "status_lines": [],
+        "cleaning_modes": [{"value": key, "label": VACUUM_CLEANING_MODES[key]} for key in VACUUM_CLEANING_MODE_ORDER],
+        "cleaning_mode": "vacuum_mop",
+        "cleaning_mode_label": VACUUM_CLEANING_MODES["vacuum_mop"],
         "fan_speeds": [],
         "settings": [],
+        "related_controls": [],
         "rooms": [],
     }
     if not dash_app:
@@ -1307,6 +1037,11 @@ def _build_web_vacuum_context():
         if entity_id == selected or any(token and token in text for token in tokens):
             related.append(entity)
     related = sorted(related, key=lambda e: (_ha_domain_from_entity_id(e.get("entity_id", "")), _web_entity_name(e).lower()))
+    try:
+        dash_app._last_web_vacuum_controls = getattr(dash_app, "_last_web_vacuum_controls", {})
+        dash_app._last_web_vacuum_controls[selected] = related
+    except Exception:
+        pass
     attrs = selected_entity.get("attributes") if selected_entity and isinstance(selected_entity.get("attributes"), dict) else {}
     status_lines = []
     if selected_entity:
@@ -1344,18 +1079,31 @@ def _build_web_vacuum_context():
             "step": entity_attrs.get("step", 1),
         })
     rooms = dash_app.config.get("vacuum_rooms", {}).get(selected, [])
+    current_mode = _normalize_vacuum_cleaning_mode(dash_app.config.get("vacuum_cleaning_mode", "vacuum_mop"))
     return {
         "ok": bool(vacuums),
         "message": "Vacuum controls loaded." if vacuums else "No vacuum entities found in Home Assistant.",
         "vacuums": [{"entity_id": entity.get("entity_id", ""), "label": _web_short_entity_label(entity), "state": entity.get("state", "unknown")} for entity in vacuums],
         "selected": selected,
         "selected_entity": selected_entity,
+        "state": selected_entity.get("state", "unknown") if selected_entity else "unknown",
+        "actions": vacuum_basic_actions_for_state(selected_entity.get("state", "unknown") if selected_entity else "unknown"),
         "status_lines": status_lines,
+        "cleaning_modes": [{"value": key, "label": VACUUM_CLEANING_MODES[key]} for key in VACUUM_CLEANING_MODE_ORDER],
+        "cleaning_mode": current_mode,
+        "cleaning_mode_label": VACUUM_CLEANING_MODES[current_mode],
         "fan_speeds": [str(speed) for speed in attrs.get("fan_speed_list", [])] if isinstance(attrs.get("fan_speed_list"), list) else [],
         "current_fan_speed": str(attrs.get("fan_speed", "")),
         "settings": settings,
+        "related_controls": related,
         "rooms": rooms,
     }
+
+def _cached_web_vacuum_controls(entity_id):
+    if not dash_app:
+        return []
+    cache = getattr(dash_app, "_last_web_vacuum_controls", {})
+    return cache.get(entity_id, []) if isinstance(cache, dict) else []
 
 @app.route("/remote/tts_engine", methods=["POST"])
 def web_set_tts_engine():
@@ -1542,8 +1290,29 @@ def web_vacuum_action():
     if not entity_id or service not in allowed:
         flash("Vacuum action was missing a vacuum or valid action.")
         return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+    mode = _normalize_vacuum_cleaning_mode(request.form.get("cleaning_mode") or dash_app.config.get("vacuum_cleaning_mode"))
+    dash_app.config["vacuum_cleaning_mode"] = mode
+    if service == "vacuum/start":
+        for mode_service, mode_payload in vacuum_cleaning_mode_service_calls(entity_id, _cached_web_vacuum_controls(entity_id), mode):
+            dash_app._call_ha_service_data(mode_service, mode_payload, timeout=30)
     ok = dash_app._call_ha_service_data(service, {"entity_id": entity_id})
-    flash(f"Sent {service.replace('/', '.')} to {entity_id}." if ok else "Vacuum action failed. Check the Viper log.")
+    dash_app.save_config()
+    action_name = service.replace("/", ".")
+    if service == "vacuum/start":
+        action_name = f"{VACUUM_CLEANING_MODES[mode]} start"
+    flash(f"Sent {action_name} to {entity_id}." if ok else "Vacuum action failed. Check the Viper log.")
+    return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+
+@app.route("/remote/vacuum/cleaning_mode", methods=["POST"])
+def web_vacuum_cleaning_mode():
+    if not dash_app:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    entity_id = request.form.get("vacuum_entity", "").strip()
+    mode = _normalize_vacuum_cleaning_mode(request.form.get("cleaning_mode"))
+    dash_app.config["vacuum_cleaning_mode"] = mode
+    dash_app.save_config()
+    flash(f"Vacuum cleaning mode saved: {VACUUM_CLEANING_MODES[mode]}.")
     return redirect(url_for("remote_ui", vacuum_entity=entity_id))
 
 @app.route("/remote/vacuum/fan_speed", methods=["POST"])
@@ -1631,9 +1400,14 @@ def web_vacuum_clean_rooms():
     if not entity_id or not segments:
         flash("Choose a vacuum and at least one room first.")
         return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+    mode = _normalize_vacuum_cleaning_mode(request.form.get("cleaning_mode") or dash_app.config.get("vacuum_cleaning_mode"))
+    dash_app.config["vacuum_cleaning_mode"] = mode
+    for mode_service, mode_payload in vacuum_cleaning_mode_service_calls(entity_id, _cached_web_vacuum_controls(entity_id), mode):
+        dash_app._call_ha_service_data(mode_service, mode_payload, timeout=30)
     payload = {"entity_id": entity_id, "command": "app_segment_clean", "params": [{"segments": segments, "repeat": repeat}]}
     ok = dash_app._call_ha_service_data("vacuum/send_command", payload)
-    flash(f"Sent room clean request for {len(segments)} room{'s' if len(segments) != 1 else ''}." if ok else "Could not send room clean request.")
+    dash_app.save_config()
+    flash(f"Sent {VACUUM_CLEANING_MODES[mode].lower()} room clean request for {len(segments)} room{'s' if len(segments) != 1 else ''}." if ok else "Could not send room clean request.")
     return redirect(url_for("remote_ui", vacuum_entity=entity_id))
 
 @app.route("/remote/vacuum/advanced", methods=["POST"])
@@ -5443,33 +5217,7 @@ class HomeAssistantSetupDialog(wx.Dialog):
             self._set_setup_status(message, announce=True)
 
     def _check_supervisor_install_permission(self, settings):
-        try:
-            self._hassio_request(settings, "GET", "/supervisor/info", timeout=8)
-            return {
-                "ok": True,
-                "reason": "ok",
-                "message": "Installer permission: this Home Assistant token can access Supervisor add-on management.",
-            }
-        except Exception as e:
-            message = str(e)
-            lowered = message.lower()
-            if "rejected this token" in lowered:
-                return {
-                    "ok": False,
-                    "reason": "supervisor_token_rejected",
-                    "message": "Installer permission: blocked. Viper can use the normal Home Assistant API, but Supervisor add-on management rejected this external token. Use the Home Assistant VM console fallback.",
-                }
-            if "did not expose the supervisor" in lowered:
-                return {
-                    "ok": False,
-                    "reason": "supervisor_unavailable",
-                    "message": "Installer permission: not available because this Home Assistant system does not expose Supervisor add-on management.",
-                }
-            return {
-                "ok": False,
-                "reason": "check_failed",
-                "message": f"Installer permission: could not be checked. {message}",
-            }
+        return ha_addons.check_supervisor_install_permission(settings, self._hassio_request)
 
     def on_install_ring_mqtt_requirements(self, event):
         settings = self._settings()
@@ -5487,239 +5235,78 @@ class HomeAssistantSetupDialog(wx.Dialog):
         safe_submit(self._run_install_ring_mqtt_requirements, settings)
 
     def _hassio_request(self, settings, method, path, *, payload=None, timeout=30):
-        ha_ip = settings.get("ha_ip") or ""
-        ha_port = settings.get("ha_port") or "8123"
-        token = settings.get("ha_token") or ""
-        url = f"http://{ha_ip}:{ha_port}/api/hassio{path}"
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        response = requests.request(method, url, headers=headers, json=payload or {}, timeout=timeout)
-        if response.status_code == 404:
-            return self._hassio_ws_request(settings, method, path, payload=payload, timeout=timeout)
-        if response.status_code in {401, 403}:
-            logging.info("[HA SETUP] REST Supervisor API returned HTTP %s for %s; trying WebSocket supervisor/api fallback.", response.status_code, path)
-            return self._hassio_ws_request(settings, method, path, payload=payload, timeout=timeout)
-        response.raise_for_status()
-        try:
-            return response.json()
-        except ValueError:
-            return {}
+        return ha_addons.hassio_request(
+            settings,
+            method,
+            path,
+            payload=payload,
+            timeout=timeout,
+            ws_request_func=self._hassio_ws_request,
+        )
 
     def _hassio_ws_request(self, settings, method, path, *, payload=None, timeout=30):
-        return self._ha_ws_command(
+        return ha_addons.hassio_ws_request(
             settings,
-            {
-                "type": "supervisor/api",
-                "endpoint": path,
-                "method": str(method or "GET").lower(),
-                "data": payload or {},
-                "timeout": timeout,
-            },
+            method,
+            path,
+            payload=payload,
             timeout=timeout,
+            ws_command_func=self._ha_ws_command,
         )
 
     def _ha_ws_command(self, settings, command, *, timeout=30):
-        ha_ip = settings.get("ha_ip") or ""
-        ha_port = settings.get("ha_port") or "8123"
-        token = settings.get("ha_token") or ""
-        if not ha_ip or not token:
-            raise RuntimeError("Home Assistant host or token is missing.")
-
-        async def call_ws_command():
-            host = ha_ip
-            port = str(ha_port or "8123")
-            scheme = "wss" if str(host).startswith("https://") else "ws"
-            if "://" in str(host):
-                parsed = urlparse(str(host))
-                scheme = "wss" if parsed.scheme == "https" else "ws"
-                host = parsed.hostname or host
-                port = str(parsed.port or port or ("443" if scheme == "wss" else "8123"))
-            ws_url = f"{scheme}://{host}:{port}/api/websocket"
-            async with websockets.connect(ws_url, open_timeout=min(float(timeout), 10.0)) as ws:
-                greeting = json.loads(await asyncio.wait_for(ws.recv(), timeout=timeout))
-                if greeting.get("type") != "auth_required":
-                    raise RuntimeError("Home Assistant WebSocket did not request authentication.")
-                await ws.send(json.dumps({"type": "auth", "access_token": token}))
-                auth = json.loads(await asyncio.wait_for(ws.recv(), timeout=timeout))
-                if auth.get("type") != "auth_ok":
-                    raise RuntimeError("Home Assistant rejected the token for WebSocket access.")
-                message = dict(command or {})
-                message["id"] = 1
-                await ws.send(json.dumps(message))
-                response = json.loads(await asyncio.wait_for(ws.recv(), timeout=timeout))
-                if not response.get("success"):
-                    error = response.get("error") or {}
-                    message = error.get("message") if isinstance(error, dict) else str(error)
-                    code = error.get("code") if isinstance(error, dict) else ""
-                    raise RuntimeError(message or code or "Home Assistant rejected the WebSocket request.")
-                result = response.get("result")
-                return result if isinstance(result, dict) else {}
-
-        try:
-            return asyncio.run(call_ws_command())
-        except RuntimeError as e:
-            raise RuntimeError(f"Home Assistant WebSocket request failed: {e}") from e
-        except Exception as e:
-            raise RuntimeError(f"Home Assistant WebSocket request failed: {e}") from e
+        return ha_addons.ha_ws_command(settings, command, timeout=timeout)
 
     def _addon_items_from_payload(self, payload):
-        if isinstance(payload, list):
-            return payload
-        if isinstance(payload, dict):
-            data = payload.get("data")
-            if isinstance(data, dict) and isinstance(data.get("addons"), list):
-                return data.get("addons")
-            if isinstance(payload.get("addons"), list):
-                return payload.get("addons")
-        return []
+        return ha_addons.addon_items_from_payload(payload)
 
     def _payload_data(self, payload):
-        if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
-            return payload.get("data")
-        return payload if isinstance(payload, dict) else {}
+        return ha_addons.payload_data(payload)
 
     def _get_installed_addons(self, settings):
-        try:
-            payload = self._hassio_request(settings, "GET", "/addons", timeout=30)
-            addons = self._addon_items_from_payload(payload)
-            if addons:
-                return addons
-        except Exception as e:
-            logging.info("[HA SETUP] Installed add-on list unavailable from /addons: %s", e)
-        try:
-            payload = self._hassio_request(settings, "GET", "/supervisor/info", timeout=30)
-            data = self._payload_data(payload)
-            addons = data.get("addons", []) if isinstance(data, dict) else []
-            return addons if isinstance(addons, list) else []
-        except Exception as e:
-            logging.info("[HA SETUP] Installed add-on list unavailable from supervisor info: %s", e)
-            return []
+        return ha_addons.get_installed_addons(settings, self._hassio_request)
 
     def _get_addon_info(self, settings, slug):
         payload = self._hassio_request(settings, "GET", f"/addons/{slug}/info", timeout=30)
         return self._payload_data(payload)
 
     def _ensure_addon_started(self, settings, slug):
-        if not slug:
-            return False
-        try:
-            info = self._get_addon_info(settings, slug)
-            if str(info.get("state", "")).lower() in {"started", "running"}:
-                return True
-        except Exception:
-            pass
-        try:
-            self._hassio_request(settings, "POST", f"/addons/{slug}/start", timeout=90)
-            return True
-        except Exception as e:
-            message = str(e).lower()
-            if "already" in message or "started" in message or "running" in message:
-                return True
-            raise
+        return ha_addons.ensure_addon_started(settings, slug, self._get_addon_info, self._hassio_request)
 
     def _restart_addon(self, settings, slug):
-        if not slug:
-            return False
-        try:
-            self._hassio_request(settings, "POST", f"/addons/{slug}/restart", timeout=120)
-            return True
-        except Exception as e:
-            logging.info("[HA SETUP] Add-on restart failed for %s; falling back to start. %s", slug, e)
-            return self._ensure_addon_started(settings, slug)
+        return ha_addons.restart_addon(settings, slug, self._hassio_request, self._ensure_addon_started)
 
     def _configure_ring_mqtt_rtsp_port(self, settings):
-        payload = {"network": {"8554/tcp": 8554}}
-        self._hassio_request(settings, "POST", f"/addons/{RING_MQTT_ADDON_SLUG}/options", payload=payload, timeout=60)
-        return True
+        return ha_addons.configure_ring_mqtt_rtsp_port(settings, self._hassio_request)
 
     def _configure_ring_mqtt_rtsp_port_and_restart(self, settings):
-        self._configure_ring_mqtt_rtsp_port(settings)
-        self._restart_addon(settings, RING_MQTT_ADDON_SLUG)
-        self._ensure_addon_started(settings, RING_MQTT_ADDON_SLUG)
-        return True
+        return ha_addons.configure_ring_mqtt_rtsp_port_and_restart(
+            settings,
+            self._configure_ring_mqtt_rtsp_port,
+            self._restart_addon,
+            self._ensure_addon_started,
+        )
 
     def _absolute_ha_url(self, settings, path_or_url):
-        text = str(path_or_url or "").strip()
-        if not text:
-            return ""
-        if text.startswith("http://") or text.startswith("https://"):
-            return text
-        ha_ip = settings.get("ha_ip") or ""
-        ha_port = settings.get("ha_port") or "8123"
-        if not text.startswith("/"):
-            text = "/" + text
-        return f"http://{ha_ip}:{ha_port}{text}"
+        return ha_addons.absolute_ha_url(settings, path_or_url)
 
     def _normalize_addon_webui(self, settings, value):
-        text = str(value or "").strip()
-        if not text:
-            return ""
-        ha_ip = settings.get("ha_ip") or ""
-        text = text.replace("[HOST]", ha_ip).replace("{host}", ha_ip).replace("0.0.0.0", ha_ip)
-        text = re.sub(r"\[PORT:(\d+)\]", r"\1", text)
-        text = re.sub(r"\[PROTO:[^\]]+\]", "http", text)
-        return self._absolute_ha_url(settings, text)
+        return ha_addons.normalize_addon_webui(settings, value)
 
     def _get_current_ha_user_id(self, settings):
-        try:
-            user = self._ha_ws_command(settings, {"type": "auth/current_user"}, timeout=15)
-        except Exception as e:
-            logging.info("[HA SETUP] Could not read current Home Assistant user for ingress session: %s", e)
-            return ""
-        return str(user.get("id") or user.get("user_id") or "").strip()
+        return ha_addons.current_ha_user_id(settings, self._ha_ws_command)
 
     def _create_ingress_session(self, settings):
-        user_id = self._get_current_ha_user_id(settings)
-        payload = {"user_id": user_id} if user_id else {}
-        session_payload = self._hassio_request(settings, "POST", "/ingress/session", payload=payload, timeout=30)
-        session_data = self._payload_data(session_payload)
-        return session_data.get("session") or session_data.get("ingress_session") or session_data.get("token") or ""
+        return ha_addons.create_ingress_session(settings, self._hassio_request, self._ha_ws_command)
 
     def _ingress_session_url(self, settings, session, addon_info):
-        token = str(session or "").strip()
-        if not token:
-            return ""
-        data = addon_info if isinstance(addon_info, dict) else {}
-
-        def suffix_from_ingress_path(value):
-            text = str(value or "").strip()
-            marker = "/api/hassio_ingress/"
-            if marker not in text:
-                return text
-            after = text.split(marker, 1)[1]
-            parts = after.split("/", 1)
-            if len(parts) == 2 and parts[1]:
-                return "/" + parts[1].lstrip("/")
-            return "/"
-
-        entry = str(data.get("ingress_entry") or "").strip()
-        if entry:
-            entry = suffix_from_ingress_path(entry)
-            if not entry.startswith("/"):
-                entry = "/" + entry
-            return self._absolute_ha_url(settings, f"/api/hassio_ingress/{token}{entry}")
-
-        ingress_url = str(data.get("ingress_url") or "").strip()
-        suffix = suffix_from_ingress_path(ingress_url) or "/"
-        if not suffix.startswith("/"):
-            suffix = "/" + suffix
-        return self._absolute_ha_url(settings, f"/api/hassio_ingress/{token}{suffix}")
+        return ha_addons.ingress_session_url(settings, session, addon_info)
 
     def _resolve_addon_login_url(self, settings, slug):
-        if self._is_ring_mqtt_slug(slug):
-            return self._absolute_ha_url(settings, f"/app/{RING_MQTT_ADDON_SLUG}")
-        info = self._get_addon_info(settings, slug)
-        data = self._payload_data(info)
-        if data.get("ingress") or data.get("ingress_url") or data.get("ingress_entry"):
-            return self._absolute_ha_url(settings, f"/app/{slug}")
-        for key in ("webui",):
-            if data.get(key):
-                return self._normalize_addon_webui(settings, data.get(key))
-        return self._ring_mqtt_app_page_url(settings, slug)
+        return ha_addons.resolve_addon_login_url(settings, slug, self._get_addon_info)
 
     def _ring_mqtt_app_page_url(self, settings, slug):
-        if self._is_ring_mqtt_slug(slug):
-            slug = RING_MQTT_ADDON_SLUG
-        return self._absolute_ha_url(settings, f"/config/app/{slug}/info")
+        return ha_addons.ring_mqtt_app_page_url(settings, slug)
 
     def _open_ring_mqtt_login(self, slug):
         settings = self._settings()
@@ -5773,240 +5360,29 @@ class HomeAssistantSetupDialog(wx.Dialog):
             )
 
     def _find_addon_slug(self, addons, *, exact_slugs=(), text_tokens=()):
-        lowered_exact = {str(item).lower() for item in exact_slugs}
-        if lowered_exact:
-            for addon in addons:
-                slug = str(addon.get("slug") or addon.get("addon") or "").strip()
-                if slug.lower() in lowered_exact:
-                    return slug
-        for addon in addons:
-            haystack = " ".join(
-                str(addon.get(key, ""))
-                for key in ("slug", "addon", "name", "description", "repository", "url")
-            ).lower()
-            if all(token.lower() in haystack for token in text_tokens):
-                return str(addon.get("slug") or addon.get("addon") or "").strip()
-        return ""
+        return ha_addons.find_addon_slug(addons, exact_slugs=exact_slugs, text_tokens=text_tokens)
 
     def _find_ring_mqtt_slug(self, addons):
-        exact_slugs = {"ring_mqtt", RING_MQTT_ADDON_SLUG}
-        preferred_repo = "03cabcc9"
-        preferred_repo_url = "github.com/tsightler/ring-mqtt-ha-addon"
-        exact_names = {"ring-mqtt with video streaming", "ring mqtt with video streaming"}
-        candidates = []
-        for addon in addons or []:
-            slug = str(addon.get("slug") or addon.get("addon") or "").strip()
-            name = str(addon.get("name") or "").strip()
-            description = str(addon.get("description") or "")
-            repository = str(addon.get("repository") or "")
-            url = str(addon.get("url") or addon.get("repository_url") or addon.get("source") or "")
-            slug_l = slug.lower()
-            name_l = name.lower()
-            description_l = description.lower()
-            repository_l = repository.lower()
-            url_l = url.lower()
-            if not slug:
-                continue
-            if slug_l in exact_slugs:
-                return RING_MQTT_ADDON_SLUG
-            score = 0
-            if name_l in exact_names:
-                score += 100
-            if "ring_mqtt" in slug_l or "ring-mqtt" in slug_l:
-                score += 80
-            if repository == preferred_repo:
-                score += 60
-            if preferred_repo_url in repository_l or preferred_repo_url in url_l:
-                score += 80
-            if "ring devices" in description_l and "mqtt" in description_l:
-                score += 30
-            if "video streaming" in name_l or "video streaming" in description_l:
-                score += 10
-            has_ring = "ring" in slug_l or "ring" in name_l or "ring" in description_l or preferred_repo_url in repository_l or preferred_repo_url in url_l
-            has_mqtt = "mqtt" in slug_l or "mqtt" in name_l or "mqtt" in description_l or preferred_repo_url in repository_l or preferred_repo_url in url_l
-            if score >= 80 and has_ring and has_mqtt:
-                candidates.append((score, slug))
-        if not candidates:
-            return ""
-        candidates.sort(reverse=True)
-        return candidates[0][1]
+        return ha_addons.find_ring_mqtt_slug(addons)
 
     def _is_ring_mqtt_slug(self, slug):
-        slug_l = str(slug or "").strip().lower()
-        return slug_l in {"ring_mqtt", RING_MQTT_ADDON_SLUG}
+        return ha_addons.is_ring_mqtt_slug(slug)
 
     def _addon_installed_in_store(self, addons, slug):
-        wanted = str(slug or "").lower()
-        for addon in addons or []:
-            addon_slug = str(addon.get("slug") or addon.get("addon") or "").lower()
-            if addon_slug == wanted and bool(addon.get("installed")):
-                return True
-        return False
+        return ha_addons.addon_installed_in_store(addons, slug)
 
     def _run_install_ring_mqtt_requirements(self, settings):
-        lines = ["Ring MQTT Requirements Installer"]
-        def progress(message, *, announce=False):
+        def progress(lines, message, *, announce=False):
             self._append_setup_progress(lines, message, announce=announce)
 
-        try:
-            progress("Checking whether Home Assistant Supervisor accepts add-on setup requests.", announce=True)
-            self._hassio_request(settings, "GET", "/supervisor/info", timeout=12)
-            progress("Supervisor API: available.")
-
-            repo_url = "https://github.com/tsightler/ring-mqtt-ha-addon"
-            try:
-                progress("Adding the Ring-MQTT add-on repository if it is not already present.")
-                self._hassio_request(settings, "POST", "/store/repositories", payload={"repository": repo_url}, timeout=60)
-                progress("Ring-MQTT repository: added.", announce=True)
-            except Exception as e:
-                message = str(e)
-                if "already" in message.lower() or "exist" in message.lower():
-                    progress("Ring-MQTT repository: already present.")
-                else:
-                    progress(f"Ring-MQTT repository: add reported {message}")
-
-            try:
-                progress("Reloading the Home Assistant app store so Ring-MQTT appears.")
-                self._hassio_request(settings, "POST", "/store/reload", timeout=60)
-                progress("App store: reloaded.")
-            except Exception as e:
-                progress(f"App store reload: {e}")
-
-            progress("Reading Home Assistant app store add-ons.")
-            store_payload = self._hassio_request(settings, "GET", "/store/addons", timeout=30)
-            addons = self._addon_items_from_payload(store_payload)
-            progress("Reading installed Home Assistant add-ons.")
-            installed_addons = self._get_installed_addons(settings)
-            mosquitto_slug = self._find_addon_slug(
-                installed_addons,
-                exact_slugs=("core_mosquitto",),
-                text_tokens=("mosquitto",),
-            ) or self._find_addon_slug(
-                addons,
-                exact_slugs=("core_mosquitto",),
-                text_tokens=("mosquitto",),
-            )
-            ring_slug = self._find_addon_slug(
-                installed_addons,
-                exact_slugs=(RING_MQTT_ADDON_SLUG, "ring_mqtt"),
-            ) or self._find_ring_mqtt_slug(installed_addons) or self._find_addon_slug(
-                addons,
-                exact_slugs=(RING_MQTT_ADDON_SLUG, "ring_mqtt"),
-            ) or self._find_ring_mqtt_slug(addons)
-            if ring_slug and not self._is_ring_mqtt_slug(ring_slug):
-                logging.warning("[HA SETUP] Refusing non-Ring-MQTT add-on slug during detection: %s", ring_slug)
-                progress(f"Ignoring non-Ring-MQTT add-on that matched by mistake: {ring_slug}.")
-                ring_slug = ""
-
-            if not mosquitto_slug:
-                progress("Mosquitto Broker: not found in the app store.", announce=True)
-            else:
-                mosquitto_already_installed = bool(self._find_addon_slug(installed_addons, exact_slugs=(mosquitto_slug,))) or self._addon_installed_in_store(addons, mosquitto_slug)
-                if mosquitto_already_installed:
-                    progress(f"Mosquitto Broker: already installed as {mosquitto_slug}.")
-                else:
-                    try:
-                        progress(f"Installing Mosquitto Broker as {mosquitto_slug}. This can take a minute.")
-                        self._hassio_request(settings, "POST", f"/store/addons/{mosquitto_slug}/install", payload={"background": False}, timeout=180)
-                        progress(f"Mosquitto Broker: installed as {mosquitto_slug}.", announce=True)
-                    except Exception as e:
-                        message = str(e)
-                        if "already" in message.lower() or "installed" in message.lower():
-                            progress(f"Mosquitto Broker: already installed as {mosquitto_slug}.")
-                        else:
-                            progress(f"Mosquitto Broker install: {message}")
-                try:
-                    progress("Starting Mosquitto Broker if it is not already running.")
-                    self._ensure_addon_started(settings, mosquitto_slug)
-                    progress("Mosquitto Broker: start requested.")
-                except Exception as e:
-                    progress(f"Mosquitto Broker start: {e}")
-
-            if not ring_slug:
-                installed = False
-                for candidate_slug in (RING_MQTT_ADDON_SLUG, "ring_mqtt"):
-                    try:
-                        progress(f"Installing Ring-MQTT with Video Streaming as {candidate_slug}. This can take several minutes.")
-                        self._hassio_request(settings, "POST", f"/store/addons/{candidate_slug}/install", payload={"background": False}, timeout=240)
-                        ring_slug = candidate_slug
-                        installed = True
-                        progress(f"Ring-MQTT with Video Streaming: installed as {candidate_slug}.", announce=True)
-                        break
-                    except Exception as e:
-                        message = str(e)
-                        if "already" in message.lower() or "installed" in message.lower():
-                            ring_slug = candidate_slug
-                            installed = True
-                            progress(f"Ring-MQTT with Video Streaming: already installed as {candidate_slug}.")
-                            break
-                if not installed:
-                    progress("Ring-MQTT with Video Streaming: not found after adding the repository. Viper did not open another add-on.", announce=True)
-                else:
-                    try:
-                        progress("Starting Ring-MQTT.")
-                        self._ensure_addon_started(settings, ring_slug)
-                        progress("Ring-MQTT: start requested.")
-                    except Exception as e:
-                        progress(f"Ring-MQTT start: {e}")
-            else:
-                ring_already_installed = bool(self._find_addon_slug(installed_addons, exact_slugs=(ring_slug,))) or self._addon_installed_in_store(addons, ring_slug)
-                if ring_already_installed:
-                    progress("Ring-MQTT is already installed. Opening Ring login now when setup finishes.", announce=True)
-                else:
-                    try:
-                        progress(f"Installing Ring-MQTT with Video Streaming as {ring_slug}. This can take several minutes.")
-                        self._hassio_request(settings, "POST", f"/store/addons/{ring_slug}/install", payload={"background": False}, timeout=240)
-                        progress(f"Ring-MQTT with Video Streaming: installed as {ring_slug}.", announce=True)
-                    except Exception as e:
-                        message = str(e)
-                        if "already" in message.lower() or "installed" in message.lower():
-                            progress(f"Ring-MQTT with Video Streaming: already installed as {ring_slug}.")
-                        else:
-                            progress(f"Ring-MQTT install: {message}")
-                try:
-                    progress("Starting Ring-MQTT.")
-                    self._ensure_addon_started(settings, ring_slug)
-                    progress("Ring-MQTT: start requested.")
-                except Exception as e:
-                    progress(f"Ring-MQTT start: {e}")
-
-            if ring_slug:
-                try:
-                    progress("Configuring Ring-MQTT RTSP port 8554 and restarting Ring-MQTT.")
-                    self._configure_ring_mqtt_rtsp_port_and_restart(settings)
-                    progress("Ring-MQTT RTSP port 8554: configured.")
-                    progress("Ring-MQTT: restarted so RTSP port 8554 is active.", announce=True)
-                except Exception as e:
-                    progress(
-                        "Ring-MQTT RTSP port 8554: could not be configured automatically. "
-                        "Open the Ring-MQTT app configuration in Home Assistant, set network port 8554 for 8554/tcp, save, and restart Ring-MQTT."
-                    )
-                    progress(f"Ring-MQTT RTSP port error: {e}")
-
-            progress("")
-            progress("Next steps:")
-            progress("1. Viper will open the Ring-MQTT app page in your normal browser.")
-            progress("2. On that Home Assistant app page, tab to Open Web UI and activate it.")
-            progress("3. Enter Ring credentials only inside Ring-MQTT or Home Assistant.")
-            progress("4. After Ring-MQTT login is complete, return to Viper and press Find Ring MQTT Streams.", announce=True)
-            result = {"ok": True, "message": "\n".join(lines), "ring_slug": ring_slug}
-        except Exception as e:
-            lines.extend([
-                f"Installer could not continue: {e}",
-                "",
-                "Accessible fallback using the Home Assistant VM console:",
-                "1. Open the Home Assistant VirtualBox window or console.",
-                "2. At the ha > prompt, run:",
-                "   addons repositories add https://github.com/tsightler/ring-mqtt-ha-addon",
-                "   addons reload",
-                "   addons list",
-                "   addons install core_mosquitto",
-                "3. Run addons list again, find the Ring-MQTT slug, then run:",
-                "   addons install SLUG_HERE",
-                "",
-                "If you are using SSH instead of the ha > console prompt, prefix each command with ha, for example: ha addons list",
-            ])
-            result = {"ok": False, "message": "\n".join(lines)}
+        result = ha_addons.install_ring_mqtt_requirements(
+            settings,
+            progress=progress,
+            hassio_request_func=self._hassio_request,
+            get_installed_addons_func=self._get_installed_addons,
+            ensure_addon_started_func=self._ensure_addon_started,
+            configure_ring_mqtt_func=self._configure_ring_mqtt_rtsp_port_and_restart,
+        )
         wx.CallAfter(self._finish_install_ring_mqtt_requirements, result)
 
     def _finish_install_ring_mqtt_requirements(self, result):
@@ -11502,20 +10878,24 @@ class ViperDashboard(wx.Frame):
         )
         top.Add(self.vacuum_status_txt, 0, wx.ALL | wx.EXPAND, 5)
 
-        actions = wx.GridSizer(rows=2, cols=3, vgap=6, hgap=6)
-        for label, service, help_text in [
-            ("Start cleaning", "vacuum/start", "Start cleaning button. Starts or resumes the selected Roborock vacuum."),
-            ("Pause cleaning", "vacuum/pause", "Pause cleaning button. Pauses the selected Roborock vacuum."),
-            ("Stop cleaning", "vacuum/stop", "Stop cleaning button. Stops the selected Roborock vacuum."),
-            ("Return to dock", "vacuum/return_to_base", "Return to dock button. Sends the selected Roborock vacuum back to its dock."),
-            ("Locate vacuum", "vacuum/locate", "Locate vacuum button. Makes the selected Roborock identify itself if Home Assistant supports locate."),
-            ("Spot clean", "vacuum/clean_spot", "Spot clean button. Starts a spot cleaning cycle if Home Assistant supports it."),
-        ]:
-            btn = wx.Button(self.tab_vacuum, label=label, size=(-1, 40))
-            btn.Bind(wx.EVT_BUTTON, lambda event, svc=service: self.on_vacuum_basic_action(event, svc))
-            self._describe_control(btn, help_text)
-            actions.Add(btn, 0, wx.EXPAND)
-        top.Add(actions, 0, wx.ALL | wx.EXPAND, 5)
+        mode_row = wx.BoxSizer(wx.HORIZONTAL)
+        mode_row.Add(wx.StaticText(self.tab_vacuum, label="Cleaning job mode:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.vacuum_cleaning_mode_choice = wx.Choice(
+            self.tab_vacuum,
+            choices=[VACUUM_CLEANING_MODES[key] for key in VACUUM_CLEANING_MODE_ORDER],
+        )
+        self.vacuum_cleaning_mode_choice.SetSelection(0)
+        self._describe_control(
+            self.vacuum_cleaning_mode_choice,
+            "Vacuum cleaning job mode picker. Choose vacuum and mop, vacuum only, or mop only before starting a whole-home or selected-room clean.",
+        )
+        mode_row.Add(self.vacuum_cleaning_mode_choice, 1, wx.ALL | wx.EXPAND, 5)
+        top.Add(mode_row, 0, wx.EXPAND)
+
+        self.vacuum_actions_panel = wx.Panel(self.tab_vacuum)
+        self.vacuum_actions_sizer = wx.GridSizer(rows=0, cols=3, vgap=6, hgap=6)
+        self.vacuum_actions_panel.SetSizer(self.vacuum_actions_sizer)
+        top.Add(self.vacuum_actions_panel, 0, wx.ALL | wx.EXPAND, 5)
 
         fan_row = wx.BoxSizer(wx.HORIZONTAL)
         fan_row.Add(wx.StaticText(self.tab_vacuum, label="Vacuum suction speed:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
@@ -11703,6 +11083,8 @@ class ViperDashboard(wx.Frame):
             self.vacuum_choice.SetStringSelection(selected_label)
         self.vacuum_status_txt.SetValue(summary)
         self._populate_vacuum_fan_speed()
+        self._sync_vacuum_cleaning_mode_choice()
+        self._rebuild_vacuum_basic_actions()
         self._finish_vacuum_room_refresh(
             self._get_saved_vacuum_rooms(self._selected_vacuum_entity_id()),
             "Saved room list loaded. Press Refresh room list to update it from Home Assistant.",
@@ -11732,6 +11114,8 @@ class ViperDashboard(wx.Frame):
         self.vacuum_control_entities = controls
         self.vacuum_status_txt.SetValue(self._build_vacuum_summary(self.vacuum_state_entities, controls, selected))
         self._populate_vacuum_fan_speed()
+        self._sync_vacuum_cleaning_mode_choice()
+        self._rebuild_vacuum_basic_actions()
         self._finish_vacuum_room_refresh(
             self._get_saved_vacuum_rooms(selected),
             "Saved room list loaded. Press Refresh room list to update it from Home Assistant.",
@@ -11851,6 +11235,45 @@ class ViperDashboard(wx.Frame):
             self.vacuum_fan_choice.SetSelection(0)
         self.vacuum_fan_choice.Enable(bool(speeds))
         self.btn_set_vacuum_fan.Enable(bool(speeds))
+
+    def _current_vacuum_cleaning_mode(self):
+        if not hasattr(self, "vacuum_cleaning_mode_choice"):
+            return _normalize_vacuum_cleaning_mode(self.config.get("vacuum_cleaning_mode", "vacuum_mop"))
+        label = self.vacuum_cleaning_mode_choice.GetStringSelection()
+        reverse = {value: key for key, value in VACUUM_CLEANING_MODES.items()}
+        return _normalize_vacuum_cleaning_mode(reverse.get(label, self.config.get("vacuum_cleaning_mode", "vacuum_mop")))
+
+    def _sync_vacuum_cleaning_mode_choice(self):
+        if not hasattr(self, "vacuum_cleaning_mode_choice"):
+            return
+        mode = _normalize_vacuum_cleaning_mode(self.config.get("vacuum_cleaning_mode", "vacuum_mop"))
+        label = VACUUM_CLEANING_MODES[mode]
+        if label in [self.vacuum_cleaning_mode_choice.GetString(index) for index in range(self.vacuum_cleaning_mode_choice.GetCount())]:
+            self.vacuum_cleaning_mode_choice.SetStringSelection(label)
+
+    def _vacuum_cleaning_mode_calls(self, entity_id, mode):
+        mode = _normalize_vacuum_cleaning_mode(mode)
+        self.config["vacuum_cleaning_mode"] = mode
+        self.save_config()
+        current_fan = self.vacuum_fan_choice.GetStringSelection() if hasattr(self, "vacuum_fan_choice") else ""
+        return vacuum_cleaning_mode_service_calls(entity_id, getattr(self, "vacuum_control_entities", []), mode, current_fan)
+
+    def _rebuild_vacuum_basic_actions(self):
+        if not hasattr(self, "vacuum_actions_sizer"):
+            return
+        self._clear_sizer(self.vacuum_actions_sizer)
+        selected = self._selected_vacuum_entity_id()
+        entity = next((item for item in getattr(self, "vacuum_state_entities", []) if item.get("entity_id") == selected), None)
+        state = entity.get("state", "unknown") if entity else "unknown"
+        for action in vacuum_basic_actions_for_state(state):
+            btn = wx.Button(self.vacuum_actions_panel, label=action["label"], size=(-1, 40))
+            btn.Bind(wx.EVT_BUTTON, lambda event, svc=action["service"]: self.on_vacuum_basic_action(event, svc))
+            self._describe_control(
+                btn,
+                f"{action['label']} button. Useful when the selected vacuum state is {state}.",
+            )
+            self.vacuum_actions_sizer.Add(btn, 0, wx.EXPAND)
+        self.vacuum_actions_panel.Layout()
 
     def _clear_sizer(self, sizer):
         while sizer.GetItemCount():
@@ -11990,7 +11413,14 @@ class ViperDashboard(wx.Frame):
         if not entity_id:
             self.notify("Choose a vacuum first.", priority=10)
             return
-        self._run_ha_service_async(service, {"entity_id": entity_id}, f"Sent {service.replace('/', '.')} to {entity_id}.")
+        if service == "vacuum/start":
+            mode = self._current_vacuum_cleaning_mode()
+            mode_calls = self._vacuum_cleaning_mode_calls(entity_id, mode)
+            message = f"Sent {VACUUM_CLEANING_MODES[mode].lower()} start to {entity_id}."
+        else:
+            mode_calls = []
+            message = f"Sent {service.replace('/', '.')} to {entity_id}."
+        self._run_ha_service_async(service, {"entity_id": entity_id}, message, pre_calls=mode_calls)
 
     def on_vacuum_set_fan_speed(self, event):
         entity_id = self._selected_vacuum_entity_id()
@@ -12155,6 +11585,8 @@ class ViperDashboard(wx.Frame):
             return
         segments = [room["segment"] for room in selected_rooms if "segment" in room]
         repeat = self.vacuum_room_repeat.GetValue()
+        mode = self._current_vacuum_cleaning_mode()
+        mode_calls = self._vacuum_cleaning_mode_calls(entity_id, mode)
         payload = {
             "entity_id": entity_id,
             "command": "app_segment_clean",
@@ -12163,7 +11595,8 @@ class ViperDashboard(wx.Frame):
         self._run_ha_service_async(
             "vacuum/send_command",
             payload,
-            f"Sent room clean request for {len(segments)} room{'s' if len(segments) != 1 else ''}.",
+            f"Sent {VACUUM_CLEANING_MODES[mode].lower()} room clean request for {len(segments)} room{'s' if len(segments) != 1 else ''}.",
+            pre_calls=mode_calls,
         )
 
     def on_vacuum_send_command(self, event):
@@ -12217,8 +11650,10 @@ class ViperDashboard(wx.Frame):
             f"Sent Roborock go to position {x}, {y}.",
         )
 
-    def _run_ha_service_async(self, service, payload, success_message, *, timeout=10, restore_focus_entity_id=""):
+    def _run_ha_service_async(self, service, payload, success_message, *, timeout=10, restore_focus_entity_id="", pre_calls=None):
         def worker():
+            for pre_service, pre_payload in pre_calls or []:
+                self._call_ha_service_data(pre_service, pre_payload, timeout=30)
             ok = self._call_ha_service_data(service, payload, timeout=timeout)
             if ok:
                 if restore_focus_entity_id:
@@ -13021,71 +12456,19 @@ class ViperDashboard(wx.Frame):
         self.notify("Custom chimes saved.", priority=10)
 
     def _configured_speaker_ids(self):
-        return {
-            str(data.get("id") or "")
-            for data in self.config.get("speakers", {}).values()
-            if isinstance(data, dict) and data.get("id")
-        }
+        return speakers.configured_speaker_ids(self.config)
 
     def _speaker_candidate_lines(self, candidates, title):
-        lines = [title]
-        if not candidates:
-            lines.append("  None found.")
-            return lines
-        configured_ids = self._configured_speaker_ids()
-        for item in candidates:
-            configured = "already configured" if item.get("id") in configured_ids else "available"
-            lines.append(f"  {item.get('name')} | {item.get('type')} | {item.get('id')} | {configured}")
-        return lines
+        return speakers.speaker_candidate_lines(candidates, title, self._configured_speaker_ids())
 
     def _flatten_discovered_speaker_targets(self, ha_candidates, sonos_candidates):
-        ha_sonos = [item for item in ha_candidates if item.get("is_sonos")]
-        ha_other = [item for item in ha_candidates if not item.get("is_sonos")]
-        ha_sonos_ids = {item.get("id") for item in ha_sonos}
-        network_sonos = [
-            item for item in sonos_candidates
-            if item.get("id") not in ha_sonos_ids
-        ]
-        configured_ids = self._configured_speaker_ids()
-        targets = []
-        for item in ha_other + ha_sonos + network_sonos:
-            target = dict(item)
-            target["configured"] = target.get("id") in configured_ids
-            targets.append(target)
-        return targets
+        return speakers.flatten_discovered_speaker_targets(ha_candidates, sonos_candidates, self._configured_speaker_ids())
 
     def _unique_speaker_name(self, base_name, spk_type):
-        speakers = self.config.setdefault("speakers", {})
-        base = f"{base_name} ({str(spk_type or 'ha').upper()})"
-        name = base
-        suffix = 2
-        while name in speakers:
-            name = f"{base} {suffix}"
-            suffix += 1
-        return name
+        return speakers.unique_speaker_name(self.config, base_name, spk_type)
 
     def _add_discovered_speaker_targets(self, targets, routes=None):
-        speakers = self.config.setdefault("speakers", {})
-        existing_ids = self._configured_speaker_ids()
-        routes = routes or {}
-        added = 0
-        for item in targets or []:
-            spk_id = item.get("id") or ""
-            if not spk_id or spk_id in existing_ids:
-                continue
-            spk_type = item.get("type") or "ha"
-            name = self._unique_speaker_name(item.get("name") or spk_id, spk_type)
-            speakers[name] = {
-                "id": spk_id,
-                "type": spk_type,
-                "enabled": True,
-                "doorbell": bool(routes.get("doorbell", True)),
-                "utilities": bool(routes.get("utilities", True)),
-                "fridge": bool(routes.get("fridge", True)),
-                "quiet_hours_exempt": bool(routes.get("quiet_hours_exempt", False)),
-            }
-            existing_ids.add(spk_id)
-            added += 1
+        added = speakers.add_discovered_speaker_targets(self.config, targets, routes)
         if added:
             self.save_config()
             self.refresh_speaker_list()
@@ -13094,69 +12477,19 @@ class ViperDashboard(wx.Frame):
         return added
 
     def _discovered_speaker_summary_text(self, ha_candidates, sonos_candidates, ha_error="", sonos_error=""):
-        ha_sonos = [item for item in ha_candidates if item.get("is_sonos")]
-        ha_other = [item for item in ha_candidates if not item.get("is_sonos")]
-        ha_sonos_ids = {item.get("id") for item in ha_sonos}
-        network_sonos = [
-            item for item in sonos_candidates
-            if item.get("id") not in ha_sonos_ids
-        ]
-        lines = [
-            "Available Speakers",
-            "",
-            "Check the speakers Viper should add, then press Add Selected Speakers.",
-            "",
-        ]
-        if ha_error:
-            lines.append(f"Home Assistant discovery: {ha_error}")
-            lines.append("")
-        if sonos_error:
-            lines.append(f"Network Sonos discovery: {sonos_error}")
-            lines.append("")
-        lines.extend(self._speaker_candidate_lines(ha_other, "Home Assistant media players:"))
-        lines.append("")
-        lines.extend(self._speaker_candidate_lines(ha_sonos, "Sonos speakers already visible in Home Assistant:"))
-        lines.append("")
-        lines.extend(self._speaker_candidate_lines(network_sonos, "Network Sonos speakers not clearly visible in Home Assistant:"))
-        return "\n".join(lines)
+        return speakers.discovered_speaker_summary_text(
+            ha_candidates,
+            sonos_candidates,
+            configured_ids=self._configured_speaker_ids(),
+            ha_error=ha_error,
+            sonos_error=sonos_error,
+        )
 
     def _ha_speaker_candidates_from_result(self, result):
-        categories = result.get("categories", {}) if isinstance(result, dict) else {}
-        candidates = []
-        for entity in categories.get("media_players", []):
-            entity_id = entity.get("entity_id") or ""
-            if not entity_id:
-                continue
-            name = entity.get("friendly_name") or entity_id.replace("media_player.", "")
-            platform = (entity.get("platform") or entity.get("integration") or "").lower()
-            search = " ".join(str(entity.get(key, "")) for key in ("entity_id", "friendly_name", "platform", "integration")).lower()
-            spk_type = "alexa" if "alexa" in search or "echo" in search else "ha"
-            if platform == "sonos" or "sonos" in search:
-                spk_type = "ha"
-            candidates.append({
-                "name": name,
-                "id": entity_id,
-                "type": spk_type,
-                "source": "Home Assistant",
-                "is_sonos": platform == "sonos" or "sonos" in search,
-            })
-        return candidates
+        return speakers.ha_speaker_candidates_from_result(result)
 
-    def _sonos_speaker_candidates_from_soco(self, speakers):
-        candidates = []
-        for speaker in speakers or []:
-            ip = getattr(speaker, "ip_address", "") or ""
-            name = getattr(speaker, "player_name", "") or ip or "Unnamed Sonos"
-            if not ip:
-                continue
-            candidates.append({
-                "name": name,
-                "id": ip,
-                "type": "sonos",
-                "source": "Network Sonos",
-                "is_sonos": True,
-            })
-        return candidates
+    def _sonos_speaker_candidates_from_soco(self, discovered_speakers):
+        return speakers.sonos_speaker_candidates_from_soco(discovered_speakers)
 
     def on_discover_speakers(self, event):
         self.notify("Discovering available speakers. Viper will let you choose which speakers to add.", priority=10)

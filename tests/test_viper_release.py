@@ -6,12 +6,14 @@ from pathlib import Path
 from html.parser import HTMLParser
 from unittest import mock
 from unittest.mock import patch
+from PIL import Image
 
 import viper_config as cfg
 import viper_discovery as discovery
 import viper_diagnostics as diagnostics
 import viper_audio as audio
 import viper_ha_listener as ha_listener
+import viper_vacuum as vacuum
 import viper_vision as vision
 import viper_release_audit as release_audit
 import accessibility_report
@@ -77,7 +79,15 @@ def _sample_states():
             "state": "standard",
             "attributes": {
                 "friendly_name": "cinderella Mop mode",
-                "options": ["standard", "deep", "deep_plus"],
+                "options": ["off", "standard", "deep", "deep_plus"],
+            },
+        },
+        {
+            "entity_id": "select.cinderella_cleaning_mode",
+            "state": "vacuum_and_mop",
+            "attributes": {
+                "friendly_name": "cinderella Cleaning mode",
+                "options": ["vacuum_and_mop", "vacuum_only", "mop_only"],
             },
         },
         {
@@ -216,9 +226,140 @@ class ViperReleaseTests(unittest.TestCase):
             {"doorbell_video_analysis": {"mode": "smart", "manual_clip_seconds": 99, "max_manual_clip_seconds": 12}}
         )
         self.assertEqual(settings["mode"], "smart")
+        self.assertEqual(settings["model"], vision.GEMINI_VISION_MODEL)
         self.assertEqual(settings["manual_clip_seconds"], 12)
         self.assertEqual(settings["smart_clip_seconds"], 3)
         self.assertEqual(settings["fps"], 2)
+
+    def test_legacy_gemini_vision_models_migrate_to_current_default(self):
+        for old_model in vision.LEGACY_GEMINI_VISION_MODELS:
+            with self.subTest(old_model=old_model):
+                settings = vision.normalize_video_analysis_settings(
+                    {"doorbell_video_analysis": {"model": old_model}}
+                )
+                self.assertEqual(settings["model"], vision.GEMINI_VISION_MODEL)
+
+    def test_gemini_vision_default_matches_config_default(self):
+        defaults = cfg.get_default_config()
+        self.assertEqual(vision.GEMINI_VISION_MODEL, "gemini-3.5-flash")
+        self.assertEqual(defaults["doorbell_video_analysis"]["model"], vision.GEMINI_VISION_MODEL)
+        self.assertEqual(vision.VIDEO_ANALYSIS_MODEL, vision.GEMINI_VISION_MODEL)
+
+    def test_background_refinement_captures_extra_stills_without_blocking_fast_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            frames = []
+            for index in range(2):
+                frame = tmp_path / f"frame_{index}.jpg"
+                Image.new("RGB", (320, 180), color=(80 + index, 80, 80)).save(frame, format="JPEG")
+                frames.append(str(frame))
+
+            with patch.object(vision.time, "sleep") as sleep, patch.object(vision, "grab_frame", side_effect=frames) as grab:
+                captured = vision.capture_background_refinement_frames(
+                    "rtsp://camera",
+                    tmp_path,
+                    "refine_front_1",
+                    min_bytes=14000,
+                    count=2,
+                )
+
+            self.assertEqual(captured, frames)
+            self.assertEqual(grab.call_count, 2)
+            self.assertEqual(sleep.call_count, 2)
+            self.assertTrue(all(call.kwargs["fast_mode"] for call in grab.call_args_list))
+
+    def test_weak_still_refinement_uses_multi_frame_answer_when_strong(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            initial = tmp_path / "initial.jpg"
+            later = tmp_path / "later.jpg"
+            Image.new("RGB", (320, 180), color=(80, 80, 80)).save(initial, format="JPEG")
+            Image.new("RGB", (320, 180), color=(90, 90, 90)).save(later, format="JPEG")
+
+            with patch.object(vision, "capture_background_refinement_frames", return_value=[str(later)]), patch.object(
+                vision,
+                "get_gemini_multi_image_description",
+                return_value="A delivery driver is walking away from the front porch with no package visible.",
+            ) as multi:
+                refined, frames = vision.refine_weak_doorbell_still_description(
+                    "rtsp://camera",
+                    tmp_path,
+                    "refine_front_1",
+                    min_bytes=14000,
+                    location="front door",
+                    first_description="The image is unclear.",
+                    base_prompt="Describe the front door.",
+                    initial_frame=str(initial),
+                )
+
+            self.assertIn("delivery driver", refined)
+            self.assertEqual(frames, [str(initial), str(later)])
+            self.assertEqual(multi.call_count, 1)
+
+    def test_rtsp_frame_sanity_rejects_green_artifact_corruption(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp) / "bad.jpg"
+            img = Image.new("RGB", (640, 360), color=(60, 60, 60))
+            for x in range(0, 180):
+                for y in range(0, 180):
+                    img.putpixel((x, y), (0, 255, 0))
+            img.save(bad, format="JPEG")
+
+            self.assertFalse(vision._frame_passes_sanity_check(bad))
+
+    def test_rtsp_frame_sanity_rejects_smaller_green_bands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp) / "banded.jpg"
+            img = Image.new("RGB", (640, 360), color=(80, 80, 80))
+            for x in range(0, 640):
+                for y in range(0, 16):
+                    img.putpixel((x, y), (0, 255, 0))
+            img.save(bad, format="JPEG")
+
+            self.assertFalse(vision._frame_passes_sanity_check(bad))
+
+    def test_rtsp_frame_sanity_allows_normal_backyard_green(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            good = Path(tmp) / "good.jpg"
+            img = Image.new("RGB", (640, 360), color=(120, 125, 120))
+            for x in range(0, 640):
+                for y in range(210, 360):
+                    img.putpixel((x, y), (55, 120, 45))
+            img.save(good, format="JPEG")
+
+            self.assertTrue(vision._frame_passes_sanity_check(good))
+
+    def test_green_artifact_ai_description_is_weak_for_refinement(self):
+        text = "A person stands on the porch, but the feed is heavily distorted by large green and grey bands of digital corruption."
+        self.assertTrue(vision._description_is_weak(text))
+
+    def test_vacuum_actions_hide_pause_and_stop_when_not_running(self):
+        docked = main.vacuum_basic_actions_for_state("docked")
+        docked_services = {action["service"] for action in docked}
+        self.assertIn("vacuum/start", docked_services)
+        self.assertNotIn("vacuum/pause", docked_services)
+        self.assertNotIn("vacuum/stop", docked_services)
+
+        running = main.vacuum_basic_actions_for_state("cleaning")
+        running_services = {action["service"] for action in running}
+        self.assertIn("vacuum/pause", running_services)
+        self.assertIn("vacuum/stop", running_services)
+        self.assertNotIn("vacuum/start", running_services)
+
+    def test_vacuum_cleaning_mode_maps_to_roborock_select(self):
+        calls = main.vacuum_cleaning_mode_service_calls(
+            "vacuum.cinderella",
+            _sample_states(),
+            "mop_only",
+        )
+        self.assertIn(
+            ("select/select_option", {"entity_id": "select.cinderella_cleaning_mode", "option": "mop_only"}),
+            calls,
+        )
+
+    def test_config_normalizes_vacuum_cleaning_mode(self):
+        self.assertEqual(cfg.validate_and_normalize_config({"vacuum_cleaning_mode": "mop_only"})["vacuum_cleaning_mode"], "mop_only")
+        self.assertEqual(cfg.validate_and_normalize_config({"vacuum_cleaning_mode": "bad"})["vacuum_cleaning_mode"], "vacuum_mop")
 
     def test_doorbell_photo_description_can_be_custom_per_door(self):
         config = cfg.validate_and_normalize_config(
@@ -1629,12 +1770,44 @@ class ViperReleaseTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(len(main.dash_app.service_calls), 1)
-        service, payload = main.dash_app.service_calls[0]
+        service, payload = main.dash_app.service_calls[-1]
         self.assertEqual(service, "vacuum/send_command")
         self.assertEqual(payload["entity_id"], "vacuum.cinderella")
         self.assertEqual(payload["command"], "app_segment_clean")
         self.assertEqual(payload["params"], [{"segments": [7, 1], "repeat": 3}])
+
+    def test_web_room_clean_applies_selected_cleaning_mode_first(self):
+        main.dash_app = FakeDashboard()
+        main.dash_app._last_web_vacuum_controls = {"vacuum.cinderella": _sample_states()}
+        response = self.client.post(
+            "/remote/vacuum/clean_rooms",
+            data={
+                "vacuum_entity": "vacuum.cinderella",
+                "segments": ["7"],
+                "repeat": "1",
+                "cleaning_mode": "vacuum_only",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(
+            ("select/select_option", {"entity_id": "select.cinderella_cleaning_mode", "option": "vacuum_only"}),
+            main.dash_app.service_calls,
+        )
+        self.assertEqual(main.dash_app.service_calls[-1][0], "vacuum/send_command")
+        self.assertEqual(main.dash_app.config["vacuum_cleaning_mode"], "vacuum_only")
+
+    def test_web_vacuum_context_includes_state_specific_actions_and_modes(self):
+        main.dash_app = FakeDashboard()
+        with main.app.test_request_context("/remote?vacuum_entity=vacuum.cinderella"):
+            with patch.object(main.discovery, "get_ha_states", return_value={"ok": True, "states": _sample_states()}):
+                context = main._build_web_vacuum_context()
+
+        action_services = {action["service"] for action in context["actions"]}
+        self.assertIn("vacuum/start", action_services)
+        self.assertNotIn("vacuum/pause", action_services)
+        self.assertEqual(context["cleaning_mode"], "vacuum_mop")
+        self.assertIn({"value": "mop_only", "label": "Mop only"}, context["cleaning_modes"])
 
     def test_web_vacuum_setting_routes_select_number_and_child_lock(self):
         main.dash_app = FakeDashboard()
@@ -1700,10 +1873,13 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_flaky_roborock_dock_empty_mode_is_hidden_from_easy_settings(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
+        vacuum_text = Path("viper_vacuum.py").read_text(encoding="utf-8")
 
         self.assertFalse(main._web_show_vacuum_setting({"entity_id": "select.cinderella_dock_empty_mode"}))
         self.assertTrue(main._web_show_vacuum_setting({"entity_id": "select.cinderella_mop_intensity"}))
-        self.assertIn('"_dock_empty_mode"', main_text)
+        self.assertTrue(vacuum.is_hidden_vacuum_setting_entity_id("select.cinderella_dock_empty_mode"))
+        self.assertIn("HIDDEN_VACUUM_SETTING_SUFFIXES", main_text)
+        self.assertIn('"_dock_empty_mode"', vacuum_text)
         self.assertIn("Home Assistant reports it but rejects write attempts", main_text)
 
     def test_vacuum_settings_use_slow_service_timeout_and_clear_timeout_message(self):
