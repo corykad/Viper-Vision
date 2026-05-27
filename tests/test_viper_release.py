@@ -15,6 +15,7 @@ import viper_diagnostics as diagnostics
 import viper_audio as audio
 import viper_ha_listener as ha_listener
 import viper_vacuum as vacuum
+import viper_ui_vacuum as ui_vacuum
 import viper_vision as vision
 import viper_ui_setup_wizard as setup_wizard
 import viper_release_audit as release_audit
@@ -379,6 +380,10 @@ class ViperReleaseTests(unittest.TestCase):
     def test_config_normalizes_vacuum_cleaning_mode(self):
         self.assertEqual(cfg.validate_and_normalize_config({"vacuum_cleaning_mode": "mop_only"})["vacuum_cleaning_mode"], "mop_only")
         self.assertEqual(cfg.validate_and_normalize_config({"vacuum_cleaning_mode": "bad"})["vacuum_cleaning_mode"], "vacuum_mop")
+
+    def test_vacuum_ui_module_exports_cleaning_mode_helpers(self):
+        self.assertIs(ui_vacuum._normalize_vacuum_cleaning_mode, vacuum.normalize_vacuum_cleaning_mode)
+        self.assertIs(ui_vacuum.vacuum_cleaning_mode_service_calls, vacuum.vacuum_cleaning_mode_service_calls)
 
     def test_doorbell_photo_description_can_be_custom_per_door(self):
         config = cfg.validate_and_normalize_config(

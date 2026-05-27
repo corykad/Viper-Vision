@@ -12,7 +12,9 @@ import viper_vacuum as vacuum
 VACUUM_CLEANING_MODES = vacuum.VACUUM_CLEANING_MODES
 VACUUM_CLEANING_MODE_ORDER = vacuum.VACUUM_CLEANING_MODE_ORDER
 vacuum_basic_actions_for_state = vacuum.vacuum_basic_actions_for_state
+vacuum_cleaning_mode_service_calls = vacuum.vacuum_cleaning_mode_service_calls
 _is_hidden_vacuum_setting_entity_id = vacuum.is_hidden_vacuum_setting_entity_id
+_normalize_vacuum_cleaning_mode = vacuum.normalize_vacuum_cleaning_mode
 
 
 class VacuumTabMixin:
