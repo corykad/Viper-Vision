@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 import tempfile
 import zipfile
 import re
@@ -15,6 +16,7 @@ import viper_audio as audio
 import viper_ha_listener as ha_listener
 import viper_vacuum as vacuum
 import viper_vision as vision
+import viper_ui_setup_wizard as setup_wizard
 import viper_release_audit as release_audit
 import accessibility_report
 import main
@@ -329,6 +331,23 @@ class ViperReleaseTests(unittest.TestCase):
 
             self.assertTrue(vision._frame_passes_sanity_check(good))
 
+    def test_single_frame_fallback_rejects_green_artifact_frame(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp) / "fallback.jpg"
+            img = Image.new("RGB", (640, 360), color=(60, 60, 60))
+            for x in range(0, 180):
+                for y in range(0, 180):
+                    img.putpixel((x, y), (0, 255, 0))
+            img.save(bad, format="JPEG")
+
+            class Result:
+                returncode = 0
+
+            with patch.object(vision.subprocess, "run", return_value=Result()):
+                result = vision._capture_single_frame_fallback("rtsp://example/live", bad, timeout=1)
+
+            self.assertIsNone(result)
+
     def test_green_artifact_ai_description_is_weak_for_refinement(self):
         text = "A person stands on the porch, but the feed is heavily distorted by large green and grey bands of digital corruption."
         self.assertTrue(vision._description_is_weak(text))
@@ -592,23 +611,124 @@ class ViperReleaseTests(unittest.TestCase):
     def test_fridge_tab_and_remote_use_single_ice_maker_toggle(self):
         root = Path(__file__).resolve().parents[1]
         main_text = (root / "main.pyw").read_text(encoding="utf-8")
+        fridge_text = (root / "viper_ui_fridge.py").read_text(encoding="utf-8")
+        desktop_text = main_text + "\n" + fridge_text
         template = (root / "templates" / "remote.html").read_text(encoding="utf-8")
 
-        self.assertIn("self.btn_ice_toggle = wx.Button", main_text)
-        self.assertIn("self.ice_maker_status_txt = AccessibleStatusText", main_text)
-        self.assertIn("def on_ice_maker_toggle", main_text)
-        self.assertIn("ice_maker_counter_entity", main_text)
-        self.assertNotIn("self.btn_ice_on =", main_text)
-        self.assertNotIn("self.btn_ice_off =", main_text)
-        self.assertNotIn("self.ice_maker_status_txt = wx.TextCtrl", main_text)
+        self.assertIn("self.btn_ice_toggle = wx.Button", desktop_text)
+        self.assertIn("self.ice_maker_status_txt = self._make_accessible_status_text", desktop_text)
+        self.assertIn("def on_ice_maker_toggle", desktop_text)
+        self.assertIn("ice_maker_counter_entity", desktop_text)
+        self.assertNotIn("self.btn_ice_on =", desktop_text)
+        self.assertNotIn("self.btn_ice_off =", desktop_text)
+        self.assertNotIn("self.ice_maker_status_txt = wx.TextCtrl", desktop_text)
         self.assertIn("web_ice_maker_toggle", template)
         self.assertIn("ice_maker.get('counter_text'", template)
         self.assertNotIn("url_for('web_ice_maker_on')", template)
         self.assertNotIn("url_for('web_ice_maker_off')", template)
 
+    def test_fridge_tab_exposes_refrigerator_ha_controls(self):
+        main_text = Path("main.pyw").read_text(encoding="utf-8") + "\n" + Path("viper_ui_fridge.py").read_text(encoding="utf-8")
+
+        self.assertIn("self.refrigerator_status_txt = self._make_accessible_status_text", main_text)
+        self.assertIn("number.refrigerator_fridge_temperature", main_text)
+        self.assertIn("number.refrigerator_freezer_temperature", main_text)
+        self.assertIn("switch.refrigerator_power_cool", main_text)
+        self.assertIn("switch.refrigerator_power_freeze", main_text)
+        self.assertIn("switch.refrigerator_sabbath_mode", main_text)
+        self.assertIn("button.refrigerator_reset_water_filter", main_text)
+        self.assertIn("sensor.refrigerator_water_filter_usage", main_text)
+        self.assertIn("sensor.refrigerator_power", main_text)
+
+    def test_refrigerator_control_status_summarizes_exposed_entities(self):
+        fake = FakeDashboard()
+        entities = main.ViperDashboard._refrigerator_control_entities(fake)
+        states = {
+            "binary_sensor.refrigerator_fridge_door": {"state": "off"},
+            "binary_sensor.refrigerator_freezer_door": {"state": "off"},
+            "binary_sensor.refrigerator_filter_status": {"state": "off"},
+            "number.refrigerator_fridge_temperature": {"state": "37", "attributes": {"unit_of_measurement": "°F"}},
+            "number.refrigerator_freezer_temperature": {"state": "0", "attributes": {"unit_of_measurement": "°F"}},
+            "sensor.refrigerator_water_filter_usage": {"state": "22", "attributes": {"unit_of_measurement": "%"}},
+            "sensor.refrigerator_fridge_temperature": {"state": "37", "attributes": {"unit_of_measurement": "°F"}},
+            "sensor.refrigerator_freezer_temperature": {"state": "0", "attributes": {"unit_of_measurement": "°F"}},
+            "sensor.refrigerator_power": {"state": "12", "attributes": {"unit_of_measurement": "W"}},
+            "sensor.refrigerator_energy": {"state": "3004.875", "attributes": {"unit_of_measurement": "kWh"}},
+            "switch.refrigerator_power_cool": {"state": "off"},
+            "switch.refrigerator_power_freeze": {"state": "off"},
+            "switch.refrigerator_sabbath_mode": {"state": "off"},
+            "switch.refrigerator_cubed_ice": {"state": "on"},
+            "button.refrigerator_reset_water_filter": {"state": "unknown"},
+        }
+
+        fake._refrigerator_control_entities = lambda: entities
+        fake._ha_state_value = lambda state: main.ViperDashboard._ha_state_value(fake, state)
+        fake._format_refrigerator_control_status = lambda status_states, status_entities: main.ViperDashboard._format_refrigerator_control_status(
+            fake,
+            status_states,
+            status_entities,
+        )
+        fake._get_ha_entity_state = lambda entity_id, timeout=5: {
+            "ok": True,
+            "exists": True,
+            "entity_id": entity_id,
+            "entity": states[entity_id],
+        }
+
+        status = main.ViperDashboard.get_refrigerator_control_status(fake)
+
+        self.assertTrue(status["ok"])
+        self.assertIn("Fridge setpoint: 37 °F", status["message"])
+        self.assertIn("Power Cool: off", status["message"])
+        self.assertIn("Cubed ice: on", status["message"])
+
+    def test_refrigerator_controls_call_expected_ha_services(self):
+        class FakeSpin:
+            def GetValue(self):
+                return 38
+
+        class FakeButton:
+            def __init__(self, label):
+                self.label = label
+
+            def GetLabel(self):
+                return self.label
+
+        fake = FakeDashboard()
+        calls = []
+        fake.refrigerator_control_widgets = {
+            "number.refrigerator_fridge_temperature": FakeSpin(),
+        }
+        fake.refrigerator_action_buttons = {
+            "switch.refrigerator_power_cool": FakeButton("Turn off Power Cool"),
+        }
+        fake._run_refrigerator_service_async = lambda service, payload, success_message, **kwargs: calls.append((service, payload, kwargs))
+        fake.notify = lambda *args, **kwargs: None
+
+        main.ViperDashboard.on_refrigerator_set_number(fake, None, "number.refrigerator_fridge_temperature")
+        main.ViperDashboard.on_refrigerator_switch(fake, None, "switch.refrigerator_power_cool")
+        main.ViperDashboard.on_refrigerator_press_button(fake, None, "button.refrigerator_reset_water_filter")
+
+        self.assertEqual(
+            calls,
+            [
+                ("number/set_value", {"entity_id": "number.refrigerator_fridge_temperature", "value": 38}, {"timeout": 30}),
+                ("switch/turn_off", {"entity_id": "switch.refrigerator_power_cool"}, {}),
+                ("button/press", {"entity_id": "button.refrigerator_reset_water_filter"}, {}),
+            ],
+        )
+
     def test_short_statuses_use_accessible_static_text_not_read_only_edit_boxes(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
-        main_dashboard = main_text.split("class ViperDashboard", 1)[1]
+        main_dashboard = (
+            main_text.split("class ViperDashboard", 1)[1]
+            + "\n"
+            + Path("viper_ui_fridge.py").read_text(encoding="utf-8")
+            + "\n"
+            + Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
+            + "\n"
+            + Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
+        )
 
         self.assertIn("class AccessibleStatusText(wx.StaticText):", main_text)
         expected_statuses = [
@@ -617,9 +737,10 @@ class ViperReleaseTests(unittest.TestCase):
             "self.doorbell_summary_txt = AccessibleStatusText",
             "self.prompt_status_txt = AccessibleStatusText",
             "self.setup_next_action_txt = AccessibleStatusText",
-            "self.vacuum_status_txt = AccessibleStatusText",
-            "self.vacuum_room_status_txt = AccessibleStatusText",
-            "self.ice_maker_status_txt = AccessibleStatusText",
+            "self.vacuum_status_txt = self._make_accessible_status_text",
+            "self.vacuum_room_status_txt = self._make_accessible_status_text",
+            "self.ice_maker_status_txt = self._make_accessible_status_text",
+            "self.refrigerator_status_txt = self._make_accessible_status_text",
         ]
         missing = [snippet for snippet in expected_statuses if snippet not in main_dashboard]
         self.assertEqual(missing, [], f"Short statuses should be static text: {missing}")
@@ -1097,10 +1218,10 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertFalse(any(main.dash_app.config["setup_skips"].values()))
 
     def test_desktop_diagnostics_tab_has_health_summary_controls(self):
-        main_text = Path("main.pyw").read_text(encoding="utf-8")
-        tab_start = main_text.index("def setup_diagnostics_tab")
-        tab_end = main_text.index("def setup_utils_tab", tab_start)
-        tab_text = main_text[tab_start:tab_end]
+        diagnostics_text = Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
+        tab_start = diagnostics_text.index("def setup_diagnostics_tab")
+        tab_end = diagnostics_text.index("def on_show_about", tab_start)
+        tab_text = diagnostics_text[tab_start:tab_end]
 
         self.assertIn('label="Health Summary"', tab_text)
         self.assertIn("self.diagnostics_health_txt", tab_text)
@@ -1138,7 +1259,7 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("Optional next step: use the camera/audio buttons below", text)
 
     def test_diagnostics_action_buttons_call_expected_routes(self):
-        main_text = Path("main.pyw").read_text(encoding="utf-8")
+        main_text = Path("main.pyw").read_text(encoding="utf-8") + "\n" + Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
 
         self.assertIn("def on_run_safe_smoke_test", main_text)
         self.assertIn("def on_test_diagnostics_camera", main_text)
@@ -1591,7 +1712,7 @@ class ViperReleaseTests(unittest.TestCase):
             ha_login_url="http://192.168.4.49:8123/config/app/03cabcc9_ring_mqtt/info",
         )
         try:
-            with patch.object(main, "open_url") as browser_open:
+            with patch.object(setup_wizard, "open_url") as browser_open:
                 dlg.on_ha_login(None)
                 dlg.on_ring_login(None)
             self.assertEqual(browser_open.call_args_list[0].args[0], "http://192.168.4.49:8123/config/app/03cabcc9_ring_mqtt/info")
@@ -1607,7 +1728,7 @@ class ViperReleaseTests(unittest.TestCase):
 
         app = main.wx.App.Get() or main.wx.App(False)
         parent = ParentFrame(None)
-        with patch.object(main, "open_url", return_value=True) as open_url:
+        with patch.object(setup_wizard, "open_url", return_value=True) as open_url:
             dlg = main.RingMqttLoginDialog(
                 parent,
                 "http://192.168.4.49:8123/app/03cabcc9_ring_mqtt",
@@ -1646,7 +1767,7 @@ class ViperReleaseTests(unittest.TestCase):
             def Destroy(self):
                 return None
 
-        with patch.object(main, "RingMqttLoginDialog", FakeDialog):
+        with patch.object(setup_wizard, "RingMqttLoginDialog", FakeDialog):
             main.HomeAssistantSetupDialog._open_ring_mqtt_login(fake, "03cabcc9_ring_mqtt")
 
         self.assertEqual(calls[0][0], "http://192.168.4.49:8123/app/03cabcc9_ring_mqtt")
@@ -1659,7 +1780,7 @@ class ViperReleaseTests(unittest.TestCase):
         fake._settings = lambda: {"ha_ip": "192.168.4.49", "ha_port": "8123", "ha_token": "token"}
         fake._set_setup_status = lambda message, **kwargs: messages.append(message)
 
-        with patch.object(main, "RingMqttLoginDialog") as dialog:
+        with patch.object(setup_wizard, "RingMqttLoginDialog") as dialog:
             main.HomeAssistantSetupDialog._open_ring_mqtt_login(fake, "core_matter_server")
 
         dialog.assert_not_called()
@@ -1851,18 +1972,20 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_vacuum_room_selection_uses_real_checkboxes_for_screen_readers(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
-        vacuum_tab = main_text.split("def setup_vacuum_tab", 1)[1].split("def on_refresh_vacuum", 1)[0]
-        room_refresh = main_text.split("def _finish_vacuum_room_refresh", 1)[1].split("def _sanitize_vacuum_rooms", 1)[0]
+        vacuum_text = Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
+        desktop_text = main_text + "\n" + vacuum_text
+        vacuum_tab = vacuum_text.split("def setup_vacuum_tab", 1)[1].split("def on_refresh_vacuum", 1)[0]
+        room_refresh = vacuum_text.split("def _finish_vacuum_room_refresh", 1)[1].split("def _sanitize_vacuum_rooms", 1)[0]
 
         self.assertIn("self.vacuum_room_scroll = wx.ScrolledWindow", vacuum_tab)
         self.assertIn("wx.CheckBox(self.vacuum_room_scroll", room_refresh)
         self.assertIn("_room_checkbox_label", room_refresh)
-        self.assertIn("room ID", main_text)
+        self.assertIn("room ID", desktop_text)
         self.assertNotIn("wx.CheckListBox(self.tab_vacuum", vacuum_tab)
 
     def test_vacuum_dynamic_setting_buttons_include_target_names(self):
-        main_text = Path("main.pyw").read_text(encoding="utf-8")
-        dynamic = main_text.split("def _rebuild_vacuum_dynamic_controls", 1)[1].split("def _show_vacuum_setting", 1)[0]
+        vacuum_text = Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
+        dynamic = vacuum_text.split("def _rebuild_vacuum_dynamic_controls", 1)[1].split("def _show_vacuum_setting", 1)[0]
 
         self.assertIn('btn_label = f"Apply {label}"', dynamic)
         self.assertIn('btn_label = f"Turn {\'on\' if turn_on else \'off\'} {label}"', dynamic)
@@ -1884,30 +2007,39 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_vacuum_settings_use_slow_service_timeout_and_clear_timeout_message(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
-        compact = re.sub(r"\s+", " ", main_text)
+        service_text = main_text + "\n" + Path("viper_ui_fridge.py").read_text(encoding="utf-8") + "\n" + Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
+        compact = re.sub(r"\s+", " ", service_text)
 
         self.assertIn('"select/select_option", {"entity_id": entity_id, "option": option}, f"Set {entity_id} to {option}.", timeout=30', compact)
         self.assertIn('"number/set_value", {"entity_id": entity_id, "value": value}, f"Set {entity_id} to {value}.", timeout=30', compact)
-        self.assertIn('except requests.exceptions.ReadTimeout:', main_text)
-        self.assertIn("press Refresh vacuum controls", main_text)
+        self.assertIn('except requests.exceptions.ReadTimeout:', service_text)
+        self.assertIn("press Refresh vacuum controls", service_text)
 
     def test_vacuum_setting_refresh_restores_focus_to_pressed_action_button(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
-        dynamic = main_text.split("def _rebuild_vacuum_dynamic_controls", 1)[1].split("def _show_vacuum_setting", 1)[0]
-        service_runner = main_text.split("def _run_ha_service_async", 1)[1].split("def setup_speed_tab", 1)[0]
+        vacuum_text = Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
+        desktop_text = main_text + "\n" + vacuum_text
+        dynamic = vacuum_text.split("def _rebuild_vacuum_dynamic_controls", 1)[1].split("def _show_vacuum_setting", 1)[0]
+        service_runner = vacuum_text.split("def _run_ha_service_async", 1)[1]
 
-        self.assertIn("self.vacuum_action_buttons = {}", main_text)
-        self.assertIn("self._pending_vacuum_focus_entity_id = \"\"", main_text)
+        self.assertIn("self.vacuum_action_buttons = {}", desktop_text)
+        self.assertIn("self._pending_vacuum_focus_entity_id = \"\"", desktop_text)
         self.assertIn("self.vacuum_action_buttons[entity_id] = btn", dynamic)
-        self.assertIn("def _restore_pending_vacuum_focus", main_text)
-        self.assertIn("def _focus_vacuum_action_button", main_text)
-        self.assertIn("restore_focus_entity_id=entity_id", main_text)
+        self.assertIn("def _restore_pending_vacuum_focus", desktop_text)
+        self.assertIn("def _focus_vacuum_action_button", desktop_text)
+        self.assertIn("restore_focus_entity_id=entity_id", desktop_text)
         self.assertIn("self._pending_vacuum_focus_entity_id = restore_focus_entity_id", service_runner)
-        self.assertIn("wx.CallAfter(self._focus_vacuum_action_button, button)", main_text)
+        self.assertIn("wx.CallAfter(self._focus_vacuum_action_button, button)", desktop_text)
 
     def test_desktop_accessibility_contract_for_statuses_and_buttons(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
-        main_dashboard = main_text.split("class ViperDashboard", 1)[1]
+        main_dashboard = (
+            main_text.split("class ViperDashboard", 1)[1]
+            + "\n"
+            + Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
+            + "\n"
+            + Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
+        )
 
         forbidden_button_labels = [
             'label="Apply setting"',
@@ -2007,8 +2139,8 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(unlabeled, [], "Remote form controls need a label or aria text for screen readers.")
 
     def test_setup_wizard_accessibility_contract(self):
-        main_text = Path("main.pyw").read_text(encoding="utf-8")
-        wizard_text = main_text.split("class ViperSetupWizardDialog", 1)[1].split("class ViperDashboard", 1)[0]
+        setup_text = Path("viper_ui_setup_wizard.py").read_text(encoding="utf-8")
+        wizard_text = setup_text.split("class ViperSetupWizardDialog", 1)[1]
 
         required_status_names = [
             "Setup wizard page title",
@@ -2118,7 +2250,7 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_setup_dialog_does_not_advertise_ring_rtsp_guesses(self):
         root = Path(__file__).resolve().parents[1]
-        text = (root / "main.pyw").read_text(encoding="utf-8")
+        text = (root / "main.pyw").read_text(encoding="utf-8") + "\n" + (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
 
         self.assertIn('label="Discover Devices"', text)
         self.assertIn("configured_rtsp_front", text)
@@ -2155,7 +2287,7 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_ring_mqtt_stream_discovery_does_not_start_from_ha_camera_entities(self):
         root = Path(__file__).resolve().parents[1]
-        text = (root / "main.pyw").read_text(encoding="utf-8")
+        text = (root / "main.pyw").read_text(encoding="utf-8") + "\n" + (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
 
         self.assertNotIn('settings["_candidate_streams"] = self._camera_rtsp_candidates_from_discovery(host)', text)
         self.assertIn("_run_find_ha_ring_rtsp_streams", text)
@@ -2258,7 +2390,7 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_setup_dialog_includes_speaker_discovery(self):
         root = Path(__file__).resolve().parents[1]
-        text = (root / "main.pyw").read_text(encoding="utf-8")
+        text = (root / "main.pyw").read_text(encoding="utf-8") + "\n" + (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
 
         self.assertIn('label="Discover Available Speakers"', text)
         self.assertIn('label="Add Selected Speakers"', text)
@@ -2273,7 +2405,13 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_setup_dialog_includes_summary_and_test_everything(self):
         root = Path(__file__).resolve().parents[1]
-        text = (root / "main.pyw").read_text(encoding="utf-8")
+        text = (
+            (root / "main.pyw").read_text(encoding="utf-8")
+            + "\n"
+            + (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
+            + "\n"
+            + (root / "viper_ui_diagnostics.py").read_text(encoding="utf-8")
+        )
 
         self.assertIn('label="Show Setup Summary"', text)
         self.assertIn('label="Test Everything"', text)
@@ -2881,6 +3019,55 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(actions[0]["side"], "front")
         self.assertEqual(actions[0]["rtsp_url"], "rtsp://camera/front")
 
+    def test_ha_listener_recovers_open_fridge_state_on_connect(self):
+        actions = []
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: cfg.validate_and_normalize_config({}),
+            actions.append,
+        )
+
+        def fake_state(_ha_ip, _ha_port, _token, entity_id):
+            if entity_id == "binary_sensor.refrigerator_fridge_door":
+                return {"state": "on"}
+            return {"state": "off"}
+
+        with patch.object(listener, "_fetch_ha_state", side_effect=fake_state):
+            asyncio.run(listener._refresh_fridge_states("ha.local", "8123", "token", recover_open=True))
+
+        self.assertEqual(
+            actions,
+            [{"type": "broadcast", "channel": "fridge_open", "message": "The refrigerator door is open."}],
+        )
+
+    def test_ha_listener_fridge_poll_catches_missed_transition(self):
+        actions = []
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: cfg.validate_and_normalize_config({}),
+            actions.append,
+        )
+        states = {
+            "binary_sensor.refrigerator_fridge_door": "off",
+            "binary_sensor.refrigerator_freezer_door": "off",
+        }
+
+        def fake_state(_ha_ip, _ha_port, _token, entity_id):
+            return {"state": states[entity_id]}
+
+        with patch.object(listener, "_fetch_ha_state", side_effect=fake_state):
+            asyncio.run(listener._refresh_fridge_states("ha.local", "8123", "token", recover_open=False))
+            states["binary_sensor.refrigerator_fridge_door"] = "on"
+            asyncio.run(listener._refresh_fridge_states("ha.local", "8123", "token", recover_open=False))
+            states["binary_sensor.refrigerator_fridge_door"] = "off"
+            asyncio.run(listener._refresh_fridge_states("ha.local", "8123", "token", recover_open=False))
+
+        self.assertEqual(
+            actions,
+            [
+                {"type": "broadcast", "channel": "fridge_open", "message": "The refrigerator door is open."},
+                {"type": "broadcast", "channel": "fridge_closed", "message": "The refrigerator door is closed."},
+            ],
+        )
+
     def test_ha_listener_ignores_repeated_active_doorbell_state(self):
         config = cfg.validate_and_normalize_config(
             {
@@ -3153,6 +3340,55 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("HA health state: core_hung", text)
         self.assertIn("HA Core API: not responding", text)
         self.assertIn("HA Observer: responding", text)
+
+    def test_refrigerator_diagnostics_flags_stale_fridge_sensor_when_freezer_moves(self):
+        states = [
+            {
+                "entity_id": "binary_sensor.refrigerator_fridge_door",
+                "state": "off",
+                "last_changed": "2026-05-26T18:26:23+00:00",
+            },
+            {
+                "entity_id": "binary_sensor.refrigerator_freezer_door",
+                "state": "off",
+                "last_changed": "2026-05-26T18:33:13+00:00",
+            },
+        ]
+        histories = {
+            "binary_sensor.refrigerator_fridge_door": [
+                {"state": "off", "last_changed": "2026-05-26T18:00:00+00:00"},
+                {"state": "off", "last_changed": "2026-05-26T18:26:23+00:00"},
+            ],
+            "binary_sensor.refrigerator_freezer_door": [
+                {"state": "off", "last_changed": "2026-05-26T18:00:00+00:00"},
+                {"state": "on", "last_changed": "2026-05-26T18:27:53+00:00"},
+                {"state": "off", "last_changed": "2026-05-26T18:28:05+00:00"},
+            ],
+        }
+
+        result = diagnostics.refrigerator_door_sensor_diagnostics(states=states, histories=histories)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "fridge_sensor_stale")
+        self.assertIn("Freezer door events are reaching Home Assistant", result["message"])
+
+    def test_diagnostics_health_summary_includes_refrigerator_sensor_issue(self):
+        diag = diagnostics.collect_diagnostics(
+            cfg.validate_and_normalize_config({"speakers": {"Kitchen": {"enabled": True}}}),
+            ha_states=[
+                {"entity_id": "binary_sensor.refrigerator_fridge_door", "state": "off"},
+                {"entity_id": "binary_sensor.refrigerator_freezer_door", "state": "off"},
+            ],
+            fridge_histories={
+                "binary_sensor.refrigerator_fridge_door": [{"state": "off"}],
+                "binary_sensor.refrigerator_freezer_door": [{"state": "on"}, {"state": "off"}],
+            },
+        )
+        text = diagnostics.diagnostics_text(diag)
+
+        self.assertEqual(diag["fridge_sensor_health"]["status"], "fridge_sensor_stale")
+        self.assertIn("Fridge sensor health: fridge_sensor_stale", text)
+        self.assertIn("Freezer door events are reaching Home Assistant", text)
 
     def test_diagnostics_health_summary_splits_active_and_historical_issues(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3490,40 +3726,42 @@ class ViperReleaseTests(unittest.TestCase):
     def test_setup_wizard_is_documented_and_available(self):
         root = Path(__file__).resolve().parents[1]
         main_text = (root / "main.pyw").read_text(encoding="utf-8")
+        setup_text = (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
+        combined_text = main_text + "\n" + setup_text
         setup_help = (root / "help" / "setup.html").read_text(encoding="utf-8")
         readme = (root / "README.md").read_text(encoding="utf-8")
-        self.assertIn("class ViperSetupWizardDialog", main_text)
-        self.assertIn("Open Setup Wizard", main_text)
-        self.assertIn("Test Everything", main_text)
-        self.assertEqual(main_text.count("Test Front Camera Now"), 3)
-        self.assertEqual(main_text.count("Test Back Camera Now"), 3)
-        self.assertNotIn('label="Test Front Camera"', main_text)
-        self.assertNotIn('label="Test Back Camera"', main_text)
-        self.assertIn("Change Doorbell Triggers", main_text)
-        self.assertIn("Change Camera Streams", main_text)
-        self.assertIn("Front selected trigger", main_text)
-        self.assertIn("Front live stream", main_text)
-        self.assertNotIn("camera candidate:", main_text)
-        self.assertNotIn("possible Home Assistant camera entity", main_text)
-        self.assertIn("Continue To {next_title}", main_text)
-        self.assertIn("self.btn_next.Show(next_available)", main_text)
-        self.assertIn("def _page_completion_status", main_text)
-        self.assertIn("def _configured_doorbell_trigger_count", main_text)
-        self.assertIn('label="Save Selected Doorbell Triggers"', main_text)
-        self.assertIn("self.wizard_front_trigger_choice = wx.ComboBox", main_text)
-        self.assertIn("self.wizard_back_trigger_choice = wx.ComboBox", main_text)
-        self.assertIn("def on_save_wizard_doorbell_triggers", main_text)
-        self.assertIn('label="Save Selected Camera Streams"', main_text)
-        self.assertIn("self.wizard_front_stream_choice = wx.ComboBox", main_text)
-        self.assertIn("self.wizard_back_stream_choice = wx.ComboBox", main_text)
-        self.assertIn("def on_save_wizard_camera_streams", main_text)
-        self.assertIn("Do not use a camera stream for this door", main_text)
-        self.assertIn('label="Test Front Doorbell Camera"', main_text)
-        self.assertIn('label="Test Back Doorbell Camera"', main_text)
-        self.assertIn('label="Test Checked Speakers"', main_text)
-        self.assertIn("def on_test_wizard_camera", main_text)
-        self.assertIn("def on_test_wizard_speakers", main_text)
-        wizard_text = main_text.split("class ViperSetupWizardDialog", 1)[1].split("class ViperDashboard", 1)[0]
+        self.assertIn("class ViperSetupWizardDialog", setup_text)
+        self.assertIn("Open Setup Wizard", combined_text)
+        self.assertIn("Test Everything", combined_text)
+        self.assertEqual(combined_text.count("Test Front Camera Now"), 3)
+        self.assertEqual(combined_text.count("Test Back Camera Now"), 3)
+        self.assertNotIn('label="Test Front Camera"', combined_text)
+        self.assertNotIn('label="Test Back Camera"', combined_text)
+        self.assertIn("Change Doorbell Triggers", combined_text)
+        self.assertIn("Change Camera Streams", combined_text)
+        self.assertIn("Front selected trigger", combined_text)
+        self.assertIn("Front live stream", combined_text)
+        self.assertNotIn("camera candidate:", combined_text)
+        self.assertNotIn("possible Home Assistant camera entity", combined_text)
+        self.assertIn("Continue To {next_title}", combined_text)
+        self.assertIn("self.btn_next.Show(next_available)", combined_text)
+        self.assertIn("def _page_completion_status", combined_text)
+        self.assertIn("def _configured_doorbell_trigger_count", combined_text)
+        self.assertIn('label="Save Selected Doorbell Triggers"', combined_text)
+        self.assertIn("self.wizard_front_trigger_choice = wx.ComboBox", combined_text)
+        self.assertIn("self.wizard_back_trigger_choice = wx.ComboBox", combined_text)
+        self.assertIn("def on_save_wizard_doorbell_triggers", combined_text)
+        self.assertIn('label="Save Selected Camera Streams"', combined_text)
+        self.assertIn("self.wizard_front_stream_choice = wx.ComboBox", combined_text)
+        self.assertIn("self.wizard_back_stream_choice = wx.ComboBox", combined_text)
+        self.assertIn("def on_save_wizard_camera_streams", combined_text)
+        self.assertIn("Do not use a camera stream for this door", combined_text)
+        self.assertIn('label="Test Front Doorbell Camera"', combined_text)
+        self.assertIn('label="Test Back Doorbell Camera"', combined_text)
+        self.assertIn('label="Test Checked Speakers"', combined_text)
+        self.assertIn("def on_test_wizard_camera", combined_text)
+        self.assertIn("def on_test_wizard_speakers", combined_text)
+        wizard_text = setup_text.split("class ViperSetupWizardDialog", 1)[1]
         self.assertNotIn("Advanced Manual Setup", wizard_text)
         self.assertNotIn("btn_advanced", wizard_text)
         self.assertNotIn("show_home_assistant_setup", wizard_text)
@@ -3533,11 +3771,11 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn('label="Start Or Wait For Home Assistant"', wizard_text)
         self.assertIn('label="Open Home Assistant Account Setup"', wizard_text)
         self.assertIn('label="Open Home Assistant Token Page"', wizard_text)
-        self.assertIn("Home Assistant IP or host", main_text)
-        self.assertIn("Home Assistant long-lived access token", main_text)
-        self.assertIn("def on_find_home_assistant", main_text)
-        self.assertIn("Connect And Discover Devices", main_text)
-        self.assertIn("Home Assistant install is part of this wizard now", main_text)
+        self.assertIn("Home Assistant IP or host", combined_text)
+        self.assertIn("Home Assistant long-lived access token", combined_text)
+        self.assertIn("def on_find_home_assistant", combined_text)
+        self.assertIn("Connect And Discover Devices", combined_text)
+        self.assertIn("Home Assistant install is part of this wizard now", combined_text)
         self.assertNotIn("owner.show_new_user_setup_assistant()", wizard_text)
         self.assertIn("Recommended: Follow The Setup Wizard", setup_help)
         self.assertIn("The Continue button for the next page only appears after the current step is ready", setup_help)
@@ -3668,7 +3906,7 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_setup_wizard_critical_buttons_are_bound_to_handlers(self):
         root = Path(__file__).resolve().parents[1]
-        main_text = (root / "main.pyw").read_text(encoding="utf-8")
+        main_text = (root / "main.pyw").read_text(encoding="utf-8") + "\n" + (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
         required_bindings = [
             "self.btn_find_ha_wizard.Bind(wx.EVT_BUTTON, self.on_find_home_assistant)",
             "self.btn_wizard_check_pc.Bind(wx.EVT_BUTTON, self.on_wizard_check_pc)",
@@ -3908,7 +4146,7 @@ class ViperReleaseTests(unittest.TestCase):
         fake.finished = []
         fake._finish_wizard_speaker_tests = lambda results, source: fake.finished.append((results, source))
 
-        with patch.object(main, "safe_submit", lambda func, *args, **kwargs: func(*args, **kwargs)), \
+        with patch.object(setup_wizard, "safe_submit", lambda func, *args, **kwargs: func(*args, **kwargs)), \
              patch.object(main.wx, "CallAfter", lambda func, *args, **kwargs: func(*args, **kwargs)), \
              patch.object(main.audio, "announce_specific_speaker") as announce:
             main.ViperSetupWizardDialog.on_test_wizard_speakers(fake, None)
@@ -3947,7 +4185,7 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_home_assistant_install_assistant_buttons_are_bound_to_handlers(self):
         root = Path(__file__).resolve().parents[1]
-        main_text = (root / "main.pyw").read_text(encoding="utf-8")
+        main_text = (root / "main.pyw").read_text(encoding="utf-8") + "\n" + (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
         required_buttons = [
             '("Check This PC", self.on_check_pc',
             '("Install VirtualBox With Winget", self.on_install_virtualbox_winget',
@@ -3964,7 +4202,7 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_home_assistant_setup_includes_safe_virtualbox_optimization_controls(self):
         root = Path(__file__).resolve().parents[1]
-        main_text = (root / "main.pyw").read_text(encoding="utf-8")
+        main_text = (root / "main.pyw").read_text(encoding="utf-8") + "\n" + (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
         ha_vm_text = (root / "viper_ha_vm.py").read_text(encoding="utf-8")
         self.assertIn("def optimize_windows_for_virtualbox", ha_vm_text)
         self.assertIn("def optimize_windows_for_virtualbox", main_text)
@@ -4250,7 +4488,7 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_advanced_home_assistant_setup_uses_product_page_names(self):
         root = Path(__file__).resolve().parents[1]
-        main_text = (root / "main.pyw").read_text(encoding="utf-8")
+        main_text = (root / "main.pyw").read_text(encoding="utf-8") + "\n" + (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
 
         self.assertIn('title="Advanced Home Assistant Setup"', main_text)
         self.assertIn('"Home Assistant", "Doorbell Vision", "Ring-MQTT Advanced", "Final Checks"', main_text)
@@ -4274,7 +4512,7 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_about_dialog_is_available_from_diagnostics(self):
         root = Path(__file__).resolve().parents[1]
-        main_text = (root / "main.pyw").read_text(encoding="utf-8")
+        main_text = (root / "main.pyw").read_text(encoding="utf-8") + "\n" + (root / "viper_ui_diagnostics.py").read_text(encoding="utf-8")
         self.assertIn("About Viper Vision And Data Folders", main_text)
         self.assertIn("def on_show_about", main_text)
         self.assertIn("Copy Data Folder", main_text)

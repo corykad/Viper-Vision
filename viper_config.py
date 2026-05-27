@@ -435,7 +435,7 @@ CONFIG_SCHEMA = {
         },
         "doorbell_video_analysis": {
             "mode": "fast",
-            "model": "gemini-3-flash-preview",
+            "model": "gemini-3.5-flash",
             "smart_clip_seconds": 3,
             "detailed_clip_seconds": 5,
             "manual_clip_seconds": 6,
@@ -461,6 +461,7 @@ CONFIG_SCHEMA = {
         # ── Roborock / Cinderella ──────────────────────────────────────────
         "cinderella_enabled": True,
         "cinderella_ai_mode": False,
+        "vacuum_cleaning_mode": "vacuum_mop",
         "vacuum_rooms": {},
         "cinderella_ai_prompt": (
             "You are a dry, witty narrator for a robot vacuum cleaner named Cinderella. "
@@ -1076,6 +1077,9 @@ def validate_and_normalize_config(config_data):
     normalized["quiet_hours_end"] = _normalize_time(normalized.get("quiet_hours_end"), defaults["quiet_hours_end"])
     normalized["broadcast_channels"] = _normalize_broadcast_channels(normalized.get("broadcast_channels"), defaults["broadcast_channels"])
     normalized["vacuum_rooms"] = _normalize_vacuum_rooms(normalized.get("vacuum_rooms"))
+    normalized["vacuum_cleaning_mode"] = _as_str(normalized.get("vacuum_cleaning_mode"), defaults["vacuum_cleaning_mode"]).strip() or defaults["vacuum_cleaning_mode"]
+    if normalized["vacuum_cleaning_mode"] not in {"vacuum_mop", "vacuum_only", "mop_only"}:
+        normalized["vacuum_cleaning_mode"] = defaults["vacuum_cleaning_mode"]
     normalized["cinderella_enabled"] = _as_bool(normalized.get("cinderella_enabled"), defaults["cinderella_enabled"])
     normalized["cinderella_ai_mode"] = _as_bool(normalized.get("cinderella_ai_mode"), defaults["cinderella_ai_mode"])
     normalized["cinderella_ai_prompt"] = _as_str(normalized.get("cinderella_ai_prompt"), defaults["cinderella_ai_prompt"]) or defaults["cinderella_ai_prompt"]

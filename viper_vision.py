@@ -57,6 +57,9 @@ _MAX_IMAGE_DIM = 800
 # Frame polling interval in seconds. 50ms gives 20 checks/second which is more
 # than enough to catch a 5fps stream the moment a good frame lands.
 _FRAME_POLL_INTERVAL = 0.05
+_GREEN_ARTIFACT_PIXEL_FRACTION = 0.03
+_BACKGROUND_REFINEMENT_FRAME_COUNT = 2
+_BACKGROUND_REFINEMENT_FRAME_DELAY = 0.35
 
 VIDEO_ANALYSIS_MODES = ("fast", "smart", "detailed", "manual")
 VIDEO_ANALYSIS_LABELS = {
@@ -65,7 +68,12 @@ VIDEO_ANALYSIS_LABELS = {
     "detailed": "Detailed mode: fast still image first, video follow-up on every alert",
     "manual": "Manual mode: video only when you press an analyze button",
 }
-VIDEO_ANALYSIS_MODEL = "gemini-3-flash-preview"
+GEMINI_VISION_MODEL = "gemini-3.5-flash"
+VIDEO_ANALYSIS_MODEL = GEMINI_VISION_MODEL
+LEGACY_GEMINI_VISION_MODELS = {
+    "gemini-2.5-flash",
+    "gemini-3-flash-preview",
+}
 _video_followup_last = {"front": 0.0, "back": 0.0}
 _video_followup_lock = threading.Lock()
 
@@ -87,9 +95,13 @@ def normalize_video_analysis_settings(config_data=None):
         return max(minimum, min(maximum, value))
 
     max_manual = bounded_int("max_manual_clip_seconds", 15, 5, 30)
+    model = str(settings.get("model") or VIDEO_ANALYSIS_MODEL).strip() or VIDEO_ANALYSIS_MODEL
+    if model in LEGACY_GEMINI_VISION_MODELS:
+        model = VIDEO_ANALYSIS_MODEL
+
     return {
         "mode": mode,
-        "model": str(settings.get("model") or VIDEO_ANALYSIS_MODEL).strip() or VIDEO_ANALYSIS_MODEL,
+        "model": model,
         "smart_clip_seconds": bounded_int("smart_clip_seconds", 3, 2, 8),
         "detailed_clip_seconds": bounded_int("detailed_clip_seconds", 5, 2, 10),
         "manual_clip_seconds": max(2, min(max_manual, bounded_int("manual_clip_seconds", 6, 2, max_manual))),
@@ -139,7 +151,7 @@ def _capture_single_frame_fallback(rtsp_url: str, output_file: Path, timeout: fl
         )
         if result.returncode == 0 and output_file.exists():
             try:
-                if output_file.stat().st_size > 5000:
+                if output_file.stat().st_size > 5000 and _frame_passes_sanity_check(output_file):
                     logging.info("[RTSP] Single-frame fallback succeeded! (%s)", output_file)
                     return str(output_file)
             except Exception:
@@ -148,6 +160,38 @@ def _capture_single_frame_fallback(rtsp_url: str, output_file: Path, timeout: fl
         logging.error("[RTSP FALLBACK ERROR] %s", e)
 
     return None
+
+
+def _frame_has_green_artifacts(image: Image.Image) -> bool:
+    """Detect neon-green decoder corruption without rejecting normal lawns."""
+    sample = image.convert("RGB")
+    sample.thumbnail((160, 90))
+    data = sample.tobytes()
+    total = 0
+    suspicious = 0
+    for i in range(0, len(data), 3):
+        r, g, b = data[i], data[i + 1], data[i + 2]
+        total += 1
+        if g >= 150 and g - r >= 70 and g - b >= 70:
+            suspicious += 1
+    return bool(total and (suspicious / total) >= _GREEN_ARTIFACT_PIXEL_FRACTION)
+
+
+def _frame_passes_sanity_check(frame_path: Path) -> bool:
+    try:
+        with Image.open(frame_path) as image:
+            image.load()
+            width, height = image.size
+            if width < 160 or height < 90:
+                logging.info("[RTSP] Skipping tiny frame %s size=%sx%s", frame_path.name, width, height)
+                return False
+            if _frame_has_green_artifacts(image):
+                logging.warning("[RTSP] Skipping likely corrupted green-artifact frame: %s", frame_path.name)
+                return False
+            return True
+    except Exception as e:
+        logging.warning("[RTSP] Skipping unreadable frame %s: %s", frame_path.name, e)
+        return False
 
 
 # ==========================================
@@ -167,7 +211,7 @@ def warmup_gemini():
         warm_img = Image.open(buf)
         warm_img.load()
         get_gemini_client().models.generate_content(
-            model="gemini-2.5-flash",
+            model=GEMINI_VISION_MODEL,
             contents=[warm_img],
             config=types.GenerateContentConfig(
                 system_instruction="Reply with one word.",
@@ -234,6 +278,7 @@ def grab_frame(
     largest_frame = None
     largest_size = 0
     logged_frame_sizes = {}
+    sanity_checked_frames = {}
 
     try:
         while time.time() - start_time < timeout:
@@ -251,9 +296,20 @@ def grab_frame(
                                 frame.name, size, min_bytes, time.time() - start_time,
                             )
                         if size > largest_size:
-                            largest_size = size
-                            largest_frame = str(frame)
+                            usable = sanity_checked_frames.get(str(frame))
+                            if usable is None:
+                                usable = _frame_passes_sanity_check(frame)
+                                sanity_checked_frames[str(frame)] = usable
+                            if usable:
+                                largest_size = size
+                                largest_frame = str(frame)
                         if size >= min_bytes:
+                            usable = sanity_checked_frames.get(str(frame))
+                            if usable is None:
+                                usable = _frame_passes_sanity_check(frame)
+                                sanity_checked_frames[str(frame)] = usable
+                            if not usable:
+                                continue
                             best_frame = str(frame)
                             logging.info(
                                 "[RTSP] Quality threshold met: %s bytes >= %s bytes (%.2fs)",
@@ -601,7 +657,11 @@ def _load_image_for_gemini(image_path: str):
     return img
 
 
-def get_gemini_description(image_path, prompt, model_name="gemini-2.5-flash"):
+def _load_images_for_gemini(image_paths):
+    return [_load_image_for_gemini(str(path)) for path in image_paths if path]
+
+
+def get_gemini_description(image_path, prompt, model_name=GEMINI_VISION_MODEL):
     started = time.time()
     try:
         img = _load_image_for_gemini(image_path)
@@ -626,6 +686,98 @@ def get_gemini_description(image_path, prompt, model_name="gemini-2.5-flash"):
         return "The AI service is currently unavailable."
 
 
+def get_gemini_multi_image_description(image_paths, prompt, model_name=GEMINI_VISION_MODEL):
+    started = time.time()
+    try:
+        images = _load_images_for_gemini(image_paths)
+        if not images:
+            return "The video feed is unavailable."
+
+        res = get_gemini_client().models.generate_content(
+            model=model_name,
+            contents=images,
+            config=types.GenerateContentConfig(
+                system_instruction=prompt,
+                temperature=0.2,
+            ),
+        )
+
+        elapsed = time.time() - started
+        logging.info("[AI TIMING] multi_image model=%s images=%s took %.2fs", model_name, len(images), elapsed)
+        if res and res.usage_metadata:
+            log_api_usage(res.usage_metadata)
+        return res.text.strip() if res and res.text else "Activity detected."
+    except Exception as e:
+        elapsed = time.time() - started
+        logging.error("[AI ERROR] multi_image model=%s after %.2fs: %s", model_name, elapsed, e)
+        return "The AI service is currently unavailable."
+
+
+def _background_refinement_prompt(location: str, first_description: str, base_prompt: str) -> str:
+    return (
+        f"{base_prompt or 'Describe the scene.'}\n\n"
+        f"This is a delayed background refinement for the {location}. "
+        f"The fast first description was: {first_description}. "
+        "Compare the provided still frames and give the best corrected description for a blind homeowner. "
+        "Focus on people, packages, vehicles, animals, direction of movement, and anything safety relevant. "
+        "If the fast description was already correct, improve it only if the later frames add useful detail. "
+        "Keep the answer under 35 words."
+    )
+
+
+def capture_background_refinement_frames(
+    rtsp_url: str,
+    output_dir: Path,
+    prefix: str,
+    min_bytes: int,
+    count: int = _BACKGROUND_REFINEMENT_FRAME_COUNT,
+) -> list[str]:
+    frames: list[str] = []
+    for index in range(count):
+        time.sleep(_BACKGROUND_REFINEMENT_FRAME_DELAY)
+        frame = grab_frame(
+            rtsp_url,
+            output_dir=output_dir,
+            prefix=f"{prefix}_{index + 1}",
+            min_bytes=min_bytes,
+            fast_mode=True,
+            timeout=max(3.0, min(float(cfg.RTSP_CONNECT_TIMEOUT_SECONDS), 6.0)),
+        )
+        if frame and Path(frame).exists():
+            frames.append(frame)
+    logging.info("[AI REFINE] Captured %s background still frames for %s", len(frames), prefix)
+    return frames
+
+
+def refine_weak_doorbell_still_description(
+    rtsp_url: str,
+    output_dir: Path,
+    prefix: str,
+    min_bytes: int,
+    location: str,
+    first_description: str,
+    base_prompt: str,
+    initial_frame: str | None = None,
+) -> tuple[str, list[str]]:
+    frames = [initial_frame] if initial_frame and Path(initial_frame).exists() else []
+    frames.extend(capture_background_refinement_frames(rtsp_url, output_dir, prefix, min_bytes))
+    if not frames:
+        return first_description, []
+
+    prompt = _background_refinement_prompt(location, first_description, base_prompt)
+    if len(frames) == 1:
+        refined = get_gemini_description(frames[0], prompt, model_name=GEMINI_VISION_MODEL)
+    else:
+        refined = get_gemini_multi_image_description(frames, prompt, model_name=GEMINI_VISION_MODEL)
+
+    if not _description_is_weak(refined):
+        logging.info("[AI REFINE] Background still refinement improved weak first pass.")
+        return refined, frames
+
+    logging.info("[AI REFINE] Background still refinement remained weak; keeping first pass.")
+    return first_description, frames
+
+
 def _description_is_weak(text: str) -> bool:
     lowered = (text or "").strip().lower()
     if not lowered:
@@ -646,6 +798,14 @@ def _description_is_weak(text: str) -> bool:
         "not sure", "maybe", "possibly", "appears to be", "seems to be",
     )
     if any(m in lowered for m in uncertainty_markers):
+        return True
+
+    corruption_markers = (
+        "green artifact", "green artifacts", "digital corruption",
+        "digital noise", "green and grey bands", "green and gray bands",
+        "corrupted", "heavily distorted", "distorted by",
+    )
+    if any(m in lowered for m in corruption_markers):
         return True
 
     tokens = (
@@ -746,15 +906,15 @@ def get_best_gemini_description(image_path, prompt):
     """Return the fastest strong Gemini description.
 
     Fast path:
-      1. Ask gemini-2.5-flash first.
+      1. Ask the current Gemini vision model first.
       2. If that result is strong, return immediately.
-      3. Only escalate to gemini-3-flash-preview when the first answer is weak.
+      3. Retry once with the same model when the first answer is weak.
 
     This keeps the common-case doorbell path low-latency instead of waiting for
     the slower backup model every time.
     """
-    first_model = "gemini-2.5-flash"
-    second_model = "gemini-3-flash-preview"
+    first_model = GEMINI_VISION_MODEL
+    second_model = GEMINI_VISION_MODEL
 
     desc_fast = get_gemini_description(image_path, prompt, model_name=first_model)
     if not _description_is_weak(desc_fast):
@@ -795,7 +955,7 @@ def generate_cinderella_message(event: str, source: str, error: str) -> str:
         )
 
         res = get_gemini_client().models.generate_content(
-            model="gemini-2.5-flash",
+            model=GEMINI_VISION_MODEL,
             contents=[prompt],
             config=types.GenerateContentConfig(
                 temperature=1.0,   # high temp for creative variety
@@ -929,12 +1089,12 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
         sys_prompt = cfg.get_doorbell_photo_prompt(current_config, key) or "Describe the scene."
 
         if fast_frame:
-            first_model = "gemini-2.5-flash"
+            first_model = GEMINI_VISION_MODEL
             description = get_gemini_description(fast_frame, sys_prompt, model_name=first_model)
             weak_first_pass = _description_is_weak(description)
             if _description_is_service_unavailable(description):
                 logging.warning("[AI SELECT] Fast-pass AI service unavailable; trying backup model before speech")
-                refined_description = get_gemini_description(fast_frame, sys_prompt, model_name="gemini-3-flash-preview")
+                refined_description = get_gemini_description(fast_frame, sys_prompt, model_name=GEMINI_VISION_MODEL)
                 if not _description_is_weak(refined_description):
                     description = refined_description
                     weak_first_pass = False
@@ -1008,6 +1168,7 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
         # ── STAGE 2: BACKGROUND PUSHOVER / HD REFINEMENT ──────────────────
         def background_pushover_pipeline():
             hd_frame = None
+            refinement_frames = []
             try:
                 # If the first pass was strong and we still have the frame, use
                 # it immediately — no need for another RTSP connection.
@@ -1021,9 +1182,9 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
                     except Exception as e:
                         logging.error("[PUSHOVER] Fast-pass send failed for %s: %s", key, e)
 
-                # First pass was weak — refine in the background. Reuse the
-                # fast frame first so speech is never blocked by the backup
-                # model, and only capture HD if refinement still looks weak.
+                # First pass was weak — refine in the background. Speech has
+                # already happened, so this path can spend a little extra time
+                # on multiple still frames without delaying the doorbell alert.
                 logging.info("[PUSHOVER] First pass weak; refining in background for %s trace=%s", key, trace_id)
                 target_frame = fast_frame
                 if not target_frame or not Path(target_frame).exists():
@@ -1042,10 +1203,23 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
 
                 pushover_description = description
                 if weak_first_pass:
-                    refined_description = get_gemini_description(target_frame, sys_prompt, model_name="gemini-3-flash-preview")
+                    refined_description, refinement_frames = refine_weak_doorbell_still_description(
+                        rtsp_url,
+                        output_dir=cfg.DATA_DIR,
+                        prefix=f"refine_{key}_{unique_id}",
+                        min_bytes=min_bytes,
+                        location=location,
+                        first_description=description,
+                        base_prompt=sys_prompt,
+                        initial_frame=target_frame,
+                    )
                     if not _description_is_weak(refined_description):
                         pushover_description = refined_description
-                        logging.info("[PUSHOVER] Using refined description for %s", key)
+                        logging.info("[PUSHOVER] Using multi-frame refined description for %s", key)
+                        if refined_description != description and _video_followup_adds_value(description, refined_description):
+                            audio.play_notification("doorbell", f"Update: {refined_description}")
+                            if dash_app:
+                                dash_app.notify(f"Update: {refined_description}", priority=1, interrupt=True)
                     else:
                         logging.info("[PUSHOVER] Refined still weak; keeping first-pass text for %s", key)
                         if not hd_frame:
@@ -1082,6 +1256,9 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
                     if path_str:
                         try: Path(path_str).unlink(missing_ok=True)
                         except Exception: pass
+                for path_str in refinement_frames:
+                    try: Path(path_str).unlink(missing_ok=True)
+                    except Exception: pass
 
         executor.submit(background_pushover_pipeline)
 
