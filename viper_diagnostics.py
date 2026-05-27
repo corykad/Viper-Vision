@@ -8,6 +8,7 @@ import time
 import zipfile
 from copy import deepcopy
 from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import viper_config as cfg
@@ -16,6 +17,8 @@ import viper_config as cfg
 APP_VERSION = "1.2.3"
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 2
+FRIDGE_DOOR_ENTITY = "binary_sensor.refrigerator_fridge_door"
+FREEZER_DOOR_ENTITY = "binary_sensor.refrigerator_freezer_door"
 
 SECRET_KEYWORDS = (
     "token",
@@ -155,7 +158,112 @@ def _last_current_log_line():
     return lines[-1] if lines else ""
 
 
-def build_health_summary(config_data, *, ha_listener_status=None, ha_connection=None, ha_health=None, recent_errors=None):
+def _parse_ha_time(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _history_transition_counts(history):
+    rows = history if isinstance(history, list) else []
+    states = [str(item.get("state") or "").strip().lower() for item in rows if isinstance(item, dict)]
+    return {
+        "rows": len(states),
+        "opens": sum(1 for state in states if state in {"on", "open"}),
+        "closes": sum(1 for state in states if state in {"off", "closed"}),
+        "unavailable": sum(1 for state in states if state in {"unavailable", "unknown"}),
+        "latest_state": states[-1] if states else "",
+        "latest_changed": next(
+            (
+                str(item.get("last_changed") or "")
+                for item in reversed(rows)
+                if isinstance(item, dict) and item.get("last_changed")
+            ),
+            "",
+        ),
+    }
+
+
+def refrigerator_door_sensor_diagnostics(*, states=None, histories=None, now=None):
+    states = states if isinstance(states, list) else []
+    histories = histories if isinstance(histories, dict) else {}
+    by_id = {item.get("entity_id"): item for item in states if isinstance(item, dict)}
+    fridge = by_id.get(FRIDGE_DOOR_ENTITY)
+    freezer = by_id.get(FREEZER_DOOR_ENTITY)
+    result = {
+        "checked": bool(fridge or freezer or histories),
+        "ok": True,
+        "status": "unknown",
+        "message": "Refrigerator door sensors were not checked.",
+        "fridge": {
+            "entity_id": FRIDGE_DOOR_ENTITY,
+            "present": bool(fridge),
+            "state": fridge.get("state") if fridge else "",
+            "last_changed": fridge.get("last_changed") if fridge else "",
+            "history": _history_transition_counts(histories.get(FRIDGE_DOOR_ENTITY, [])),
+        },
+        "freezer": {
+            "entity_id": FREEZER_DOOR_ENTITY,
+            "present": bool(freezer),
+            "state": freezer.get("state") if freezer else "",
+            "last_changed": freezer.get("last_changed") if freezer else "",
+            "history": _history_transition_counts(histories.get(FREEZER_DOOR_ENTITY, [])),
+        },
+    }
+    if not result["checked"]:
+        return result
+    if not fridge or not freezer:
+        missing = "fridge" if not fridge else "freezer"
+        result.update({
+            "ok": False,
+            "status": "missing_entity",
+            "message": f"Home Assistant is missing the refrigerator {missing} door entity.",
+        })
+        return result
+
+    fridge_hist = result["fridge"]["history"]
+    freezer_hist = result["freezer"]["history"]
+    freezer_active = freezer_hist["opens"] > 0
+    fridge_inactive = fridge_hist["opens"] == 0
+    if freezer_active and fridge_inactive:
+        result.update({
+            "ok": False,
+            "status": "fridge_sensor_stale",
+            "message": (
+                "Freezer door events are reaching Home Assistant, but the fridge door has no open events "
+                "in the same recent diagnostic window. Reload or re-auth SmartThings, then test the fridge door entity."
+            ),
+        })
+        return result
+
+    now = now or datetime.now(timezone.utc)
+    fridge_changed = _parse_ha_time(fridge.get("last_changed"))
+    freezer_changed = _parse_ha_time(freezer.get("last_changed"))
+    if fridge_changed and freezer_changed and freezer_changed > fridge_changed:
+        delta = (freezer_changed - fridge_changed).total_seconds()
+        if delta >= 2 * 60 * 60:
+            result.update({
+                "ok": False,
+                "status": "fridge_sensor_older_than_freezer",
+                "message": (
+                    "The freezer door sensor has changed recently, but the fridge door sensor has been quiet for over two hours. "
+                    "If the fridge was opened during that time, SmartThings is not reporting the fridge compartment contact."
+                ),
+            })
+            return result
+
+    result.update({
+        "status": "ok",
+        "message": "Fridge and freezer door sensors both look available in Home Assistant.",
+    })
+    return result
+
+
+def build_health_summary(config_data, *, ha_listener_status=None, ha_connection=None, ha_health=None, fridge_sensor_health=None, recent_errors=None):
     shape = config_shape(config_data)
     ha_listener_status = ha_listener_status or {}
     ha_connection = ha_connection or {"checked": False}
@@ -191,6 +299,10 @@ def build_health_summary(config_data, *, ha_listener_status=None, ha_connection=
     if ha_health.get("checked") and not ha_health.get("ok", False):
         state = ha_health.get("state") or "unknown"
         active.append(f"Home Assistant health check is {state}: {ha_health.get('message') or 'no detail'}.")
+
+    fridge_sensor_health = fridge_sensor_health or {"checked": False}
+    if fridge_sensor_health.get("checked") and not fridge_sensor_health.get("ok", True):
+        active.append(fridge_sensor_health.get("message") or "Refrigerator door sensor diagnostics found an issue.")
 
     if not ffmpeg_status()["available"]:
         active.append("FFmpeg is not available; camera frame capture may fail.")
@@ -234,14 +346,16 @@ def config_shape(config_data):
     }
 
 
-def collect_diagnostics(config_data=None, *, ha_listener_status=None, ha_connection=None, ha_health=None):
+def collect_diagnostics(config_data=None, *, ha_listener_status=None, ha_connection=None, ha_health=None, ha_states=None, fridge_histories=None):
     config_data = cfg.validate_and_normalize_config(config_data if config_data is not None else cfg.load_config())
     recent_errors = recent_log_lines()
+    fridge_sensor_health = refrigerator_door_sensor_diagnostics(states=ha_states, histories=fridge_histories)
     health = build_health_summary(
         config_data,
         ha_listener_status=ha_listener_status,
         ha_connection=ha_connection,
         ha_health=ha_health,
+        fridge_sensor_health=fridge_sensor_health,
         recent_errors=recent_errors,
     )
     return {
@@ -264,6 +378,7 @@ def collect_diagnostics(config_data=None, *, ha_listener_status=None, ha_connect
         "ha_listener": ha_listener_status or {},
         "ha_connection": ha_connection or {"checked": False},
         "ha_health": ha_health or {"checked": False},
+        "fridge_sensor_health": fridge_sensor_health,
         "health": health,
         "recent_errors": recent_errors,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -309,6 +424,8 @@ def diagnostics_text(diag):
         f"Log rotation: {diag.get('health', {}).get('log_rotation', {}).get('max_bytes', LOG_MAX_BYTES)} bytes, {diag.get('health', {}).get('log_rotation', {}).get('backup_count', LOG_BACKUP_COUNT)} backups",
         f"HA listener connected: {'yes' if diag.get('ha_listener', {}).get('connected') else 'no'}",
         f"HA listener last error: {diag.get('ha_listener', {}).get('last_error') or 'none'}",
+        f"Fridge sensor health: {diag.get('fridge_sensor_health', {}).get('status', 'unknown')}",
+        f"Fridge sensor message: {diag.get('fridge_sensor_health', {}).get('message', 'not checked')}",
         f"HA host configured: {'yes' if diag['config_shape']['has_ha_host'] else 'no'}",
         f"HA token configured: {'yes' if diag['config_shape']['has_ha_token'] else 'no'}",
         f"Gemini key configured: {'yes' if diag['config_shape']['has_gemini_key'] else 'no'}",

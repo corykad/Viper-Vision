@@ -28,11 +28,14 @@
     </ol>
 
     <h2>Cleaning Controls</h2>
-    <p>Viper can show Start, Pause, Stop, Return to dock, Locate, Spot clean, suction, mop mode, mop intensity, and child lock when Home Assistant exposes those controls.</p>
+    <p>Viper shows only the basic actions that make sense for the vacuum's current state. Pause and Stop appear while the robot is cleaning or paused. Start appears when the robot is docked, idle, or paused. Return to dock appears when it is useful.</p>
+    <p>The Cleaning job mode picker tells Viper whether the next whole-home clean or selected-room clean should be Vacuum and mop, Vacuum only, or Mop only. When Home Assistant exposes a matching Roborock cleaning-mode or mop-mode control, Viper applies that setting before it starts the job. If Home Assistant does not expose a matching control, the robot uses its current Roborock app settings.</p>
+    <p>The Start selected cleaning mode button starts or resumes the selected vacuum. It does not choose suction or mop intensity by itself; use the suction, mop mode, and mop intensity controls first if you want exact values.</p>
 
     <h2>Room Cleaning</h2>
     <ol>
       <li>Choose the vacuum entity.</li>
+      <li>Choose Cleaning job mode: Vacuum and mop, Vacuum only, or Mop only.</li>
       <li>Press Refresh room list.</li>
       <li>Tab or arrow through the rooms.</li>
       <li>Press Space to check or uncheck each room.</li>

@@ -453,7 +453,7 @@
     "manual_clip_seconds": 6,
     "max_manual_clip_seconds": 15,
     "mode": "fast",
-    "model": "gemini-3-flash-preview",
+    "model": "gemini-3.5-flash",
     "smart_clip_seconds": 3,
     "smart_cooldown_seconds": 60,
     "speak_followups": true
@@ -610,6 +610,7 @@
       "utilities": "normal"
     }
   },
+  "vacuum_cleaning_mode": "vacuum_mop",
   "vacuum_rooms": {},
   "video_prompts": {
     "Detailed Doorbell Video": "You are helping a blind homeowner understand the {location}. Analyze this short security video. Mention people, packages, vehicles, animals, movement, direction, spatial details, and safety concerns. Use two to four complete sentences, about 35 to 90 words.",

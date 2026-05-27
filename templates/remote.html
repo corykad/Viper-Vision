@@ -444,19 +444,25 @@
             </ul>
 
             <h3>Basic Actions</h3>
-            <div class="button-grid" role="group" aria-label="Basic vacuum actions">
-                {% for service, label in [
-                    ('vacuum/start', 'Start cleaning'),
-                    ('vacuum/pause', 'Pause cleaning'),
-                    ('vacuum/stop', 'Stop cleaning'),
-                    ('vacuum/return_to_base', 'Return to dock'),
-                    ('vacuum/locate', 'Locate vacuum'),
-                    ('vacuum/clean_spot', 'Spot clean')
-                ] %}
+            <form action="{{ url_for('web_vacuum_cleaning_mode') }}" method="post">
+                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                <label for="vacuum_cleaning_mode">Cleaning job mode</label>
+                <select id="vacuum_cleaning_mode" name="cleaning_mode" aria-describedby="vacuum-cleaning-mode-hint">
+                    {% for mode in vacuum.cleaning_modes %}
+                    <option value="{{ mode.value }}" {{ 'selected' if mode.value == vacuum.cleaning_mode else '' }}>{{ mode.label }}</option>
+                    {% endfor %}
+                </select>
+                <p id="vacuum-cleaning-mode-hint" class="field-hint">Start cleaning and Clean selected rooms use this mode when Home Assistant exposes matching Roborock controls. Otherwise the robot uses its current Roborock app settings.</p>
+                <button type="submit" class="secondary">Save cleaning mode</button>
+            </form>
+
+            <div class="button-grid" role="group" aria-label="Useful vacuum actions for current state {{ vacuum.state }}">
+                {% for action in vacuum.actions %}
                 <form action="{{ url_for('web_vacuum_action') }}" method="post">
                     <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
-                    <input type="hidden" name="service" value="{{ service }}">
-                    <button type="submit" class="{{ 'secondary' if service != 'vacuum/stop' else 'danger' }}">{{ label }}</button>
+                    <input type="hidden" name="service" value="{{ action.service }}">
+                    <input type="hidden" name="cleaning_mode" value="{{ vacuum.cleaning_mode }}">
+                    <button type="submit" class="{{ action.style }}">{{ action.label }}</button>
                 </form>
                 {% endfor %}
             </div>
@@ -526,6 +532,7 @@
             {% if vacuum.rooms %}
             <form action="{{ url_for('web_vacuum_clean_rooms') }}" method="post">
                 <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                <input type="hidden" name="cleaning_mode" value="{{ vacuum.cleaning_mode }}">
                 <fieldset>
                     <legend>Choose rooms to clean</legend>
                     <div class="room-grid">

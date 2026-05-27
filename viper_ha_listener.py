@@ -4,11 +4,29 @@ import logging
 import threading
 import time
 from copy import deepcopy
+from urllib import request as urlrequest
 
 
 DEFAULT_ACTIVE_STATES = ["on", "true", "detected", "motion", "ding", "pressed", "open"]
 INACTIVE_STATES = {"", "off", "false", "idle", "closed", "clear", "none", "unknown", "unavailable"}
 ERROR_CLEAR_STATES = {"", "none", "ok", "no_error", "no error", "unknown", "unavailable", "0"}
+FRIDGE_POLL_INTERVAL_SECONDS = 30
+
+FRIDGE_DOOR_MESSAGES = {
+    "binary_sensor.refrigerator_fridge_door": {
+        "open": ("fridge_open", "The refrigerator door is open."),
+        "on": ("fridge_open", "The refrigerator door is open."),
+        "closed": ("fridge_closed", "The refrigerator door is closed."),
+        "off": ("fridge_closed", "The refrigerator door is closed."),
+    },
+    "binary_sensor.refrigerator_freezer_door": {
+        "open": ("freezer_open", "The freezer door is open."),
+        "on": ("freezer_open", "The freezer door is open."),
+        "closed": ("freezer_closed", "The freezer door is closed."),
+        "off": ("freezer_closed", "The freezer door is closed."),
+    },
+}
+FRIDGE_OPEN_STATES = {"open", "on"}
 
 CINDERELLA_STATUS_EVENT_MAP = {
     "starting": "departure",
@@ -161,22 +179,8 @@ def route_state_change(config, entity_id, old_state, new_state):
         elif entity_id == "binary_sensor.cinderella_dock_mop_drying" and new_norm == "on" and old_norm != "on":
             actions.append({"type": "cinderella", "event": "drying", "error": "", "source": "dock"})
 
-    fridge_messages = {
-        "binary_sensor.refrigerator_fridge_door": {
-            "open": ("fridge_open", "The refrigerator door is open."),
-            "on": ("fridge_open", "The refrigerator door is open."),
-            "closed": ("fridge_closed", "The refrigerator door is closed."),
-            "off": ("fridge_closed", "The refrigerator door is closed."),
-        },
-        "binary_sensor.refrigerator_freezer_door": {
-            "open": ("freezer_open", "The freezer door is open."),
-            "on": ("freezer_open", "The freezer door is open."),
-            "closed": ("freezer_closed", "The freezer door is closed."),
-            "off": ("freezer_closed", "The freezer door is closed."),
-        },
-    }
-    if entity_id in fridge_messages and new_norm != old_norm:
-        match = fridge_messages[entity_id].get(new_norm)
+    if entity_id in FRIDGE_DOOR_MESSAGES and new_norm != old_norm:
+        match = FRIDGE_DOOR_MESSAGES[entity_id].get(new_norm)
         if match:
             channel, message = match
             actions.append({"type": "broadcast", "channel": channel, "message": message})
@@ -197,6 +201,7 @@ class HomeAssistantEventListener:
         self.status_handler = status_handler
         self.stop_event = stop_event or threading.Event()
         self.thread = None
+        self._fridge_states = {}
         self._status = {
             "running": False,
             "connected": False,
@@ -204,6 +209,7 @@ class HomeAssistantEventListener:
             "last_event_at": 0.0,
             "last_action_at": 0.0,
             "last_host": "",
+            "last_fridge_poll_at": 0.0,
         }
         self._status_lock = threading.Lock()
 
@@ -230,6 +236,14 @@ class HomeAssistantEventListener:
                 self.status_handler(snapshot)
             except Exception:
                 logging.debug("HA listener status handler failed", exc_info=True)
+
+    def _poll_interval_seconds(self):
+        try:
+            config = self.config_provider() or {}
+            interval = int(config.get("ha_fridge_poll_interval_seconds", FRIDGE_POLL_INTERVAL_SECONDS))
+            return max(10, min(interval, 300))
+        except Exception:
+            return FRIDGE_POLL_INTERVAL_SECONDS
 
     def _thread_main(self):
         try:
@@ -286,14 +300,61 @@ class HomeAssistantEventListener:
                 raise RuntimeError(subscribe_result.get("error", {}).get("message") or "state_changed subscribe failed.")
             logging.info("[HA LISTENER] connected to %s", url)
             self._set_status(connected=True, last_error="")
+            await self._refresh_fridge_states(ha_ip, ha_port, token, recover_open=True)
+            next_fridge_poll = time.monotonic() + self._poll_interval_seconds()
 
             while not self.stop_event.is_set():
                 try:
                     message = await asyncio.wait_for(ws.recv(), timeout=2)
                 except asyncio.TimeoutError:
+                    if time.monotonic() >= next_fridge_poll:
+                        await self._refresh_fridge_states(ha_ip, ha_port, token, recover_open=False)
+                        next_fridge_poll = time.monotonic() + self._poll_interval_seconds()
                     continue
                 payload = json.loads(message)
                 self._handle_ws_payload(payload)
+                if time.monotonic() >= next_fridge_poll:
+                    await self._refresh_fridge_states(ha_ip, ha_port, token, recover_open=False)
+                    next_fridge_poll = time.monotonic() + self._poll_interval_seconds()
+
+    def _fetch_ha_state(self, ha_ip, ha_port, token, entity_id):
+        url = f"http://{ha_ip}:{ha_port}/api/states/{entity_id}"
+        req = urlrequest.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urlrequest.urlopen(req, timeout=5) as response:
+            if response.status != 200:
+                raise RuntimeError(f"state request returned HTTP {response.status}")
+            return json.loads(response.read().decode("utf-8"))
+
+    async def _refresh_fridge_states(self, ha_ip, ha_port, token, recover_open=False):
+        for entity_id in FRIDGE_DOOR_MESSAGES:
+            try:
+                new_state = await asyncio.to_thread(self._fetch_ha_state, ha_ip, ha_port, token, entity_id)
+            except Exception as e:
+                logging.debug("[HA LISTENER] fridge poll failed entity=%s error=%s", entity_id, e)
+                continue
+
+            new_norm = normalize_state(state_text(new_state))
+            old_norm = self._fridge_states.get(entity_id)
+            self._fridge_states[entity_id] = new_norm
+            self._set_status(last_fridge_poll_at=time.time())
+
+            if old_norm is None:
+                if recover_open and new_norm in FRIDGE_OPEN_STATES:
+                    logging.info("[HA LISTENER] recovered open fridge/freezer state entity=%s state=%s", entity_id, new_norm)
+                    self._dispatch_state_change(entity_id, {"state": "off"}, new_state)
+                continue
+
+            if new_norm != old_norm:
+                logging.info("[HA LISTENER] fridge/freezer poll noticed entity=%s old=%s new=%s", entity_id, old_norm, new_norm)
+                self._dispatch_state_change(entity_id, {"state": old_norm}, new_state)
+
+    def _dispatch_state_change(self, entity_id, old_state, new_state):
+        config = self.config_provider() or {}
+        self._set_status(last_event_at=time.time())
+        for action in route_state_change(config, entity_id, old_state, new_state):
+            logging.info("[HA LISTENER] routed entity=%s action=%s", entity_id, action)
+            self._set_status(last_action_at=time.time())
+            self.action_handler(action)
 
     def _handle_ws_payload(self, payload):
         if payload.get("type") != "event":
@@ -305,9 +366,6 @@ class HomeAssistantEventListener:
         entity_id = data.get("entity_id") or ""
         old_state = data.get("old_state") or {}
         new_state = data.get("new_state") or {}
-        config = self.config_provider() or {}
-        self._set_status(last_event_at=time.time())
-        for action in route_state_change(config, entity_id, old_state, new_state):
-            logging.info("[HA LISTENER] routed entity=%s action=%s", entity_id, action)
-            self._set_status(last_action_at=time.time())
-            self.action_handler(action)
+        if entity_id in FRIDGE_DOOR_MESSAGES:
+            self._fridge_states[entity_id] = normalize_state(state_text(new_state))
+        self._dispatch_state_change(entity_id, old_state, new_state)

@@ -2,6 +2,8 @@ import logging
 import socket
 import time
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 from urllib.parse import urlparse
 
 import requests
@@ -408,6 +410,33 @@ def get_entity(entity_id, *, token=None, ha_ip=None, ha_port=None, timeout=DEFAU
     return _ok({"entity": _normalize_entity(entity)}, status_code=result.get("status_code"), url=result.get("url"))
 
 
+def get_entity_history(entity_id, *, start_time=None, token=None, ha_ip=None, ha_port=None, timeout=DEFAULT_TIMEOUT):
+    """Return Home Assistant history rows for one entity."""
+    if not entity_id or not isinstance(entity_id, str):
+        return _error("invalid_entity_id", "Entity ID must be a non-empty string.")
+    if start_time is None:
+        start_time = datetime.now(timezone.utc) - timedelta(hours=2)
+    if isinstance(start_time, datetime):
+        start_text = start_time.astimezone(timezone.utc).isoformat()
+    else:
+        start_text = str(start_time)
+    query = urlencode({"filter_entity_id": entity_id.strip(), "minimal_response": ""})
+    result = _request_json(
+        f"/api/history/period/{start_text}?{query}",
+        token=token,
+        ha_ip=ha_ip,
+        ha_port=ha_port,
+        timeout=timeout,
+    )
+    if not result["ok"]:
+        return result
+    rows = result.get("data")
+    if not isinstance(rows, list):
+        return _error("invalid_json", "Home Assistant history response was not a list.", url=result.get("url"))
+    history = rows[0] if rows and isinstance(rows[0], list) else []
+    return _ok({"entity_id": entity_id.strip(), "history": history}, status_code=result.get("status_code"), url=result.get("url"))
+
+
 def validate_entity_exists(entity_id, *, token=None, ha_ip=None, ha_port=None, timeout=DEFAULT_TIMEOUT):
     """Return ok=True if an entity exists in Home Assistant."""
     result = get_entity(entity_id, token=token, ha_ip=ha_ip, ha_port=ha_port, timeout=timeout)
@@ -505,6 +534,9 @@ def _normalize_entity(raw_entity):
         "friendly_name": str(friendly_name),
         "domain": domain,
         "state": raw_entity.get("state"),
+        "last_changed": raw_entity.get("last_changed"),
+        "last_updated": raw_entity.get("last_updated"),
+        "last_reported": raw_entity.get("last_reported"),
         "device_class": attributes.get("device_class"),
         "platform": platform,
         "integration": platform,
