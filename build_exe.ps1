@@ -15,7 +15,12 @@ python -m py_compile `
   .\viper_diagnostics.py `
   .\viper_ha_listener.py `
   .\viper_ring_discovery.py `
-  .\viper_ha_package.py
+  .\viper_ha_package.py `
+  .\viper_runtime.py `
+  .\viper_ui_diagnostics.py `
+  .\viper_ui_fridge.py `
+  .\viper_ui_setup_wizard.py `
+  .\viper_ui_vacuum.py
 
 Write-Host "Building ViperVision.exe..."
 python -m PyInstaller .\ViperVision.spec --clean --noconfirm
