@@ -5,208 +5,47 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Viper Vision Remote</title>
     <style>
-        /* ── Skip link ─────────────────────────────────────────────────── */
-        .skip-link {
-            position: absolute;
-            left: -9999px;
-            top: auto;
-            width: 1px;
-            height: 1px;
-            overflow: hidden;
-        }
-        .skip-link:focus {
-            position: static;
-            width: auto;
-            height: auto;
-            display: block;
-            padding: 10px 16px;
-            background: #000;
-            color: #fff;
-            font-size: 1rem;
-            font-weight: bold;
-            text-decoration: none;
-            border-radius: 4px;
-            margin-bottom: 10px;
-        }
-
-        /* ── Screen-reader-only utility ────────────────────────────────── */
-        .sr-only {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            padding: 0;
-            margin: -1px;
-            overflow: hidden;
-            clip: rect(0,0,0,0);
-            white-space: nowrap;
-            border: 0;
-        }
-
-        /* ── Base layout ───────────────────────────────────────────────── */
-        body { font-family: sans-serif; line-height: 1.6; padding: 20px; max-width: 900px; margin: auto; background: #f4f4f4; }
-        section { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd; }
-        h1, h2, h3 { color: #333; margin-top: 0; }
-        nav { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 20px; }
-        nav ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px; margin: 0; }
-        nav li { border-bottom: 0; padding: 0; display: block; }
-        nav a { display: block; padding: 8px; color: #0056b3; font-weight: bold; }
-        nav a:focus { outline: 3px solid #0056b3; outline-offset: 2px; }
-
-        /* ── Flash message ─────────────────────────────────────────────── */
-        .flash-msg {
-            background: #d4edda;
-            color: #155724;
-            padding: 15px;
-            border: 1px solid #c3e6cb;
-            border-radius: 5px;
-            margin-bottom: 20px;
-            font-weight: bold;
-            outline: none;
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 10px;
-        }
-        .flash-msg .flash-text { flex: 1; }
-        .flash-dismiss {
-            background: none;
-            border: 1px solid #155724;
-            color: #155724;
-            border-radius: 4px;
-            padding: 2px 10px;
-            cursor: pointer;
-            font-size: 0.9rem;
-            flex-shrink: 0;
-            width: auto;
-            margin-top: 0;
-        }
-        .flash-dismiss:focus { outline: 3px solid #155724; }
-
-        /* ── Buttons ───────────────────────────────────────────────────── */
-        button {
-            padding: 12px;
-            font-size: 1rem;
-            cursor: pointer;
-            border-radius: 5px;
-            border: none;
-            background: #007bff;
-            color: white;
-            width: 100%;
-            margin-top: 10px;
-        }
-        button:focus { outline: 3px solid #0056b3; outline-offset: 2px; }
-        .secondary { background: #6c757d; }
-        .secondary:focus { outline-color: #495057; }
-        .danger { background: #dc3545; }
-        .danger:focus { outline-color: #a71d2a; }
-
-        /* ── Form controls ─────────────────────────────────────────────── */
-        select, textarea, input[type="text"], input[type="number"] {
-            width: 100%;
-            padding: 10px;
-            margin-top: 10px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            font-size: 1rem;
-            box-sizing: border-box;
-        }
-        select:focus, textarea:focus, input[type="text"]:focus, input[type="number"]:focus {
-            outline: 3px solid #007bff;
-            outline-offset: 1px;
-        }
-        textarea { height: 100px; }
-
-        /* fieldset/legend reset — we use these for grouping but don't want
-           the default browser bevel border on every group */
-        fieldset {
-            border: none;
-            margin: 0;
-            padding: 0;
-        }
-        legend {
-            font-weight: bold;
-            font-size: 1rem;
-            padding: 0;
-            margin-bottom: 4px;
-        }
-
-        /* ── Speaker list ──────────────────────────────────────────────── */
-        ul { list-style: none; padding: 0; }
-        li { padding: 12px; border-bottom: 1px solid #eee; display: flex; flex-direction: column; gap: 10px; }
-        .spk-info { font-size: 1.1rem; }
-        .row { display: flex; gap: 5px; }
-
-        /* ── Checkbox toggle ───────────────────────────────────────────── */
-        .checkbox-label { display: flex; align-items: center; cursor: pointer; font-weight: bold; }
-        .checkbox-label input { margin-right: 10px; transform: scale(1.5); }
-        /* Submit button that looks like a checkbox label action — hidden
-           visually but reachable by keyboard so the form can be submitted
-           without JavaScript when onChange is not used */
-        .checkbox-submit {
-            display: inline-block;
-            background: none;
-            border: none;
-            color: #007bff;
-            font-size: 0.85rem;
-            padding: 0;
-            margin-top: 2px;
-            cursor: pointer;
-            width: auto;
-            text-decoration: underline;
-        }
-        .checkbox-submit:focus { outline: 3px solid #007bff; }
-
-        /* ── Inline rename form ────────────────────────────────────────── */
-        .rename-form {
-            display: none;
-            margin-top: 8px;
-            padding: 10px;
-            background: #f0f4ff;
-            border: 1px solid #b8c9f5;
-            border-radius: 6px;
-        }
-        .rename-form.open { display: block; }
-        .rename-form label { font-size: 0.9rem; font-weight: bold; display: block; margin-bottom: 4px; }
-        .rename-form input { margin-top: 0; }
-        .rename-row { display: flex; gap: 6px; margin-top: 8px; }
-        .rename-row button { margin-top: 0; }
-
-        /* ── Studio (Cinderella) ───────────────────────────────────────── */
-        .studio-grid { display: grid; gap: 15px; }
-        .studio-card { border: 1px solid #e2e2e2; border-radius: 8px; padding: 12px; background: #fafafa; }
-        .studio-card h3 { margin-bottom: 6px; }
-        .studio-help { color: #555; font-size: 0.95rem; }
-
-        /* ── Channel cards ─────────────────────────────────────────────── */
-        .field-hint { color: #555; font-size: 0.85rem; margin: 3px 0 8px; }
-        .channel-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 4px; align-items: end; }
-        .channel-row label { font-weight: bold; display: block; margin-bottom: 4px; }
-        .channel-card { border: 1px solid #e2e2e2; border-radius: 6px; padding: 12px; margin-bottom: 12px; background: #fafafa; }
-        .channel-card strong { display: block; margin-bottom: 8px; font-size: 1rem; }
-        .button-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
-        .button-grid form button { margin-top: 0; }
-        .status-list { list-style: disc; padding-left: 1.4rem; }
-        .status-list li { display: list-item; border-bottom: 0; padding: 2px 0; }
-        .room-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; margin-top: 10px; }
-        .room-option { border: 1px solid #ddd; border-radius: 6px; padding: 8px; background: #fafafa; }
-        .room-option input { margin-right: 8px; transform: scale(1.2); }
-
-        /* ── Live status region ────────────────────────────────────────── */
+        .skip-link { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+        .skip-link:focus { position: static; display: block; width: auto; height: auto; padding: 10px 14px; background: #111; color: #fff; font-weight: 700; }
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+        body { font-family: Arial, sans-serif; line-height: 1.45; max-width: 880px; margin: 0 auto; padding: 16px; background: #f5f6f7; color: #222; }
+        h1, h2, h3 { margin: 0 0 8px; line-height: 1.2; }
+        h1 { font-size: 1.7rem; }
+        h2 { font-size: 1.25rem; }
+        h3 { font-size: 1.05rem; margin-top: 14px; }
+        nav, section { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 14px; margin: 0 0 14px; }
+        nav ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 6px; list-style: none; margin: 0; padding: 0; }
+        nav a { display: block; padding: 8px; color: #075da8; font-weight: 700; }
+        button { width: 100%; min-height: 44px; padding: 10px 12px; margin-top: 8px; border: 0; border-radius: 5px; background: #1267b1; color: #fff; font-size: 1rem; cursor: pointer; }
+        button:focus, a:focus, input:focus, select:focus, textarea:focus { outline: 3px solid #075da8; outline-offset: 2px; }
+        .secondary { background: #66727c; }
+        .danger { background: #b3261e; }
+        .row, .button-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+        .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+        .status-card, .mini-card { border: 1px solid #e1e4e8; border-radius: 6px; padding: 10px; background: #fafafa; }
+        .status-card strong { display: block; font-size: 0.9rem; color: #555; }
+        .status-card span { display: block; font-size: 1.1rem; font-weight: 700; }
+        .field-hint { margin: 3px 0 8px; color: #555; font-size: 0.9rem; }
+        .flash-msg { display: flex; gap: 10px; justify-content: space-between; align-items: flex-start; background: #dff3df; border: 1px solid #aed8ae; color: #153f15; border-radius: 5px; padding: 12px; margin-bottom: 14px; font-weight: 700; }
+        .flash-dismiss { width: auto; min-height: 0; margin: 0; padding: 4px 10px; background: transparent; color: #153f15; border: 1px solid #153f15; }
+        input[type="text"], input[type="number"], select, textarea { box-sizing: border-box; width: 100%; padding: 10px; border: 1px solid #bbb; border-radius: 4px; font-size: 1rem; }
+        textarea { min-height: 90px; }
+        ul.status-list { list-style: disc; padding-left: 22px; margin: 8px 0; }
+        ul.status-list li { margin: 3px 0; }
+        .room-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin-top: 8px; }
+        .room-option { display: block; border: 1px solid #ddd; border-radius: 6px; padding: 8px; background: #fafafa; }
+        .room-option input { margin-right: 8px; transform: scale(1.15); }
+        pre { white-space: pre-wrap; background: #f8f9fa; border: 1px solid #ddd; border-radius: 6px; padding: 10px; max-height: 280px; overflow: auto; }
         #live-status { position: absolute; left: -9999px; }
     </style>
 </head>
 <body>
-
-    <!-- ── Skip navigation ──────────────────────────────────────────────── -->
     <a class="skip-link" href="#main-content">Skip to main content</a>
 
-    <!-- ── Flash messages ───────────────────────────────────────────────── -->
     {% with messages = get_flashed_messages() %}
       {% if messages %}
         <div id="flash-container" role="alert" aria-live="assertive" tabindex="-1" class="flash-msg">
-            <span class="flash-text">
-                {% for message in messages %}{{ message }}{% endfor %}
-            </span>
+            <span>{% for message in messages %}{{ message }}{% endfor %}</span>
             <button type="button" class="flash-dismiss" onclick="this.parentElement.remove()" aria-label="Dismiss notification">Dismiss</button>
         </div>
         <script>
@@ -216,808 +55,318 @@
       {% endif %}
     {% endwith %}
 
-    <!-- Polite live region — used by JS to announce actions without a reload -->
     <div id="live-status" aria-live="polite" aria-atomic="true"></div>
 
     <header>
         <h1>Viper Vision Remote</h1>
         <nav aria-label="Remote sections">
             <ul>
-                <li><a href="#dashboard-heading">Dashboard</a></li>
-                <li><a href="#setup-status-heading">Setup Status</a></li>
-                <li><a href="#doorbell-heading">Doorbell Vision</a></li>
-                <li><a href="#speakers-heading">Speakers &amp; Audio</a></li>
-                <li><a href="#broadcast-heading">Manual Broadcast</a></li>
-                <li><a href="#fridge-heading">Refrigerator &amp; Ice</a></li>
-                <li><a href="#vacuum-heading">Robot Vacuum</a></li>
-                <li><a href="#cinderella-studio-heading">Robot Messages</a></li>
-                <li><a href="#diagnostics-heading">Diagnostics</a></li>
-                <li><a href="#scan-heading">Advanced Discovery</a></li>
-                <li><a href="#activity-heading">Recent Activity</a></li>
+                <li><a href="#status-heading">Status</a></li>
+                <li><a href="#quick-heading">Quick Actions</a></li>
+                <li><a href="#devices-heading">Devices</a></li>
+                <li><a href="#recovery-heading">Recovery</a></li>
+                <li><a href="#reports-heading">Reports</a></li>
+                <li><a href="#activity-heading">Activity</a></li>
             </ul>
         </nav>
     </header>
 
     <main id="main-content">
-
-        <!-- ── Dashboard ─────────────────────────────────────────────────── -->
-        <section aria-labelledby="dashboard-heading">
-            <h2 id="dashboard-heading">Dashboard</h2>
-            <p>
-                Status:
-                <strong id="arm-status-text">{{ "ARMED" if config.is_armed else "DISARMED" }}</strong>
-            </p>
-            <p>
-                Global mute:
-                <strong id="global-mute-status-text">{{ "ON" if config.get('global_mute', False) else "OFF" }}</strong>
-            </p>
-            <form action="{{ url_for('web_toggle_arm') }}" method="post">
-                <button
-                    type="submit"
-                    class="{{ 'danger' if config.is_armed else '' }}"
-                    aria-describedby="arm-status-text"
-                >
-                    {{ "DISARM SYSTEM" if config.is_armed else "ARM SYSTEM" }}
-                </button>
-            </form>
-            <form action="{{ url_for('web_toggle_global_mute') }}" method="post">
-                <input type="hidden" name="global_mute" value="{{ '0' if config.get('global_mute', False) else '1' }}">
-                <button
-                    type="submit"
-                    class="{{ 'danger' if not config.get('global_mute', False) else 'secondary' }}"
-                    aria-describedby="global-mute-status-text"
-                >
-                    {{ "Turn Off Global Mute" if config.get('global_mute', False) else "Turn On Global Mute" }}
-                </button>
-            </form>
-            <p class="field-hint">
-                Global mute logs activity but suppresses Viper chimes, speech, speaker tests, broadcasts, doorbell audio, and status speech.
-            </p>
+        <section aria-labelledby="status-heading">
+            <h2 id="status-heading">Status</h2>
+            <div class="status-grid">
+                <div class="status-card">
+                    <strong>System</strong>
+                    <span id="arm-status-text">{{ "ARMED" if config.is_armed else "DISARMED" }}</span>
+                </div>
+                <div class="status-card">
+                    <strong>Global Mute</strong>
+                    <span id="global-mute-status-text">{{ "ON" if config.get('global_mute', False) else "OFF" }}</span>
+                </div>
+                <div class="status-card">
+                    <strong>Ice Maker</strong>
+                    <span>{{ ice_maker.get('summary', 'status unknown') }}</span>
+                </div>
+                <div class="status-card">
+                    <strong>Ice Counter</strong>
+                    <span>{{ ice_maker.get('counter_text', 'not checked') }}</span>
+                </div>
+            </div>
+            <h3>Health</h3>
+            <pre>{{ diagnostics_summary }}</pre>
         </section>
 
-        <section aria-labelledby="setup-status-heading">
-            <h2 id="setup-status-heading">Setup Status</h2>
-            <p class="field-hint">
-                This is the same PASS/FIX setup summary used by the desktop setup screen. The remote page can refresh status, run the safe smoke test, restore skipped optional items, and create a support bundle.
-            </p>
-            <h3>Next Action</h3>
-            <pre style="white-space: pre-wrap; background:#f8f9fa; border:1px solid #ddd; border-radius:6px; padding:12px;">{{ setup_status_summary }}</pre>
-            <h3>Full Setup Checklist</h3>
-            <pre style="white-space: pre-wrap; background:#f8f9fa; border:1px solid #ddd; border-radius:6px; padding:12px; max-height: 360px; overflow:auto;">{{ setup_checklist_summary }}</pre>
-            {% if setup_smoke_report %}
-            <h3>Latest Safe Smoke Test</h3>
-            <pre style="white-space: pre-wrap; background:#f8f9fa; border:1px solid #ddd; border-radius:6px; padding:12px;">{{ setup_smoke_report }}</pre>
-            {% endif %}
-            <div class="button-grid" role="group" aria-label="Setup status actions">
+        <section aria-labelledby="quick-heading">
+            <h2 id="quick-heading">Quick Actions</h2>
+            <div class="button-grid">
+                <form action="{{ url_for('web_toggle_arm') }}" method="post">
+                    <button type="submit" class="{{ 'danger' if config.is_armed else '' }}" aria-describedby="arm-status-text">
+                        {{ "Disarm System" if config.is_armed else "Arm System" }}
+                    </button>
+                </form>
+                <form action="{{ url_for('web_toggle_global_mute') }}" method="post">
+                    <input type="hidden" name="global_mute" value="{{ '0' if config.get('global_mute', False) else '1' }}">
+                    <button type="submit" class="{{ 'secondary' if config.get('global_mute', False) else 'danger' }}" aria-describedby="global-mute-status-text">
+                        {{ "Turn Off Global Mute" if config.get('global_mute', False) else "Turn On Global Mute" }}
+                    </button>
+                </form>
+                <form action="{{ url_for('web_ice_maker_toggle') }}" method="post">
+                    <button type="submit">{{ ice_maker.get('button_label', 'Turn Ice Maker On') }}</button>
+                </form>
                 <form action="{{ url_for('remote_ui') }}" method="get">
-                    <button type="submit" class="secondary">Refresh Setup Status</button>
+                    <button type="submit" class="secondary">Refresh Remote</button>
+                </form>
+            </div>
+        </section>
+
+        <section aria-labelledby="broadcast-heading">
+            <h2 id="broadcast-heading">Manual Broadcast</h2>
+            <form action="{{ url_for('web_broadcast') }}" method="post">
+                <input type="hidden" name="channel" value="manual">
+                <label for="broadcast_text">Message to speak on all speakers</label>
+                <textarea id="broadcast_text" name="broadcast_text" placeholder="Type your message here"></textarea>
+                <button type="submit">Broadcast Now</button>
+            </form>
+        </section>
+
+        <section aria-labelledby="devices-heading">
+            <h2 id="devices-heading">Devices</h2>
+
+            <div class="mini-card">
+                <h3 id="doorbell-heading">Doorbells</h3>
+                {% set doorbell_cfg = config.get('doorbell_triggers', {}) %}
+                {% set front_door = doorbell_cfg.get('front', {}) %}
+                {% set back_door = doorbell_cfg.get('back', {}) %}
+                <ul class="status-list" aria-label="Selected vacuum status">
+                    <li>Front trigger: {{ front_door.get('trigger_entity_id') or config.get('ring_front_binary_sensor') or 'Not configured' }}</li>
+                    <li>Back trigger: {{ back_door.get('trigger_entity_id') or config.get('ring_back_binary_sensor') or 'Not configured' }}</li>
+                </ul>
+                <div class="button-grid">
+                    <form action="{{ url_for('web_test_chime', door='front') }}" method="post">
+                        <button type="submit" class="secondary">Test Front Door Chime</button>
+                    </form>
+                    <form action="{{ url_for('web_test_chime', door='back') }}" method="post">
+                        <button type="submit" class="secondary">Test Back Door Chime</button>
+                    </form>
+                </div>
+                <h3>Doorbell video analysis</h3>
+                <p class="field-hint">
+                    {% if doorbell_video_settings.mode == 'smart' %}
+                    Smart mode: fast still image first, then video only when Viper needs a follow-up.
+                    {% elif doorbell_video_settings.mode == 'fast' %}
+                    Fast mode: still image only.
+                    {% elif doorbell_video_settings.mode == 'detailed' %}
+                    Detailed mode: video follow-up after every alert.
+                    {% else %}
+                    Manual mode: video only when you press an analyze button.
+                    {% endif %}
+                </p>
+                <div class="button-grid">
+                    <form action="{{ url_for('web_analyze_doorbell_video', side='front') }}" method="post">
+                        <input type="hidden" name="manual_clip_seconds" value="{{ doorbell_video_settings.manual_clip_seconds }}">
+                        <button type="submit">Analyze Front Camera Video Now</button>
+                    </form>
+                    <form action="{{ url_for('web_analyze_doorbell_video', side='back') }}" method="post">
+                        <input type="hidden" name="manual_clip_seconds" value="{{ doorbell_video_settings.manual_clip_seconds }}">
+                        <button type="submit">Analyze Back Camera Video Now</button>
+                    </form>
+                </div>
+                {% if last_video_analysis %}
+                <ul class="status-list" aria-label="Latest doorbell video analysis results">
+                    {% for side, result in last_video_analysis.items() %}
+                    <li>{{ side|title }} camera: {{ result.description }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+
+            <div class="mini-card">
+                <h3 id="fridge-heading">Refrigerator</h3>
+                <p class="field-hint">Daily controls and tests only. Chime routing and mode setup live in the desktop app.</p>
+                <div class="button-grid">
+                    <form action="{{ url_for('web_test_fridge_chime', channel='fridge_open') }}" method="post">
+                        <button type="submit">Test Fridge Chime</button>
+                    </form>
+                    <form action="{{ url_for('web_test_fridge_chime', channel='freezer_open') }}" method="post">
+                        <button type="submit">Test Freezer Chime</button>
+                    </form>
+                    <form action="{{ url_for('web_filter_check') }}" method="post">
+                        <button type="submit" class="secondary">Check Refrigerator Filter</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="mini-card">
+                <h3 id="vacuum-heading">Vacuum Controls</h3>
+                {% if vacuum.ok %}
+                <form action="{{ url_for('remote_ui') }}" method="get">
+                    <label for="vacuum_entity_picker">Selected vacuum</label>
+                    <select id="vacuum_entity_picker" name="vacuum_entity">
+                        {% for vac in vacuum.vacuums %}
+                        <option value="{{ vac.entity_id }}" {{ 'selected' if vac.entity_id == vacuum.selected else '' }}>
+                            {{ vac.label }}, state {{ vac.state }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="secondary">Load selected vacuum</button>
+                </form>
+
+                <ul class="status-list">
+                    {% for line in vacuum.status_lines %}
+                    <li>{{ line }}</li>
+                    {% endfor %}
+                </ul>
+
+                <form action="{{ url_for('web_vacuum_cleaning_mode') }}" method="post">
+                    <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                    <label for="vacuum_cleaning_mode">Cleaning job mode</label>
+                    <select id="vacuum_cleaning_mode" name="cleaning_mode">
+                        {% for mode in vacuum.cleaning_modes %}
+                        <option value="{{ mode.value }}" {{ 'selected' if mode.value == vacuum.cleaning_mode else '' }}>{{ mode.label }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="secondary">Save cleaning mode</button>
+                </form>
+
+                <div class="button-grid" role="group" aria-label="Useful vacuum actions for current state {{ vacuum.state }}">
+                    {% for action in vacuum.actions %}
+                    <form action="{{ url_for('web_vacuum_action') }}" method="post">
+                        <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                        <input type="hidden" name="service" value="{{ action.service }}">
+                        <input type="hidden" name="cleaning_mode" value="{{ vacuum.cleaning_mode }}">
+                        <button type="submit" class="{{ action.style }}">{{ action.label }}</button>
+                    </form>
+                    {% endfor %}
+                </div>
+
+                {% if vacuum.fan_speeds %}
+                <form action="{{ url_for('web_vacuum_fan_speed') }}" method="post">
+                    <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                    <label for="vacuum_fan_speed">Vacuum suction speed</label>
+                    <select id="vacuum_fan_speed" name="fan_speed">
+                        {% for speed in vacuum.fan_speeds %}
+                        <option value="{{ speed }}" {{ 'selected' if speed == vacuum.current_fan_speed else '' }}>{{ speed }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit">Set suction speed</button>
+                </form>
+                {% endif %}
+
+                {% if vacuum.settings %}
+                <h3>Roborock Settings</h3>
+                {% for setting in vacuum.settings %}
+                <form action="{{ url_for('web_vacuum_setting') }}" method="post">
+                    <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                    <input type="hidden" name="entity_id" value="{{ setting.entity_id }}">
+                    <input type="hidden" name="domain" value="{{ setting.domain }}">
+                    {% if setting.domain == 'select' %}
+                    <label for="vac-setting-{{ loop.index }}">{{ setting.label }}</label>
+                    <select id="vac-setting-{{ loop.index }}" name="option">
+                        {% for option in setting.options %}
+                        <option value="{{ option }}" {{ 'selected' if option == setting.state else '' }}>{{ option }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit">Apply {{ setting.label }}</button>
+                    {% elif setting.domain == 'number' %}
+                    <label for="vac-setting-{{ loop.index }}">{{ setting.label }}</label>
+                    <input type="number" id="vac-setting-{{ loop.index }}" name="value" value="{{ setting.state }}" min="{{ setting.min }}" max="{{ setting.max }}" step="{{ setting.step }}">
+                    <button type="submit">Set {{ setting.label }}</button>
+                    {% elif setting.domain == 'switch' %}
+                    <input type="hidden" name="turn_on" value="{{ setting.turn_on }}">
+                    <button type="submit">{{ setting.button_label }} {{ setting.label }}</button>
+                    {% endif %}
+                </form>
+                {% endfor %}
+                {% endif %}
+
+                <h3>Room Cleaning</h3>
+                <form action="{{ url_for('web_vacuum_room_repeat') }}" method="post">
+                    <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                    <label for="vacuum_room_repeat_setting">Room cleaning repeat count</label>
+                    <input type="number" id="vacuum_room_repeat_setting" name="repeat" min="1" max="3" step="1" value="{{ vacuum.room_repeat_count }}">
+                    <button type="submit" class="secondary">Apply room repeat count</button>
+                </form>
+                <form action="{{ url_for('web_vacuum_rooms') }}" method="post">
+                    <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                    <button type="submit" class="secondary">Refresh room list</button>
+                </form>
+                {% if vacuum.rooms %}
+                <form action="{{ url_for('web_vacuum_clean_rooms') }}" method="post">
+                    <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
+                    <input type="hidden" name="cleaning_mode" value="{{ vacuum.cleaning_mode }}">
+                    <input type="hidden" name="repeat" value="{{ vacuum.room_repeat_count }}">
+                    <fieldset>
+                        <legend>Choose rooms to clean</legend>
+                        <div class="room-grid">
+                            {% for room in vacuum.rooms %}
+                            <label class="room-option" for="room-{{ loop.index }}">
+                                <input type="checkbox" id="room-{{ loop.index }}" name="segments" value="{{ room.segment }}">
+                                {{ room.name }}, room ID {{ room.segment }}
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </fieldset>
+                    <button type="submit">Clean selected rooms</button>
+                </form>
+                {% endif %}
+                {% else %}
+                <p>{{ vacuum.message }}</p>
+                <form action="{{ url_for('remote_ui') }}" method="get">
+                    <button type="submit" class="secondary">Refresh vacuum controls</button>
+                </form>
+                {% endif %}
+            </div>
+        </section>
+
+        <section aria-labelledby="recovery-heading">
+            <h2 id="recovery-heading">Recovery</h2>
+            <p class="field-hint">Use these when something important stops responding.</p>
+            <div class="button-grid">
+                <form action="{{ url_for('web_reload_fridge_smartthings') }}" method="post">
+                    <button type="submit">Reload Refrigerator SmartThings</button>
+                </form>
+                <form action="{{ url_for('web_diagnostics') }}" method="get">
+                    <input type="hidden" name="check_ha" value="1">
+                    <button type="submit" class="secondary">Check Home Assistant</button>
                 </form>
                 <form action="{{ url_for('web_setup_smoke') }}" method="post">
-                    <button type="submit">Run Safe Setup Smoke Test</button>
+                    <button type="submit" class="secondary">Run Safe Setup Smoke Test</button>
                 </form>
                 <form action="{{ url_for('web_restore_optional_setup') }}" method="post">
                     <button type="submit" class="secondary">Restore Optional Items</button>
+                </form>
+            </div>
+            {% if setup_smoke_report %}
+            <h3>Latest Smoke Test</h3>
+            <pre>{{ setup_smoke_report }}</pre>
+            {% endif %}
+        </section>
+
+        <section aria-labelledby="reports-heading">
+            <h2 id="reports-heading">Reports</h2>
+            <div class="button-grid">
+                <form action="{{ url_for('web_diagnostics') }}" method="get">
+                    <input type="hidden" name="check_ha" value="1">
+                    <button type="submit">Show Diagnostics</button>
+                </form>
+                <form action="{{ url_for('web_ha_snapshot') }}" method="post">
+                    <button type="submit" class="secondary">Save HA Snapshot</button>
                 </form>
                 <form action="{{ url_for('web_support_bundle') }}" method="post">
                     <button type="submit" class="secondary">Create Support Bundle</button>
                 </form>
             </div>
+            <details>
+                <summary>Setup Status</summary>
+                <pre>{{ setup_status_summary }}</pre>
+                <pre>{{ setup_checklist_summary }}</pre>
+            </details>
         </section>
 
-        <!-- ── Doorbell Vision ───────────────────────────────────────────── -->
-        <section aria-labelledby="doorbell-heading">
-            <h2 id="doorbell-heading">Doorbell Vision</h2>
-            <p class="field-hint">
-                Review the front and back doorbell setup Viper is using, then test or save the instant chime sounds.
-                Full Home Assistant and Ring-MQTT setup is handled in the desktop wizard.
-            </p>
-
-            {% set doorbell_cfg = config.get('doorbell_triggers', {}) %}
-            {% set front_door = doorbell_cfg.get('front', {}) %}
-            {% set back_door = doorbell_cfg.get('back', {}) %}
-            <ul class="status-list" aria-label="Doorbell Vision status">
-                <li>Front door enabled: {{ 'Yes' if front_door.get('enabled', True) else 'No' }}</li>
-                <li>Front trigger entity: {{ front_door.get('trigger_entity_id') or config.get('ring_front_binary_sensor') or 'Not configured' }}</li>
-                <li>Front live RTSP URL: {{ front_door.get('rtsp_url') or config.get('rtsp_front') or 'Not configured' }}</li>
-                <li>Back door enabled: {{ 'Yes' if back_door.get('enabled', True) else 'No' }}</li>
-                <li>Back trigger entity: {{ back_door.get('trigger_entity_id') or config.get('ring_back_binary_sensor') or 'Not configured' }}</li>
-                <li>Back live RTSP URL: {{ back_door.get('rtsp_url') or config.get('rtsp_back') or 'Not configured' }}</li>
-            </ul>
-
-            <form action="{{ url_for('web_save_chimes') }}" method="post">
-                <fieldset>
-                    <legend>Doorbell chimes</legend>
-                    <div class="channel-row">
-                        <div>
-                            <label for="front_chime">Front door chime</label>
-                            <select id="front_chime" name="front_chime">
-                                {% for chime in chimes %}
-                                <option value="{{ chime }}" {{ 'selected' if ((not config.get('front_chime') and chime == '(Default)') or config.get('front_chime') == chime) else '' }}>{{ chime }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div>
-                            <label for="back_chime">Back door chime</label>
-                            <select id="back_chime" name="back_chime">
-                                {% for chime in chimes %}
-                                <option value="{{ chime }}" {{ 'selected' if ((not config.get('back_chime') and chime == '(Default)') or config.get('back_chime') == chime) else '' }}>{{ chime }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                    </div>
-                    <div class="button-grid">
-                        <button type="submit"
-                                class="secondary"
-                                formaction="{{ url_for('web_test_chime', door='front') }}"
-                                formmethod="post">
-                            Test Front Door Chime
-                        </button>
-                        <button type="submit"
-                                class="secondary"
-                                formaction="{{ url_for('web_test_chime', door='back') }}"
-                                formmethod="post">
-                            Test Back Door Chime
-                        </button>
-                        <button type="submit">Save Doorbell Chimes</button>
-                    </div>
-                </fieldset>
-            </form>
-
-            <form action="{{ url_for('web_save_doorbell_video_settings') }}" method="post">
-                <fieldset>
-                    <legend>Doorbell video analysis</legend>
-                    <p class="field-hint">
-                        Fast is still image only. Smart speaks the fast still image first and only sends a short video when the first answer is unclear.
-                        Detailed sends video after every doorbell alert. Manual sends video only when you press one of the analyze buttons below.
-                    </p>
-                    <label for="video_mode">Video analysis mode</label>
-                    <select id="video_mode" name="video_mode">
-                        {% for value, label in doorbell_video_modes.items() %}
-                        <option value="{{ value }}" {{ 'selected' if value == doorbell_video_settings.mode else '' }}>{{ label }}</option>
-                        {% endfor %}
-                    </select>
-
-                    <label for="manual_clip_seconds">Manual video length in seconds</label>
-                    <input
-                        id="manual_clip_seconds"
-                        name="manual_clip_seconds"
-                        type="number"
-                        min="2"
-                        max="{{ doorbell_video_settings.max_manual_clip_seconds }}"
-                        value="{{ doorbell_video_settings.manual_clip_seconds }}"
-                        aria-describedby="manual-video-hint"
-                    >
-                    <p id="manual-video-hint" class="field-hint">
-                        This only controls on-demand manual analysis. Smart mode stays strict: 3 seconds, 2 frames per second, and one follow-up per camera per minute.
-                    </p>
-                    <button type="submit">Save Doorbell Video Mode</button>
-                </fieldset>
-            </form>
-
-            <div class="button-grid" role="group" aria-label="Manual doorbell video analysis">
-                <form action="{{ url_for('web_analyze_doorbell_video', side='front') }}" method="post">
-                    <input type="hidden" name="manual_clip_seconds" value="{{ doorbell_video_settings.manual_clip_seconds }}">
-                    <button type="submit" class="secondary">Analyze Front Camera Video Now</button>
-                </form>
-                <form action="{{ url_for('web_analyze_doorbell_video', side='back') }}" method="post">
-                    <input type="hidden" name="manual_clip_seconds" value="{{ doorbell_video_settings.manual_clip_seconds }}">
-                    <button type="submit" class="secondary">Analyze Back Camera Video Now</button>
-                </form>
-            </div>
-
-            {% if last_video_analysis %}
-            <h3>Latest Video Analysis</h3>
-            <ul class="status-list" aria-label="Latest doorbell video analysis results">
-                {% for side, result in last_video_analysis.items() %}
-                <li>{{ side|title }} camera: {{ result.description }} Source {{ result.source }}. Elapsed {{ '%.1f'|format(result.elapsed) }} seconds.</li>
-                {% endfor %}
-            </ul>
-            {% endif %}
-        </section>
-
-        <!-- ── Vacuum Controls ───────────────────────────────────────────── -->
-        <section aria-labelledby="vacuum-heading">
-            <h2 id="vacuum-heading">Robot Vacuum Controls</h2>
-            <p class="field-hint">
-                Controls are sent through Home Assistant. Room cleaning uses Roborock map room IDs after you press Refresh room list.
-            </p>
-
-            {% if vacuum.ok %}
-            <form action="{{ url_for('remote_ui') }}" method="get">
-                <label for="vacuum_entity_picker">Selected vacuum</label>
-                <select id="vacuum_entity_picker" name="vacuum_entity" aria-describedby="vacuum-picker-hint">
-                    {% for vac in vacuum.vacuums %}
-                    <option value="{{ vac.entity_id }}" {{ 'selected' if vac.entity_id == vacuum.selected else '' }}>
-                        {{ vac.label }}, state {{ vac.state }}
-                    </option>
-                    {% endfor %}
-                </select>
-                <p id="vacuum-picker-hint" class="sr-only">Choose a vacuum, then press Load selected vacuum.</p>
-                <button type="submit" class="secondary">Load selected vacuum</button>
-            </form>
-
-            <h3>Vacuum Status</h3>
-            <ul class="status-list" aria-label="Selected vacuum status">
-                {% for line in vacuum.status_lines %}
-                <li>{{ line }}</li>
-                {% endfor %}
-            </ul>
-
-            <h3>Basic Actions</h3>
-            <form action="{{ url_for('web_vacuum_cleaning_mode') }}" method="post">
-                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
-                <label for="vacuum_cleaning_mode">Cleaning job mode</label>
-                <select id="vacuum_cleaning_mode" name="cleaning_mode" aria-describedby="vacuum-cleaning-mode-hint">
-                    {% for mode in vacuum.cleaning_modes %}
-                    <option value="{{ mode.value }}" {{ 'selected' if mode.value == vacuum.cleaning_mode else '' }}>{{ mode.label }}</option>
-                    {% endfor %}
-                </select>
-                <p id="vacuum-cleaning-mode-hint" class="field-hint">Start cleaning and Clean selected rooms use this mode when Home Assistant exposes matching Roborock controls. Otherwise the robot uses its current Roborock app settings.</p>
-                <button type="submit" class="secondary">Save cleaning mode</button>
-            </form>
-
-            <div class="button-grid" role="group" aria-label="Useful vacuum actions for current state {{ vacuum.state }}">
-                {% for action in vacuum.actions %}
-                <form action="{{ url_for('web_vacuum_action') }}" method="post">
-                    <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
-                    <input type="hidden" name="service" value="{{ action.service }}">
-                    <input type="hidden" name="cleaning_mode" value="{{ vacuum.cleaning_mode }}">
-                    <button type="submit" class="{{ action.style }}">{{ action.label }}</button>
-                </form>
-                {% endfor %}
-            </div>
-
-            {% if vacuum.fan_speeds %}
-            <h3>Suction Speed</h3>
-            <form action="{{ url_for('web_vacuum_fan_speed') }}" method="post">
-                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
-                <label for="vacuum_fan_speed">Vacuum suction speed</label>
-                <select id="vacuum_fan_speed" name="fan_speed">
-                    {% for speed in vacuum.fan_speeds %}
-                    <option value="{{ speed }}" {{ 'selected' if speed == vacuum.current_fan_speed else '' }}>{{ speed }}</option>
-                    {% endfor %}
-                </select>
-                <button type="submit">Set suction speed</button>
-            </form>
-            {% endif %}
-
-            <h3>Roborock Settings</h3>
-            {% if vacuum.settings %}
-                {% for setting in vacuum.settings %}
-                <div class="channel-card">
-                    <strong>{{ setting.label }}</strong>
-                    <p class="field-hint">Current value: {{ setting.state }}</p>
-                    <form action="{{ url_for('web_vacuum_setting') }}" method="post">
-                        <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
-                        <input type="hidden" name="entity_id" value="{{ setting.entity_id }}">
-                        <input type="hidden" name="domain" value="{{ setting.domain }}">
-
-                        {% if setting.domain == 'select' %}
-                        <label for="vac-setting-{{ loop.index }}">Choose {{ setting.label }}</label>
-                        <select id="vac-setting-{{ loop.index }}" name="option">
-                            {% for option in setting.options %}
-                            <option value="{{ option }}" {{ 'selected' if option == setting.state else '' }}>{{ option }}</option>
-                            {% endfor %}
-                        </select>
-                        <button type="submit">Apply {{ setting.label }}</button>
-                        {% elif setting.domain == 'number' %}
-                        <label for="vac-setting-{{ loop.index }}">Value for {{ setting.label }}</label>
-                        <input
-                            type="number"
-                            id="vac-setting-{{ loop.index }}"
-                            name="value"
-                            value="{{ setting.state }}"
-                            min="{{ setting.min }}"
-                            max="{{ setting.max }}"
-                            step="{{ setting.step }}"
-                        >
-                        <button type="submit">Set {{ setting.label }}</button>
-                        {% elif setting.domain == 'switch' %}
-                        <input type="hidden" name="turn_on" value="{{ setting.turn_on }}">
-                        <button type="submit">{{ setting.button_label }} {{ setting.label }}</button>
-                        {% endif %}
-                    </form>
-                </div>
-                {% endfor %}
-            {% else %}
-                <p>No extra Roborock settings were found for this vacuum.</p>
-            {% endif %}
-
-            <h3>Room Cleaning</h3>
-            <form action="{{ url_for('web_vacuum_rooms') }}" method="post">
-                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
-                <button type="submit" class="secondary">Refresh room list</button>
-            </form>
-
-            {% if vacuum.rooms %}
-            <form action="{{ url_for('web_vacuum_clean_rooms') }}" method="post">
-                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
-                <input type="hidden" name="cleaning_mode" value="{{ vacuum.cleaning_mode }}">
-                <fieldset>
-                    <legend>Choose rooms to clean</legend>
-                    <div class="room-grid">
-                        {% for room in vacuum.rooms %}
-                        <label class="room-option" for="room-{{ loop.index }}">
-                            <input
-                                type="checkbox"
-                                id="room-{{ loop.index }}"
-                                name="segments"
-                                value="{{ room.segment }}"
-                            >
-                            {{ room.name }}{% if room.map and room.map != 'Current map' %}, {{ room.map }}{% endif %}, room ID {{ room.segment }}
-                        </label>
-                        {% endfor %}
-                    </div>
-                </fieldset>
-                <label for="vacuum_room_repeat">Repeat count, 1 to 3</label>
-                <input type="number" id="vacuum_room_repeat" name="repeat" min="1" max="3" step="1" value="1">
-                <button type="submit">Clean selected rooms</button>
-            </form>
-            {% else %}
-            <p class="field-hint">No room list is loaded yet. Press Refresh room list first.</p>
-            {% endif %}
-
-            <h3>Advanced Vacuum Commands</h3>
-            <form action="{{ url_for('web_vacuum_advanced') }}" method="post">
-                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
-                <label for="vacuum_command_name">Command name</label>
-                <input type="text" id="vacuum_command_name" name="command" placeholder="Example: app_segment_clean" autocomplete="off">
-                <label for="vacuum_command_params">Parameters JSON, optional</label>
-                <textarea id="vacuum_command_params" name="params" placeholder='Example: [{"segments":[7],"repeat":1}]'></textarea>
-                <button type="submit">Send advanced vacuum command</button>
-            </form>
-
-            <form action="{{ url_for('web_vacuum_goto') }}" method="post" style="margin-top: 15px;">
-                <input type="hidden" name="vacuum_entity" value="{{ vacuum.selected }}">
-                <fieldset>
-                    <legend>Send vacuum to map coordinates</legend>
-                    <div class="channel-row">
-                        <div>
-                            <label for="vacuum_goto_x">X coordinate</label>
-                            <input type="number" id="vacuum_goto_x" name="x" value="25500" step="1">
-                        </div>
-                        <div>
-                            <label for="vacuum_goto_y">Y coordinate</label>
-                            <input type="number" id="vacuum_goto_y" name="y" value="25500" step="1">
-                        </div>
-                    </div>
-                    <button type="submit" class="secondary">Send vacuum to coordinates</button>
-                </fieldset>
-            </form>
-            {% else %}
-            <p>{{ vacuum.message }}</p>
-            <form action="{{ url_for('remote_ui') }}" method="get">
-                <button type="submit" class="secondary">Refresh vacuum controls</button>
-            </form>
-            {% endif %}
-        </section>
-
-        <!-- ── Speakers & Audio ──────────────────────────────────────────── -->
-        <section aria-labelledby="speakers-heading">
-            <h2 id="speakers-heading">Speakers &amp; Audio</h2>
-            <p class="field-hint">Choose which speakers Viper may use and what each speaker is allowed to play.</p>
-
-            {% if config.speakers %}
-            <ul role="list" aria-label="Configured speakers">
-                {% for name, data in config.speakers.items() %}
-                <li>
-                    <!-- Enable/disable toggle — explicit submit button instead of
-                         onchange so keyboard users have control over when it fires -->
-                    <div class="spk-info">
-                        <form action="{{ url_for('web_speaker_toggle', name=name) }}" method="post">
-                            <fieldset>
-                                <legend class="sr-only">{{ name }} speaker controls</legend>
-                                <label class="checkbox-label">
-                                    <input
-                                        type="checkbox"
-                                        name="_confirm"
-                                        id="chk-{{ loop.index }}"
-                                        {{ 'checked' if data.enabled else '' }}
-                                        aria-label="{{ name }} ({{ data.type.upper() }}) — currently {{ 'enabled' if data.enabled else 'disabled' }}"
-                                        onchange="this.form.submit()"
-                                    >
-                                    {{ name }} <small>({{ data.type.upper() }})</small>
-                                </label>
-                                <!-- Visible fallback submit for users who prefer not
-                                     to rely on the onchange JavaScript -->
-                                <noscript>
-                                    <button type="submit" class="checkbox-submit">
-                                        {{ "Disable" if data.enabled else "Enable" }} {{ name }}
-                                    </button>
-                                </noscript>
-                            </fieldset>
-                        </form>
-                    </div>
-
-
-                    <div class="rename-form open" role="group" aria-label="Speaker routing for {{ name }}">
-                        <form action="{{ url_for('web_speaker_settings', name=name) }}" method="post">
-                            <fieldset>
-                                <legend>Speaker routing</legend>
-                                <label class="checkbox-label"><input type="checkbox" name="doorbell" {{ 'checked' if data.get('doorbell', True) else '' }}> Doorbell alerts</label>
-                                <label class="checkbox-label"><input type="checkbox" name="utilities" {{ 'checked' if data.get('utilities', True) else '' }}> Utilities spoken</label>
-                                <label class="checkbox-label"><input type="checkbox" name="fridge" {{ 'checked' if data.get('fridge', True) else '' }}> Fridge / Freezer</label>
-                                <label class="checkbox-label"><input type="checkbox" name="quiet_hours_exempt" {{ 'checked' if data.get('quiet_hours_exempt', False) else '' }}> Ignore quiet hours</label>
-                                <button type="submit" class="secondary">Save Routing</button>
-                            </fieldset>
-                        </form>
-                    </div>
-
-                    <!-- Action buttons — each carries the speaker name in aria-label -->
-                    <div class="row">
-                        <form action="{{ url_for('web_speaker_test', name=name) }}" method="post" style="flex: 1;">
-                            <button
-                                type="submit"
-                                class="secondary"
-                                style="padding: 8px;"
-                                aria-label="Test {{ name }}"
-                            >Test</button>
-                        </form>
-
-                        <!-- Rename — inline form replaces prompt() -->
-                        <button
-                            type="button"
-                            class="secondary"
-                            style="flex: 1; padding: 8px; margin-top: 0;"
-                            aria-expanded="false"
-                            aria-controls="rename-{{ loop.index }}"
-                            aria-label="Rename {{ name }}"
-                            onclick="toggleRename(this, 'rename-{{ loop.index }}')"
-                        >Rename</button>
-
-                        <form
-                            action="{{ url_for('web_speaker_delete', name=name) }}"
-                            method="post"
-                            style="flex: 1;"
-                            onsubmit="return confirmDelete(event, '{{ name }}')"
-                        >
-                            <button
-                                type="submit"
-                                class="danger"
-                                style="padding: 8px;"
-                                aria-label="Delete {{ name }}"
-                            >
-                                <span aria-hidden="true">Del</span>
-                                <span class="sr-only">Delete {{ name }}</span>
-                            </button>
-                        </form>
-                    </div>
-
-                    <!-- Inline rename form (hidden until Rename is pressed) -->
-                    <div id="rename-{{ loop.index }}" class="rename-form" role="group" aria-label="Rename {{ name }}">
-                        <form action="{{ url_for('web_speaker_rename') }}" method="post">
-                            <input type="hidden" name="old_name" value="{{ name }}">
-                            <label for="rename-input-{{ loop.index }}">New name for {{ name }}:</label>
-                            <input
-                                type="text"
-                                id="rename-input-{{ loop.index }}"
-                                name="new_name"
-                                value="{{ name }}"
-                                required
-                                autocomplete="off"
-                            >
-                            <div class="rename-row">
-                                <button type="submit" style="flex:1;">Save name</button>
-                                <button
-                                    type="button"
-                                    class="secondary"
-                                    style="flex:1;"
-                                    aria-label="Cancel rename {{ name }}"
-                                    onclick="toggleRename(document.querySelector('[aria-controls=\'rename-{{ loop.index }}\']'), 'rename-{{ loop.index }}')"
-                                >Cancel</button>
-                            </div>
-                        </form>
-                    </div>
-                </li>
-                {% endfor %}
-            </ul>
-            {% else %}
-            <p>No speakers configured yet. Add one below.</p>
-            {% endif %}
-
-            <!-- Add new speaker -->
-            <button
-                type="button"
-                aria-expanded="false"
-                aria-controls="add-spk-form"
-                onclick="toggleAddSpeaker(this)"
-            >+ Add New Speaker</button>
-
-            <div id="add-spk-form" style="display:none; margin-top: 20px; border-top: 1px solid #ccc; padding-top: 10px;" role="group">
-                <form action="{{ url_for('web_speaker_add') }}" method="post">
-                    <fieldset>
-                        <legend>New Speaker Details</legend>
-                        <label for="new-spk-name">Friendly name</label>
-                        <input type="text" id="new-spk-name" name="name" placeholder="e.g. Living Room Sonos" required autocomplete="off">
-
-                        <label for="new-spk-type" style="margin-top:10px; display:block;">Speaker type</label>
-                        <select id="new-spk-type" name="type">
-                            <option value="sonos">Sonos</option>
-                            <option value="ha">Home Assistant</option>
-                            <option value="alexa">Alexa</option>
-                        </select>
-
-                        <label for="new-spk-id" style="margin-top:10px; display:block;">IP address or entity ID</label>
-                        <input type="text" id="new-spk-id" name="id" placeholder="e.g. 192.168.4.50 or media_player.living_room" required autocomplete="off">
-
-                        <button type="submit">Save New Speaker</button>
-                    </fieldset>
-                </form>
-            </div>
-        </section>
-
-        <!-- ── Diagnostics Quick Checks ──────────────────────────────────── -->
-        <section aria-labelledby="utils-heading">
-            <h2 id="utils-heading">Diagnostics Quick Checks</h2>
-            <p class="sr-only">Results will be announced through your speakers after pressing a button.</p>
-            <div class="row">
-                <form action="{{ url_for('web_api_check') }}" method="post" style="flex: 1;">
-                    <button type="submit">Check API Cost</button>
-                </form>
-                <form action="{{ url_for('web_batt_check') }}" method="post" style="flex: 1;">
-                    <button type="submit">Check Batteries</button>
-                </form>
-            </div>
-            <div class="row">
-                <form action="{{ url_for('web_filter_check') }}" method="post" style="flex: 1;">
-                    <button type="submit">Check Refrigerator Filter</button>
-                </form>
-            </div>
-
-        </section>
-
-        <section aria-labelledby="diagnostics-heading">
-            <h2 id="diagnostics-heading">Diagnostics</h2>
-            <p class="field-hint">Diagnostics stay local. Support bundles redact tokens, API keys, passwords, and Ring identifiers before writing the zip.</p>
-            <pre style="white-space: pre-wrap; background:#f8f9fa; border:1px solid #ddd; border-radius:6px; padding:12px;">{{ diagnostics_summary }}</pre>
-            <div class="row">
-                <form action="{{ url_for('web_diagnostics') }}" method="get" style="flex: 1;">
-                    <input type="hidden" name="check_ha" value="1">
-                    <button type="submit">Show Diagnostics</button>
-                </form>
-                <form action="{{ url_for('web_support_bundle') }}" method="post" style="flex: 1;">
-                    <button type="submit">Create Support Bundle</button>
-                </form>
-            </div>
-        </section>
-
-        <section aria-labelledby="quiet-heading">
-            <h2 id="quiet-heading">Quiet Hours</h2>
-            <p class="field-hint">Utilities are suppressed during quiet hours. Doorbell alerts still follow each speaker's Doorbell Alerts setting.</p>
-            <form action="{{ url_for('web_save_quiet_hours') }}" method="post">
-                <label class="checkbox-label">
-                    <input type="checkbox" name="quiet_hours_enabled" {{ 'checked' if config.get('quiet_hours_enabled', False) else '' }}>
-                    Enable quiet hours
-                </label>
-                <div class="channel-row">
-                    <div>
-                        <label for="quiet_hours_start">Start (HH:MM)</label>
-                        <input type="text" id="quiet_hours_start" name="quiet_hours_start" value="{{ config.get('quiet_hours_start', '22:00') }}">
-                    </div>
-                    <div>
-                        <label for="quiet_hours_end">End (HH:MM)</label>
-                        <input type="text" id="quiet_hours_end" name="quiet_hours_end" value="{{ config.get('quiet_hours_end', '07:00') }}">
-                    </div>
-                </div>
-                <button type="submit">Save Quiet Hours</button>
-            </form>
-        </section>
-
-        <!-- ── Refrigerator, Freezer, And Ice Maker ──────────────────────── -->
-        <section aria-labelledby="fridge-heading">
-            <h2 id="fridge-heading">Refrigerator, Freezer, And Ice Maker</h2>
-            <p class="field-hint">
-                Set what happens on speakers when each door event fires from Home Assistant.
-                <strong>Chime only</strong> plays the selected sound file with no speech.
-                <strong>Silent</strong> logs the event with no audio output at all.
-            </p>
-
-            <form action="{{ url_for('web_save_broadcast_channels') }}" method="post">
-                <fieldset>
-                    <legend class="sr-only">Fridge and Freezer door channel settings</legend>
-
-                    {% set channels_cfg = config.get('broadcast_channels', {}) %}
-                    {% set channel_defs = [
-                        ('fridge_open',    'Fridge Door Opens'),
-                        ('fridge_closed',  'Fridge Door Closes'),
-                        ('freezer_open',   'Freezer Door Opens'),
-                        ('freezer_closed', 'Freezer Door Closes'),
-                    ] %}
-
-                    {% for ch_key, ch_label in channel_defs %}
-                    {% set ch = channels_cfg.get(ch_key, {'mode': 'chime', 'chime': ''}) %}
-                    <div class="channel-card">
-                        <strong>{{ ch_label }}</strong>
-                        <div class="channel-row">
-                            <div>
-                                <label for="ch-mode-{{ ch_key }}">Mode</label>
-                                <select id="ch-mode-{{ ch_key }}"
-                                        name="channel_{{ ch_key }}_mode"
-                                        aria-label="{{ ch_label }} mode">
-                                    <option value="speak"  {{ 'selected' if ch.get('mode') == 'speak'  else '' }}>Speak</option>
-                                    <option value="chime"  {{ 'selected' if ch.get('mode','chime') == 'chime' else '' }}>Chime only</option>
-                                    <option value="silent" {{ 'selected' if ch.get('mode') == 'silent' else '' }}>Silent</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label for="ch-chime-{{ ch_key }}">Chime file</label>
-                                <select id="ch-chime-{{ ch_key }}"
-                                        name="channel_{{ ch_key }}_chime"
-                                        aria-label="{{ ch_label }} chime file">
-                                    <option value="(Default)" {{ 'selected' if not ch.get('chime') else '' }}>(Default tone)</option>
-                                    {% for chime in chimes %}
-                                    {% if chime != "(Default)" %}
-                                    <option value="{{ chime }}" {{ 'selected' if ch.get('chime') == chime else '' }}>{{ chime }}</option>
-                                    {% endif %}
-                                    {% endfor %}
-                                </select>
-                            </div>
-                        </div>
-                        <button type="submit"
-                                class="secondary"
-                                formaction="{{ url_for('web_test_fridge_chime', channel=ch_key) }}"
-                                formmethod="post"
-                                aria-label="Test chime for {{ ch_label }}">
-                            ▶ Test Chime
-                        </button>
-                    </div>
-                    {% endfor %}
-
-
-                    <div style="margin-top: 12px;">
-                        <p role="status" aria-live="polite">
-                            Ice maker: {{ ice_maker.get('summary', 'status unknown') }}
-                            Counter: {{ ice_maker.get('counter_text', 'not checked') }}.
-                        </p>
-                        <form action="{{ url_for('web_ice_maker_toggle') }}" method="post">
-                            <button type="submit" aria-label="{{ ice_maker.get('button_label', 'Turn Ice Maker On') }}">
-                                {{ ice_maker.get('button_label', 'Turn Ice Maker On') }}
-                            </button>
-                        </form>
-                    </div>
-
-                    <button type="submit">Save Fridge &amp; Freezer Settings</button>
-                </fieldset>
-            </form>
-        </section>
-
-        <!-- ── Manual Broadcast ──────────────────────────────────────────── -->
-        <section aria-labelledby="broadcast-heading">
-            <h2 id="broadcast-heading">Manual Broadcast</h2>
-            <form action="{{ url_for('web_broadcast') }}" method="post">
-                <input type="hidden" name="channel" value="manual">
-                <label for="broadcast_text">Manual broadcast (always speaks on all speakers):</label>
-                <textarea
-                    id="broadcast_text"
-                    name="broadcast_text"
-                    placeholder="Type your message here…"
-                    aria-describedby="broadcast-hint"
-                ></textarea>
-                <p id="broadcast-hint" class="sr-only">This message will always be spoken aloud regardless of any channel settings.</p>
-                <button type="submit">Broadcast Now</button>
-            </form>
-        </section>
-
-        <!-- ── Advanced Discovery Tools ──────────────────────────────────── -->
-        <section aria-labelledby="scan-heading">
-            <h2 id="scan-heading">Advanced Discovery Tools</h2>
-            <p class="sr-only">Scan results appear as notifications and are announced through your speakers.</p>
-            <div class="row">
-                <form action="{{ url_for('web_scan_sonos') }}" method="post" style="flex: 1;">
-                    <button type="submit">Scan for Sonos</button>
-                </form>
-                <form action="{{ url_for('web_scan_ha') }}" method="post" style="flex: 1;">
-                    <button type="submit">Scan Home Assistant</button>
-                </form>
-            </div>
-        </section>
-
-        <!-- ── Robot Message Studio ──────────────────────────────────────── -->
-        <section aria-labelledby="cinderella-studio-heading">
-            <h2 id="cinderella-studio-heading">Robot Message Studio</h2>
-            <p class="studio-help">
-                One line equals one possible message. Viper picks randomly. Save each section separately.
-                Error templates may include <code>{error}</code> which is replaced with the actual error code.
-            </p>
-
-            {% set cm = config.cinderella_messages %}
-
-            <div class="studio-grid">
-                {% for bucket, label in [
-                    ('departure',              'Departure Messages'),
-                    ('washing',                'Washing Messages'),
-                    ('emptying',               'Emptying Messages'),
-                    ('drying',                 'Drying Messages'),
-                    ('returning',              'Returning Messages'),
-                    ('victory',                'Victory Messages'),
-                    ('paused',                 'Paused Messages'),
-                    ('status_update',          'Other Status Messages'),
-                    ('vacuum_error_templates', 'Generic Vacuum Error Templates'),
-                    ('dock_error_templates',   'Generic Dock Error Templates')
-                ] %}
-                <div class="studio-card">
-                    <form action="{{ url_for('web_save_cinderella_bucket', bucket=bucket) }}" method="post">
-                        <fieldset>
-                            <legend>{{ label }}</legend>
-                            <label for="cm-{{ bucket }}" class="sr-only">
-                                Messages for {{ label }} — one per line
-                            </label>
-                            <textarea
-                                id="cm-{{ bucket }}"
-                                name="messages"
-                                aria-describedby="cm-hint-{{ bucket }}"
-                            >{{ cm.get(bucket, []) | join('\n') }}</textarea>
-                            <p id="cm-hint-{{ bucket }}" class="sr-only">Enter one message per line. Press Save {{ label }} when done.</p>
-                            <button type="submit">Save {{ label }}</button>
-                        </fieldset>
-                    </form>
-                </div>
-                {% endfor %}
-            </div>
-
-            <!-- Add specific error bucket -->
-            <div class="studio-card" style="margin-top: 15px;">
-                <form action="{{ url_for('web_add_cinderella_error_bucket') }}" method="post">
-                    <fieldset>
-                        <legend>Add Specific Error Bucket</legend>
-                        <label for="error-name-input">
-                            Error code (use underscores, e.g. <code>main_brush_stuck</code>):
-                        </label>
-                        <input
-                            type="text"
-                            id="error-name-input"
-                            name="error_name"
-                            placeholder="e.g. main_brush_stuck"
-                            required
-                            autocomplete="off"
-                            aria-describedby="error-name-hint"
-                        >
-                        <p id="error-name-hint" class="sr-only">Must match the error code sent by the robot. Spaces will be converted to underscores.</p>
-                        <button type="submit">Add Error Bucket</button>
-                    </fieldset>
-                </form>
-            </div>
-
-            <!-- Specific error buckets -->
-            {% if cm.get('specific_errors') %}
-            <div class="studio-grid" style="margin-top: 15px;">
-                {% for error_name, lines in cm.get('specific_errors', {}) | dictsort %}
-                <div class="studio-card">
-                    <form action="{{ url_for('web_save_cinderella_error_bucket', error_name=error_name) }}" method="post">
-                        <fieldset>
-                            <legend>Specific Error: {{ error_name }}</legend>
-                            <label for="cm-err-{{ error_name }}" class="sr-only">
-                                Messages for error {{ error_name }} — one per line
-                            </label>
-                            <textarea
-                                id="cm-err-{{ error_name }}"
-                                name="messages"
-                                aria-describedby="cm-err-hint-{{ error_name }}"
-                            >{{ lines | join('\n') }}</textarea>
-                            <p id="cm-err-hint-{{ error_name }}" class="sr-only">One message per line. Press Save to update.</p>
-                            <button type="submit">Save {{ error_name }}</button>
-                        </fieldset>
-                    </form>
-                    <form
-                        action="{{ url_for('web_delete_cinderella_error_bucket', error_name=error_name) }}"
-                        method="post"
-                        onsubmit="return confirmDelete(event, '{{ error_name }}')"
-                    >
-                        <button type="submit" class="danger">
-                            Delete {{ error_name }} bucket
-                        </button>
-                    </form>
-                </div>
-                {% endfor %}
-            </div>
-            {% endif %}
-        </section>
-
-        <!-- ── Recent Activity ────────────────────────────────────────────── -->
         <section aria-labelledby="activity-heading">
             <h2 id="activity-heading">Recent Activity</h2>
             {% if activity_logs %}
-            <ul aria-label="Recent activity log">
+            <ul class="status-list" aria-label="Recent activity log">
                 {% for log in activity_logs %}
                 <li>[{{ log.time }}] {{ log.msg }}</li>
                 {% endfor %}
@@ -1026,132 +375,6 @@
             <p>No recent activity to display.</p>
             {% endif %}
         </section>
-
     </main>
-
-    <script>
-        // ── Announce a message to screen readers via the live region ────────
-        function announce(msg) {
-            var el = document.getElementById('live-status');
-            if (!el) return;
-            el.textContent = '';
-            // Small delay forces the DOM mutation to be detected as a change
-            setTimeout(function() { el.textContent = msg; }, 50);
-        }
-
-        // ── Toggle inline rename form ────────────────────────────────────────
-        // btn  = the Rename button that was pressed
-        // id   = the id of the .rename-form div to open/close
-        function toggleRename(btn, id) {
-            var form = document.getElementById(id);
-            if (!form) return;
-            var opening = !form.classList.contains('open');
-            form.classList.toggle('open', opening);
-            btn.setAttribute('aria-expanded', String(opening));
-            if (opening) {
-                // Move focus to the name input so the user can start typing
-                var input = form.querySelector('input[type="text"]');
-                if (input) { input.focus(); input.select(); }
-            } else {
-                // Return focus to the Rename button
-                btn.focus();
-            }
-        }
-
-        // ── Toggle Add New Speaker form ──────────────────────────────────────
-        function toggleAddSpeaker(btn) {
-            var form = document.getElementById('add-spk-form');
-            if (!form) return;
-            var opening = form.style.display === 'none';
-            form.style.display = opening ? 'block' : 'none';
-            btn.setAttribute('aria-expanded', String(opening));
-            if (opening) {
-                var first = form.querySelector('input, select, textarea');
-                if (first) first.focus();
-            } else {
-                btn.focus();
-            }
-        }
-
-        // ── Accessible delete confirmation ───────────────────────────────────
-        // Replaces browser confirm() which is poorly supported by JAWS.
-        // Creates a visible, focusable dialog in the page flow so JAWS reads it.
-        function confirmDelete(e, itemName) {
-            e.preventDefault();
-            var form = e.target;
-
-            // Don't stack multiple dialogs
-            if (document.getElementById('confirm-dialog')) {
-                document.getElementById('confirm-dialog').remove();
-            }
-
-            var dialog = document.createElement('div');
-            dialog.id = 'confirm-dialog';
-            dialog.setAttribute('role', 'alertdialog');
-            dialog.setAttribute('aria-modal', 'true');
-            dialog.setAttribute('aria-labelledby', 'confirm-title');
-            dialog.setAttribute('aria-describedby', 'confirm-desc');
-            dialog.setAttribute('tabindex', '-1');
-            dialog.style.cssText = [
-                'position:fixed','top:50%','left:50%',
-                'transform:translate(-50%,-50%)',
-                'background:#fff','border:2px solid #dc3545',
-                'border-radius:8px','padding:24px','max-width:320px',
-                'width:90%','z-index:1000','box-shadow:0 4px 20px rgba(0,0,0,0.3)'
-            ].join(';');
-
-            dialog.innerHTML = [
-                '<h3 id="confirm-title" style="margin-top:0;color:#dc3545;">Confirm Delete</h3>',
-                '<p id="confirm-desc">Are you sure you want to delete <strong>' + escHtml(itemName) + '</strong>? This cannot be undone.</p>',
-                '<div style="display:flex;gap:10px;margin-top:16px;">',
-                '  <button id="confirm-yes" type="button" class="danger" style="flex:1;margin-top:0;">Yes, delete</button>',
-                '  <button id="confirm-no"  type="button" class="secondary" style="flex:1;margin-top:0;">Cancel</button>',
-                '</div>'
-            ].join('');
-
-            document.body.appendChild(dialog);
-            dialog.focus();
-
-            document.getElementById('confirm-yes').addEventListener('click', function() {
-                dialog.remove();
-                form.submit();
-            });
-            document.getElementById('confirm-no').addEventListener('click', function() {
-                dialog.remove();
-                // Return focus to the delete button that opened the dialog
-                var btn = form.querySelector('button[type="submit"]');
-                if (btn) btn.focus();
-                announce('Delete cancelled.');
-            });
-
-            // Trap Tab/Shift-Tab inside the dialog
-            dialog.addEventListener('keydown', function(ev) {
-                if (ev.key !== 'Tab') return;
-                var focusable = dialog.querySelectorAll('button');
-                var first = focusable[0], last = focusable[focusable.length - 1];
-                if (ev.shiftKey && document.activeElement === first) {
-                    ev.preventDefault(); last.focus();
-                } else if (!ev.shiftKey && document.activeElement === last) {
-                    ev.preventDefault(); first.focus();
-                }
-            });
-
-            // Escape closes
-            dialog.addEventListener('keydown', function(ev) {
-                if (ev.key === 'Escape') { document.getElementById('confirm-no').click(); }
-            });
-
-            return false;
-        }
-
-        // Simple HTML escaper used by the dialog
-        function escHtml(str) {
-            return String(str)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
-        }
-    </script>
 </body>
 </html>

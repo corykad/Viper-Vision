@@ -128,13 +128,21 @@ class VacuumTabMixin:
         room_outer.Add(self.vacuum_room_scroll, 0, wx.ALL | wx.EXPAND, 5)
 
         repeat_row = wx.BoxSizer(wx.HORIZONTAL)
-        repeat_row.Add(wx.StaticText(self.tab_vacuum, label="Room clean repeat count:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
-        self.vacuum_room_repeat = wx.SpinCtrl(self.tab_vacuum, min=1, max=3, initial=1)
+        repeat_row.Add(wx.StaticText(self.tab_vacuum, label="Room cleaning repeat count:"), 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        initial_repeat = max(1, min(3, int(self.config.get("vacuum_room_repeat_count", 1) or 1)))
+        self.vacuum_room_repeat = wx.SpinCtrl(self.tab_vacuum, min=1, max=3, initial=initial_repeat)
         self._describe_control(
             self.vacuum_room_repeat,
-            "Room clean repeat count. Choose 1, 2, or 3 passes for selected rooms.",
+            "Room cleaning repeat count. Choose 1, 2, or 3 passes for selected rooms.",
         )
         repeat_row.Add(self.vacuum_room_repeat, 0, wx.ALL, 5)
+        self.btn_apply_vacuum_room_repeat = wx.Button(self.tab_vacuum, label="Apply room repeat count", size=(-1, 40))
+        self.btn_apply_vacuum_room_repeat.Bind(wx.EVT_BUTTON, self.on_vacuum_apply_room_repeat_count)
+        self._describe_control(
+            self.btn_apply_vacuum_room_repeat,
+            "Apply room repeat count button. Saves the selected repeat count for future selected-room cleaning.",
+        )
+        repeat_row.Add(self.btn_apply_vacuum_room_repeat, 0, wx.ALL, 5)
         room_outer.Add(repeat_row, 0, wx.EXPAND)
 
         self.vacuum_room_status_txt = self._make_accessible_status_text(
@@ -241,6 +249,7 @@ class VacuumTabMixin:
             wx.CallAfter(self._finish_vacuum_refresh, [], [], f"Vacuum scan failed: {message}")
             return
         states = result.get("states", [])
+        self._last_vacuum_states = states
         vacuums = [entity for entity in states if self._ha_domain(entity) == "vacuum"]
         roborock_vacuums = [entity for entity in vacuums if self._looks_like_roborock(entity)]
         selected_vacuums = roborock_vacuums or vacuums
@@ -753,6 +762,16 @@ class VacuumTabMixin:
         self.config.setdefault("vacuum_rooms", {})[entity_id] = sanitized
         self.save_config()
 
+    def _save_vacuum_room_repeat_count(self):
+        repeat = max(1, min(3, int(self.vacuum_room_repeat.GetValue())))
+        self.config["vacuum_room_repeat_count"] = repeat
+        self.save_config()
+        return repeat
+
+    def on_vacuum_apply_room_repeat_count(self, event):
+        repeat = self._save_vacuum_room_repeat_count()
+        self.notify(f"Room cleaning repeat count saved: {repeat}.", priority=1)
+
     def on_vacuum_clean_selected_rooms(self, event):
         entity_id = self._selected_vacuum_entity_id()
         if not entity_id:
@@ -767,7 +786,7 @@ class VacuumTabMixin:
             self.notify("Check one or more rooms first.", priority=10)
             return
         segments = [room["segment"] for room in selected_rooms if "segment" in room]
-        repeat = self.vacuum_room_repeat.GetValue()
+        repeat = self._save_vacuum_room_repeat_count()
         mode = self._current_vacuum_cleaning_mode()
         mode_calls = self._vacuum_cleaning_mode_calls(entity_id, mode)
         payload = {

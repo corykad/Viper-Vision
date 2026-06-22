@@ -26,6 +26,8 @@ datas = [
     ("chimes", "chimes"),
     ("help", "help"),
     ("watch_ha_health.ps1", "."),
+    ("watch_home_assistant_vm.ps1", "."),
+    ("run_ha_watchdog_hidden.vbs", "."),
     ("harden_ha_virtualbox.ps1", "."),
 ]
 

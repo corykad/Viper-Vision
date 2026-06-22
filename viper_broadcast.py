@@ -1,6 +1,35 @@
 import logging
 
 
+def _chime_target_summary(config: dict, channel: str) -> dict:
+    """Return the configured audible chime targets for a fridge/freezer channel."""
+    category = "fridge" if str(channel or "").lower().startswith(("fridge", "freezer")) else "manual"
+    ha_targets, sonos_targets, alexa_targets = [], [], []
+    for _name, spk in (config.get("speakers") or {}).items():
+        if not spk.get("enabled", True):
+            continue
+        if category == "fridge" and not spk.get("fridge", True):
+            continue
+        spk_type = spk.get("type")
+        spk_id = spk.get("id")
+        if not spk_id:
+            continue
+        if spk_type == "ha":
+            ha_targets.append(spk_id)
+        elif spk_type == "sonos":
+            sonos_targets.append(spk_id)
+        elif spk_type == "alexa" and config.get("enable_alexa", False):
+            alexa_targets.append(spk_id)
+    total = len(ha_targets) + len(sonos_targets) + len(alexa_targets)
+    return {
+        "ha_targets": ha_targets,
+        "sonos_targets": sonos_targets,
+        "alexa_targets": alexa_targets,
+        "target_count": total,
+        "has_targets": total > 0,
+    }
+
+
 def resolve_channel_settings(channel: str, config: dict) -> dict:
     """Return mode+chime for a channel with fridge/freezer fallback chains."""
     channels = config.get("broadcast_channels", {})
@@ -78,6 +107,7 @@ def dispatch_broadcast_message(
     submit,
     play_notification,
     play_broadcast_chime,
+    send_text_push=None,
     system_ready: bool = True,
     push: bool = False,
     channel: str = "",
@@ -95,6 +125,11 @@ def dispatch_broadcast_message(
         return {"ok": False, "message": "No message provided.", "status_code": 400}
 
     try:
+        def submit_push_if_requested():
+            if not push or send_text_push is None:
+                return
+            submit(send_text_push, "Home Alert", msg)
+
         if config.get("global_mute", False):
             notify(
                 f"Global mute is on. Broadcast logged with no audio: {msg}",
@@ -102,6 +137,7 @@ def dispatch_broadcast_message(
                 interrupt=True,
                 speak=False,
             )
+            submit_push_if_requested()
             logging.info("[GLOBAL MUTE] Broadcast logged only channel=%r message=%r", channel or "default", msg)
             return {
                 "ok": True,
@@ -141,6 +177,7 @@ def dispatch_broadcast_message(
         )
 
         if mode == "silent":
+            submit_push_if_requested()
             logging.info("[BROADCAST] Silent channel=%r logged only: %r", resolved_channel, msg)
             return {
                 "ok": True,
@@ -151,9 +188,29 @@ def dispatch_broadcast_message(
             }
 
         if mode == "chime":
+            target_summary = _chime_target_summary(config, resolved_channel)
+            if not target_summary["has_targets"]:
+                submit_push_if_requested()
+                logging.warning(
+                    "[BROADCAST] Chime channel=%r has no enabled audible targets. message=%r",
+                    resolved_channel, msg,
+                )
+                return {
+                    "ok": False,
+                    "message": (
+                        f"Chime not played for {resolved_channel or 'default'}: "
+                        "no enabled speaker has fridge/freezer routing."
+                    ),
+                    "status_code": 409,
+                    "path": "no_chime_targets",
+                    "resolved_channel": resolved_channel,
+                    "chime": chime,
+                    "target_count": 0,
+                }
             future = submit(play_broadcast_chime, chime, resolved_channel)
             if future is None:
                 return {"ok": False, "message": "System shutting down.", "status_code": 503}
+            submit_push_if_requested()
             logging.info("[BROADCAST] Chime channel=%r chime=%r for: %r", resolved_channel, chime, msg)
             return {
                 "ok": True,
@@ -162,6 +219,7 @@ def dispatch_broadcast_message(
                 "path": "chime",
                 "resolved_channel": resolved_channel,
                 "chime": chime,
+                "target_count": target_summary["target_count"],
             }
 
         future = submit(play_notification, "manual", msg, push)

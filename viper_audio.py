@@ -1054,19 +1054,26 @@ def _safe_alexa_announce(msg, targets, headers):
 
 
 def _send_text_pushover(title: str, message: str):
-    if not cfg.PUSHOVER_API_TOKEN or not cfg.PUSHOVER_USER_KEY:
-        return
+    settings = cfg.get_api_settings(include_env=True)
+    api_token = settings.get("pushover_api_token")
+    user_key = settings.get("pushover_user_key")
+    if not settings.get("pushover_enabled") or not api_token or not user_key:
+        logging.info("[PUSHOVER] Text Pushover skipped: not configured.")
+        return False
     try:
         payload = {
-            "token": cfg.PUSHOVER_API_TOKEN,
-            "user": cfg.PUSHOVER_USER_KEY,
+            "token": api_token,
+            "user": user_key,
             "title": title,
             "message": message,
         }
-        _PUSHOVER_SESSION.post("https://api.pushover.net/1/messages.json", data=payload, timeout=10)
-        logging.info("[PUSHOVER] Text Pushover sent: %s", title)
+        response = _PUSHOVER_SESSION.post("https://api.pushover.net/1/messages.json", data=payload, timeout=10)
+        response.raise_for_status()
+        logging.info("[PUSHOVER] Text Pushover sent: %s status=%s", title, response.status_code)
+        return True
     except Exception as e:
-        logging.error(f"[PUSHOVER ERROR]: {e}")
+        logging.error("[PUSHOVER ERROR] Text push failed title=%s error=%s", title, e)
+        return False
 
 
 
@@ -1117,18 +1124,22 @@ def play_broadcast_chime(filename, channel="fridge"):
     config = cfg.load_config()
     if _global_mute_enabled(config):
         logging.info("[GLOBAL MUTE] Skipping broadcast chime for channel=%r.", channel)
-        return
+        return {"ok": False, "reason": "global_mute", "target_count": 0}
     if filename == "(Default)" or not filename:
         chime_url = "http://codeskulptor-demos.commondatastorage.googleapis.com/descent/gotitem.mp3"
     else:
         chime_url = _chime_url(filename)
         if not chime_url:
             logging.warning("[CHIME] Could not resolve broadcast chime: %r", filename)
-            return
+            return {"ok": False, "reason": "missing_chime", "target_count": 0}
 
     headers = _ha_auth_headers()
     context = {"channel": channel}
     ha_targets, sonos_targets, alexa_targets, _category, _quiet = _collect_targets_for_context(config, context)
+    target_count = len(ha_targets) + len(sonos_targets) + len(alexa_targets)
+    if not target_count:
+        logging.warning("[CHIME] No enabled broadcast chime targets for channel=%r.", channel)
+        return {"ok": False, "reason": "no_targets", "target_count": 0}
 
     for ip in sonos_targets:
         try:
@@ -1141,6 +1152,18 @@ def play_broadcast_chime(filename, channel="fridge"):
         threading.Thread(target=_safe_ha_play, args=(entity, chime_url, headers), daemon=True).start()
     for entity in alexa_targets:
         threading.Thread(target=_safe_alexa_play, args=(entity, chime_url, headers), daemon=True).start()
+    logging.info(
+        "[CHIME] Broadcast chime queued channel=%r targets=%s ha=%s sonos=%s alexa=%s",
+        channel, target_count, len(ha_targets), len(sonos_targets), len(alexa_targets),
+    )
+    return {
+        "ok": True,
+        "reason": "queued",
+        "target_count": target_count,
+        "ha_count": len(ha_targets),
+        "sonos_count": len(sonos_targets),
+        "alexa_count": len(alexa_targets),
+    }
 
 def test_specific_chime(filename, door_type):
     config = cfg.load_config()

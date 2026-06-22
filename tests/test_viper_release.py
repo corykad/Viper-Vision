@@ -13,6 +13,9 @@ import viper_config as cfg
 import viper_discovery as discovery
 import viper_diagnostics as diagnostics
 import viper_audio as audio
+import viper_ha_package as ha_package
+import viper_health
+import viper_ha_recovery as ha_recovery
 import viper_ha_listener as ha_listener
 import viper_vacuum as vacuum
 import viper_ui_vacuum as ui_vacuum
@@ -74,7 +77,7 @@ def _sample_states():
             "attributes": {
                 "friendly_name": "cinderella",
                 "fan_speed": "max",
-                "fan_speed_list": ["quiet", "balanced", "turbo", "max"],
+                "fan_speed_list": ["quiet", "balanced", "turbo", "max", "custom"],
             },
         },
         {
@@ -180,6 +183,7 @@ class FakeDashboard:
         self.saved = False
         self.service_calls = []
         self.last_video_analysis = {}
+        self.last_video_followup_decision = {}
         self.video_analysis_requests = []
 
     def save_config(self):
@@ -299,6 +303,50 @@ class ViperReleaseTests(unittest.TestCase):
             self.assertEqual(frames, [str(initial), str(later)])
             self.assertEqual(multi.call_count, 1)
 
+    def test_fast_mode_keeps_still_refinement_update_silent(self):
+        class ImmediateExecutor:
+            def submit(self, func, *args, **kwargs):
+                func(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            frame = tmp_path / "fast_front_1_0002.jpg"
+            Image.new("RGB", (320, 180), color=(80, 80, 80)).save(frame, format="JPEG")
+            config = cfg.validate_and_normalize_config(
+                {
+                    "is_armed": True,
+                    "doorbell_video_analysis": {"mode": "fast"},
+                }
+            )
+            dashboard = FakeDashboard()
+            dashboard.config = config
+            dashboard.notifications = []
+            dashboard.notify = lambda message, priority=0, interrupt=False: dashboard.notifications.append(message)
+            spoken = []
+            pushes = []
+            vision.last_trigger["front"] = 0
+
+            with patch.object(vision.cfg, "DATA_DIR", tmp_path), \
+                 patch.object(vision.audio, "sonos_instant_chime"), \
+                 patch.object(vision.audio, "play_notification", side_effect=lambda *args, **kwargs: spoken.append(args)), \
+                 patch.object(vision, "grab_frame", return_value=str(frame)), \
+                 patch.object(vision, "get_gemini_description", return_value="The image is unclear."), \
+                 patch.object(vision, "refine_weak_doorbell_still_description", return_value=("The porch is empty and no packages are present.", [str(frame)])), \
+                 patch.object(vision, "_send_pushover", side_effect=lambda location, description, image_bytes: pushes.append((location, description)) or True):
+                vision.process_doorbell(
+                    "front door",
+                    "rtsp://camera/front",
+                    "front",
+                    dashboard,
+                    ImmediateExecutor(),
+                    trace_id="test-fast-silent-refinement",
+                    received_ts=vision.time.time(),
+                )
+
+        self.assertIn(("doorbell", "The image is unclear."), spoken)
+        self.assertFalse(any(args[1].startswith("Update:") for args in spoken))
+        self.assertEqual(pushes[-1][1], "The porch is empty and no packages are present.")
+
     def test_rtsp_frame_sanity_rejects_green_artifact_corruption(self):
         with tempfile.TemporaryDirectory() as tmp:
             bad = Path(tmp) / "bad.jpg"
@@ -331,6 +379,18 @@ class ViperReleaseTests(unittest.TestCase):
             img.save(good, format="JPEG")
 
             self.assertTrue(vision._frame_passes_sanity_check(good))
+
+    def test_fast_first_frame_requires_stronger_margin(self):
+        frame = Path("fast_back_123_0001.jpg")
+
+        self.assertFalse(vision._fast_frame_ready_for_first_pass(frame, 14040, 14000))
+        self.assertTrue(vision._fast_frame_ready_for_first_pass(frame, 19000, 14000))
+
+    def test_fast_later_frame_can_pass_with_smaller_margin(self):
+        frame = Path("fast_back_123_0002.jpg")
+
+        self.assertFalse(vision._fast_frame_ready_for_first_pass(frame, 15000, 14000))
+        self.assertTrue(vision._fast_frame_ready_for_first_pass(frame, 15500, 14000))
 
     def test_single_frame_fallback_rejects_green_artifact_frame(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -377,9 +437,79 @@ class ViperReleaseTests(unittest.TestCase):
             calls,
         )
 
+    def test_vacuum_cleaning_mode_handles_current_roborock_mop_controls(self):
+        states = [
+            {
+                "entity_id": "vacuum.cinderella",
+                "state": "docked",
+                "attributes": {
+                    "friendly_name": "cinderella",
+                    "fan_speed": "max_plus",
+                    "fan_speed_list": ["quiet", "balanced", "turbo", "max", "max_plus", "off_raise_main_brush", "smart_mode", "custom"],
+                },
+            },
+            {
+                "entity_id": "select.cinderella_mop_mode",
+                "state": "standard",
+                "attributes": {
+                    "friendly_name": "cinderella Mop mode",
+                    "options": ["standard", "deep", "deep_plus", "fast", "smart_mode", "custom"],
+                },
+            },
+            {
+                "entity_id": "select.cinderella_mop_intensity",
+                "state": "off",
+                "attributes": {
+                    "friendly_name": "cinderella Mop intensity",
+                    "options": ["off", "slight", "low", "medium", "moderate", "high", "extreme"],
+                },
+            },
+        ]
+
+        mop_calls = main.vacuum_cleaning_mode_service_calls("vacuum.cinderella", states, "mop_only", "max_plus")
+        self.assertIn(
+            ("select/select_option", {"entity_id": "select.cinderella_mop_intensity", "option": "moderate"}),
+            mop_calls,
+        )
+        self.assertIn(
+            ("vacuum/set_fan_speed", {"entity_id": "vacuum.cinderella", "fan_speed": "off_raise_main_brush"}),
+            mop_calls,
+        )
+        self.assertNotIn(
+            ("select/select_option", {"entity_id": "select.cinderella_mop_mode", "option": "deep"}),
+            mop_calls,
+        )
+
+        states[2]["state"] = "moderate"
+        vacuum_calls = main.vacuum_cleaning_mode_service_calls("vacuum.cinderella", states, "vacuum_only", "max_plus")
+        self.assertIn(
+            ("select/select_option", {"entity_id": "select.cinderella_mop_intensity", "option": "off"}),
+            vacuum_calls,
+        )
+        self.assertNotIn(
+            ("select/select_option", {"entity_id": "select.cinderella_mop_mode", "option": "standard"}),
+            vacuum_calls,
+        )
+
+        states[2]["state"] = "off"
+        vacuum_mop_calls = main.vacuum_cleaning_mode_service_calls("vacuum.cinderella", states, "vacuum_mop", "off_raise_main_brush")
+        self.assertIn(
+            ("select/select_option", {"entity_id": "select.cinderella_mop_intensity", "option": "moderate"}),
+            vacuum_mop_calls,
+        )
+        self.assertIn(
+            ("vacuum/set_fan_speed", {"entity_id": "vacuum.cinderella", "fan_speed": "balanced"}),
+            vacuum_mop_calls,
+        )
+
     def test_config_normalizes_vacuum_cleaning_mode(self):
         self.assertEqual(cfg.validate_and_normalize_config({"vacuum_cleaning_mode": "mop_only"})["vacuum_cleaning_mode"], "mop_only")
         self.assertEqual(cfg.validate_and_normalize_config({"vacuum_cleaning_mode": "bad"})["vacuum_cleaning_mode"], "vacuum_mop")
+        self.assertEqual(cfg.validate_and_normalize_config({"vacuum_room_repeat_count": 9})["vacuum_room_repeat_count"], 3)
+        self.assertEqual(cfg.validate_and_normalize_config({"vacuum_room_repeat_count": 0})["vacuum_room_repeat_count"], 1)
+        normalized = cfg.validate_and_normalize_config({"vacuum_custom_suction_value": 120, "vacuum_custom_suction_percent": 83})
+        self.assertNotIn("vacuum_custom_suction_value", normalized)
+        self.assertNotIn("vacuum_custom_suction_percent", normalized)
 
     def test_vacuum_ui_module_exports_cleaning_mode_helpers(self):
         self.assertIs(ui_vacuum._normalize_vacuum_cleaning_mode, vacuum.normalize_vacuum_cleaning_mode)
@@ -481,23 +611,90 @@ class ViperReleaseTests(unittest.TestCase):
             Path(video_path).unlink(missing_ok=True)
 
     def test_smart_video_followup_is_strict(self):
-        self.assertFalse(
-            vision.should_run_automatic_video_followup(
-                "smart",
-                "A delivery driver is standing at the porch with a package.",
-                "front",
-                {"doorbell_video_analysis": {"smart_cooldown_seconds": 15}},
-            )
+        decision = vision.should_run_automatic_video_followup(
+            "smart",
+            "A delivery driver is standing at the porch with a package.",
+            "front",
+            {"doorbell_video_analysis": {"smart_cooldown_seconds": 15}},
         )
+        self.assertFalse(decision)
+        self.assertEqual(decision.reason, "strong_still_description")
         vision._video_followup_last["front"] = 0
-        self.assertTrue(
-            vision.should_run_automatic_video_followup(
-                "smart",
-                "The image is unclear and hard to tell.",
-                "front",
-                {"doorbell_video_analysis": {"smart_cooldown_seconds": 15}},
-            )
+        decision = vision.should_run_automatic_video_followup(
+            "smart",
+            "The image is unclear and hard to tell.",
+            "front",
+            {"doorbell_video_analysis": {"smart_cooldown_seconds": 15}},
         )
+        self.assertTrue(decision)
+        self.assertEqual(decision.reason, "weak_description")
+
+    def test_video_followup_decision_modes_are_explainable(self):
+        clear = "A delivery driver is standing at the porch with a package."
+        self.assertEqual(
+            vision.should_run_automatic_video_followup("fast", clear, "front").reason,
+            "fast_mode",
+        )
+        self.assertEqual(
+            vision.should_run_automatic_video_followup("manual", clear, "front").reason,
+            "manual_mode",
+        )
+        detailed = vision.should_run_automatic_video_followup("detailed", clear, "front")
+        self.assertTrue(detailed)
+        self.assertEqual(detailed.reason, "detailed_mode")
+
+    def test_smart_video_followup_requires_uncertainty_or_visibility_issue(self):
+        config = {"doorbell_video_analysis": {"smart_cooldown_seconds": 15}}
+        vision._video_followup_last["front"] = 0
+        decision = vision.should_run_automatic_video_followup(
+            "smart",
+            "No one is visible on the porch and nothing important is happening.",
+            "front",
+            config,
+        )
+        self.assertFalse(decision)
+        self.assertEqual(decision.reason, "strong_still_description")
+
+        vision._video_followup_last["front"] = 0
+        decision = vision.should_run_automatic_video_followup(
+            "smart",
+            "There is motion near the porch, but it is unclear what is moving.",
+            "front",
+            config,
+        )
+        self.assertTrue(decision)
+        self.assertEqual(decision.reason, "motion_uncertain")
+        self.assertIn("motion", decision.markers)
+        self.assertIn("unclear", decision.markers)
+
+        vision._video_followup_last["front"] = 0
+        decision = vision.should_run_automatic_video_followup(
+            "smart",
+            "A person appears to be near the door, but it is hard to tell what they are carrying.",
+            "front",
+            config,
+        )
+        self.assertTrue(decision)
+        self.assertEqual(decision.reason, "security_relevant_uncertain")
+
+    def test_smart_video_followup_cooldown_reports_reason(self):
+        config = {"doorbell_video_analysis": {"smart_cooldown_seconds": 15}}
+        vision._video_followup_last["back"] = 0
+        first = vision.should_run_automatic_video_followup(
+            "smart",
+            "The image is unclear and hard to tell.",
+            "back",
+            config,
+        )
+        self.assertTrue(first)
+        second = vision.should_run_automatic_video_followup(
+            "smart",
+            "The image is unclear and hard to tell.",
+            "back",
+            config,
+        )
+        self.assertFalse(second)
+        self.assertEqual(second.reason, "cooldown")
 
     def setUp(self):
         self.previous_dash_app = main.dash_app
@@ -612,6 +809,88 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(status["button_label"], "Turn Ice Maker Off")
         self.assertEqual(status["counter_text"], "4")
         self.assertIn("Ice usage counter: 4", status["message"])
+
+    def test_ice_maker_on_resets_counter_and_verifies_switch_state(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+        fake.config = cfg.validate_and_normalize_config({})
+        fake.service_calls = []
+        fake._call_ha_service_data = lambda domain_service, data, **kwargs: fake.service_calls.append((domain_service, data)) or True
+        fake.config["ice_maker_switch_entity"] = "switch.refrigerator_cubed_ice"
+        fake.config["ice_maker_keep_on_entity"] = "input_boolean.keep_ice_maker_on"
+        fake.config["ice_maker_counter_entity"] = "counter.ice_usage_counter"
+        fake.notify = lambda *args, **kwargs: None
+        fake._safe_submit = lambda func, *args, **kwargs: None
+        fake.refresh_ice_maker_status = lambda *args, **kwargs: None
+        fake._get_ha_entity_state = lambda entity_id, timeout=5: {
+            "ok": True,
+            "exists": True,
+            "entity_id": entity_id,
+            "entity": {"state": "on"},
+        }
+
+        with patch.object(main.wx, "CallLater"), patch("viper_ui_fridge.time.sleep"):
+            message = main.ViperDashboard.on_ice_maker_on(fake, None)
+
+        self.assertIn("Counter reset", message)
+        self.assertEqual(
+            fake.service_calls,
+            [
+                ("input_boolean/turn_on", {"entity_id": "input_boolean.keep_ice_maker_on"}),
+                ("switch/turn_on", {"entity_id": "switch.refrigerator_cubed_ice"}),
+                ("counter/reset", {"entity_id": "counter.ice_usage_counter"}),
+            ],
+        )
+
+    def test_ice_maker_off_retries_when_switch_state_does_not_change(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+        fake.config = cfg.validate_and_normalize_config({})
+        fake.service_calls = []
+        fake._call_ha_service_data = lambda domain_service, data, **kwargs: fake.service_calls.append((domain_service, data)) or True
+        fake.config["ice_maker_switch_entity"] = "switch.refrigerator_cubed_ice"
+        fake.config["ice_maker_keep_on_entity"] = "input_boolean.keep_ice_maker_on"
+        fake.config["ice_maker_counter_entity"] = "counter.ice_usage_counter"
+        fake.notify = lambda *args, **kwargs: None
+        fake._safe_submit = lambda func, *args, **kwargs: None
+        fake.refresh_ice_maker_status = lambda *args, **kwargs: None
+        seen_states = iter(["on", "off"])
+
+        def fake_state(entity_id, timeout=5):
+            return {
+                "ok": True,
+                "exists": True,
+                "entity_id": entity_id,
+                "entity": {"state": next(seen_states)},
+            }
+
+        fake._get_ha_entity_state = fake_state
+
+        with patch.object(main.wx, "CallLater"), patch("viper_ui_fridge.time.sleep"):
+            message = main.ViperDashboard.on_ice_maker_off(fake, None)
+
+        self.assertIn("Counter reset", message)
+        self.assertEqual(
+            fake.service_calls,
+            [
+                ("switch/turn_off", {"entity_id": "switch.refrigerator_cubed_ice"}),
+                ("switch/turn_off", {"entity_id": "switch.refrigerator_cubed_ice"}),
+                ("input_boolean/turn_off", {"entity_id": "input_boolean.keep_ice_maker_on"}),
+                ("counter/reset", {"entity_id": "counter.ice_usage_counter"}),
+            ],
+        )
+
+    def test_generated_ice_maker_package_retries_fill_completion_switch_off(self):
+        package_text = ha_package.generate_viper_ha_package(
+            {
+                "ice_maker_switch_entity": "switch.refrigerator_cubed_ice",
+                "ice_maker_keep_on_entity": "input_boolean.keep_ice_maker_on",
+                "ice_usage_counter_entity": "counter.ice_usage_counter",
+            }
+        )
+        fill_section = package_text.split("- id: viper_ice_maker_fill_and_reset", 1)[1]
+
+        self.assertGreaterEqual(fill_section.count("action: switch.turn_off"), 2)
+        self.assertIn("- delay: '00:00:05'", fill_section)
+        self.assertIn("action: counter.reset", fill_section)
 
     def test_fridge_tab_and_remote_use_single_ice_maker_toggle(self):
         root = Path(__file__).resolve().parents[1]
@@ -845,6 +1124,34 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(settings["effective_tts_alerts"]["doorbell"]["engine"], "edge")
         self.assertEqual(settings["effective_tts_alerts"]["doorbell"]["speed"], "fast")
         self.assertEqual(settings["effective_tts_alerts"]["utilities"]["engine"], "google")
+
+    def test_text_pushover_checks_http_status(self):
+        response = mock.Mock(status_code=400)
+        response.raise_for_status.side_effect = Exception("bad token")
+        with patch.object(audio.cfg, "get_api_settings", return_value={
+            "pushover_enabled": True,
+            "pushover_user_key": "user",
+            "pushover_api_token": "token",
+        }):
+            with patch.object(audio._PUSHOVER_SESSION, "post", return_value=response) as post:
+                self.assertFalse(audio._send_text_pushover("Test", "Hello"))
+
+        post.assert_called_once()
+        response.raise_for_status.assert_called_once()
+
+    def test_image_pushover_checks_http_status(self):
+        response = mock.Mock(status_code=400)
+        response.raise_for_status.side_effect = Exception("bad token")
+        with patch.object(vision.cfg, "get_api_settings", return_value={
+            "pushover_enabled": True,
+            "pushover_user_key": "user",
+            "pushover_api_token": "token",
+        }):
+            with patch.object(vision._pushover_session, "post", return_value=response) as post:
+                self.assertFalse(vision._send_pushover("front door", "Hello", b"jpg"))
+
+        post.assert_called_once()
+        response.raise_for_status.assert_called_once()
 
     def test_audio_dispatch_skips_network_tts_when_no_routed_speakers(self):
         config = cfg.validate_and_normalize_config(
@@ -1091,6 +1398,47 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertFalse(any(call[0] == "sonos" and "192.168.1.21" in call[1] for call in calls))
         self.assertIn(("alexa", "media_player.door_echo"), calls)
 
+    def test_doorbell_full_flow_test_runs_directly_after_ha_accepts_event(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+        fake.config = cfg.validate_and_normalize_config(
+            {
+                "ha_ip": "homeassistant",
+                "ha_port": "8123",
+                "ha_token": "token",
+                "ha_listener_enabled": True,
+                "doorbell_triggers": {
+                    "front": {
+                        "enabled": True,
+                        "source": "ha_state",
+                        "trigger_entity_id": "binary_sensor.viper_front_door_ring_motion",
+                        "rtsp_url": "rtsp://camera/front",
+                    },
+                    "back": {
+                        "enabled": True,
+                        "source": "ha_state",
+                        "trigger_entity_id": "binary_sensor.viper_back_door_ring_motion",
+                        "rtsp_url": "rtsp://camera/back",
+                    },
+                },
+            }
+        )
+        fake.notifications = []
+        fake.notify = lambda message, priority=0: fake.notifications.append(message)
+        fake.ha_listener = mock.Mock()
+        fake.ha_listener.status.return_value = {"connected": False, "last_error": "websocket offline"}
+        response = mock.Mock()
+
+        with patch.object(main.wx, "CallAfter", lambda func, *args, **kwargs: func(*args, **kwargs)), \
+             patch.object(main.requests, "post", return_value=response) as post, \
+             patch.object(main, "_handle_doorbell", return_value=("ok", 200)) as handle_doorbell:
+            main.ViperDashboard._run_doorbell_full_flow_test(fake, "back")
+
+        post.assert_called_once()
+        response.raise_for_status.assert_called_once()
+        handle_doorbell.assert_called_once_with("back door", "rtsp://camera/back", "back")
+        self.assertTrue(any("listener is not connected" in message for message in fake.notifications))
+        self.assertTrue(any("Running the full doorbell flow now" in message for message in fake.notifications))
+
     def test_fridge_broadcast_chime_uses_fridge_routing_for_all_speaker_types(self):
         calls = []
         config = cfg.validate_and_normalize_config(
@@ -1168,8 +1516,13 @@ class ViperReleaseTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Vacuum Controls", body)
         self.assertIn("Set suction speed", body)
+        self.assertNotIn("Experimental custom suction value", body)
+        self.assertNotIn("/remote/vacuum/custom_suction", body)
         self.assertIn("cinderella Mop mode", body)
         self.assertIn("cinderella Mop intensity", body)
+        self.assertIn("Room cleaning repeat count", body)
+        self.assertIn("/remote/vacuum/room_repeat", body)
+        self.assertIn("Apply room repeat count", body)
         self.assertNotIn("cinderella Dock Empty mode", body)
         self.assertIn("Turn on cinderella Dock Child lock", body)
         self.assertNotIn("Turn off cinderella Dock Child lock", body)
@@ -1189,10 +1542,26 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("Diagnostics", body)
         self.assertIn("Health status:", body)
         self.assertIn("Create Support Bundle", body)
+        self.assertIn("Save HA Snapshot", body)
         self.assertIn("Setup Status", body)
         self.assertIn("Core setup is ready.", body)
         self.assertIn("Run Safe Setup Smoke Test", body)
         self.assertIn("Restore Optional Items", body)
+
+    def test_remote_ha_snapshot_route_saves_snapshot(self):
+        main.dash_app = FakeDashboard()
+        main.dash_app.build_setup_next_action_summary = lambda: "Core setup is ready."
+        main.dash_app.build_setup_checklist_summary = lambda: "Setup Status"
+
+        with patch.object(main, "_save_current_ha_snapshot", return_value={
+            "ok": True,
+            "path": "C:/tmp/snapshot.json",
+            "diff": {"added": ["a"], "removed": [], "changed": []},
+        }):
+            response = self.client.post("/remote/diagnostics/ha_snapshot", follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("HA snapshot saved", response.get_data(as_text=True))
 
     def test_remote_setup_smoke_route_reports_pass_fix(self):
         main.dash_app = FakeDashboard()
@@ -1232,10 +1601,18 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("self.diagnostics_health_txt", tab_text)
         self.assertIn('label="Refresh Health Summary"', tab_text)
         self.assertIn("self.refresh_health_summary()", tab_text)
+        self.assertIn('label="Home Assistant Watchdog"', tab_text)
+        self.assertIn("self.ha_watchdog_txt", tab_text)
+        self.assertIn('label="Refresh HA Watchdog"', tab_text)
+        self.assertIn('label="Test HA Recovery Push"', tab_text)
         self.assertIn('label="Safe Smoke Test"', tab_text)
         self.assertIn('label="Run Safe Smoke Test"', tab_text)
         self.assertIn('label="Test Front Camera Frame"', tab_text)
         self.assertIn('label="Test Manual Broadcast"', tab_text)
+        self.assertIn('label="Test Pushover"', tab_text)
+        self.assertIn('label="Simulate Fridge Event"', tab_text)
+        self.assertIn('label="Simulate Vacuum Event"', tab_text)
+        self.assertIn('label="Save HA Snapshot"', tab_text)
 
     def test_safe_smoke_report_points_to_first_broken_item(self):
         fake = main.ViperDashboard.__new__(main.ViperDashboard)
@@ -1269,9 +1646,116 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("def on_run_safe_smoke_test", main_text)
         self.assertIn("def on_test_diagnostics_camera", main_text)
         self.assertIn("def on_test_diagnostics_manual_broadcast", main_text)
+        self.assertIn("def on_test_diagnostics_pushover", main_text)
+        self.assertIn("def on_test_ha_watchdog_push", main_text)
         self.assertIn("def on_test_diagnostics_chime", main_text)
+        self.assertIn("def on_simulate_diagnostics_fridge_event", main_text)
+        self.assertIn("def on_simulate_diagnostics_vacuum_event", main_text)
+        self.assertIn("def on_save_diagnostics_ha_snapshot", main_text)
         self.assertIn('_dispatch_broadcast_message(message, channel="manual")', main_text)
+        self.assertIn("audio._send_text_pushover", main_text)
+        self.assertIn("viper_ha_recovery.send_recovery_test_push", main_text)
         self.assertIn("audio.play_broadcast_chime(chime, channel)", main_text)
+        self.assertIn("route_state_change(self.config", main_text)
+        self.assertIn("save_ha_integration_snapshot", main_text)
+
+    def test_diagnostics_pushover_button_sends_test_notification(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+        fake.config = cfg.validate_and_normalize_config({
+            "pushover_enabled": True,
+            "pushover_user_key": "user",
+            "pushover_api_token": "token",
+        })
+        fake.messages = []
+        fake._finish_diagnostics_action = lambda message: fake.messages.append(message)
+
+        with patch.object(main.wx, "CallAfter", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)):
+            with patch.object(main.audio, "_send_text_pushover", return_value=True) as send_push:
+                main.ViperDashboard._run_diagnostics_pushover_test(fake)
+
+        send_push.assert_called_once()
+        self.assertEqual(fake.messages, ["Pushover test sent. Check your phone."])
+
+    def test_diagnostics_fridge_simulation_routes_and_dispatches(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+        fake.config = cfg.validate_and_normalize_config({})
+        fake.messages = []
+        fake._finish_diagnostics_action = lambda message: fake.messages.append(message)
+        fake._dispatch_broadcast_message = lambda message, channel="manual": {
+            "ok": True,
+            "message": f"{channel}:{message}",
+        }
+
+        with patch.object(main.wx, "CallAfter", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)), \
+             patch.object(main.discovery, "validate_entity_exists", return_value={"ok": True, "exists": True, "entity": {"state": "off"}}):
+            main.ViperDashboard._run_diagnostics_fridge_event_simulation(fake)
+
+        self.assertEqual(len(fake.messages), 1)
+        self.assertIn("Fridge event simulation", fake.messages[0])
+        self.assertIn("Route logic: ok", fake.messages[0])
+        self.assertIn("dispatch ok", fake.messages[0])
+
+    def test_diagnostics_vacuum_simulation_routes_and_dispatches(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+        fake.config = cfg.validate_and_normalize_config({})
+        fake.messages = []
+        fake._finish_diagnostics_action = lambda message: fake.messages.append(message)
+        fake._dispatch_cinderella_event = lambda event, error="", source="vacuum": event == "departure"
+
+        with patch.object(main.wx, "CallAfter", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)), \
+             patch.object(main.discovery, "validate_entity_exists", return_value={"ok": True, "exists": True, "entity": {"state": "idle"}}):
+            main.ViperDashboard._run_diagnostics_vacuum_event_simulation(fake)
+
+        self.assertEqual(len(fake.messages), 1)
+        self.assertIn("Vacuum event simulation", fake.messages[0])
+        self.assertIn("Route logic: ok", fake.messages[0])
+        self.assertIn("dispatch ok", fake.messages[0])
+
+    def test_filter_check_uses_runtime_ha_settings_and_recovers_address(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+        fake.config = cfg.validate_and_normalize_config({"ha_ip": "homeassistant", "ha_port": "8123", "ha_token": "token"})
+        fake.messages = []
+        fake.notify = lambda message, priority=0, *args, **kwargs: fake.messages.append(message)
+        fake.check_and_repair_home_assistant_address = lambda: fake.config.update({"ha_ip": "192.168.4.50"}) or {"ok": True, "changed": True}
+        calls = []
+
+        def fake_get_entity(entity_id, **kwargs):
+            calls.append(kwargs.get("ha_ip"))
+            if kwargs.get("ha_ip") == "homeassistant":
+                return {"ok": False, "error": "unreachable", "message": "Home Assistant is unreachable.", "url": "http://homeassistant:8123/api/states/sensor.refrigerator_water_filter_usage"}
+            return {
+                "ok": True,
+                "entity": {
+                    "entity_id": entity_id,
+                    "state": "10",
+                    "attributes": {"friendly_name": "Water filter usage"},
+                },
+            }
+
+        with patch.object(main.discovery, "get_entity", side_effect=fake_get_entity), \
+             patch.object(main, "safe_submit", side_effect=lambda func, *args, **kwargs: None):
+            main.ViperDashboard._run_filter(fake)
+
+        self.assertEqual(calls, ["homeassistant", "192.168.4.50"])
+        self.assertIn("Water filter usage: 10 percent.", fake.messages)
+
+    def test_filter_check_reports_unresolved_ha_hostname_clearly(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+        fake.config = cfg.validate_and_normalize_config({"ha_ip": "homeassistant", "ha_port": "8123", "ha_token": "token"})
+        fake.messages = []
+        fake.notify = lambda message, priority=0, *args, **kwargs: fake.messages.append(message)
+        fake.check_and_repair_home_assistant_address = lambda: {"ok": False, "changed": False}
+
+        with patch.object(main.discovery, "get_entity", return_value={
+                "ok": False,
+                "error": "unreachable",
+                "message": "Home Assistant is unreachable.",
+                "url": "http://homeassistant:8123/api/states/sensor.refrigerator_water_filter_usage",
+             }), \
+             patch.object(main.discovery, "resolve_host_to_ip", return_value=""):
+            main.ViperDashboard._run_filter(fake)
+
+        self.assertTrue(any("does not resolve from Windows" in message for message in fake.messages))
 
     def test_remote_page_renders_doorbell_video_controls(self):
         main.dash_app = FakeDashboard()
@@ -1901,6 +2385,18 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(payload["entity_id"], "vacuum.cinderella")
         self.assertEqual(payload["command"], "app_segment_clean")
         self.assertEqual(payload["params"], [{"segments": [7, 1], "repeat": 3}])
+        self.assertEqual(main.dash_app.config["vacuum_room_repeat_count"], 3)
+
+    def test_web_room_repeat_count_can_be_saved_without_loaded_rooms(self):
+        main.dash_app = FakeDashboard()
+
+        response = self.client.post(
+            "/remote/vacuum/room_repeat",
+            data={"vacuum_entity": "vacuum.cinderella", "repeat": "3"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(main.dash_app.config["vacuum_room_repeat_count"], 3)
 
     def test_web_room_clean_applies_selected_cleaning_mode_first(self):
         main.dash_app = FakeDashboard()
@@ -1925,6 +2421,7 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_web_vacuum_context_includes_state_specific_actions_and_modes(self):
         main.dash_app = FakeDashboard()
+        main.dash_app.config["vacuum_room_repeat_count"] = 2
         with main.app.test_request_context("/remote?vacuum_entity=vacuum.cinderella"):
             with patch.object(main.discovery, "get_ha_states", return_value={"ok": True, "states": _sample_states()}):
                 context = main._build_web_vacuum_context()
@@ -1933,6 +2430,7 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("vacuum/start", action_services)
         self.assertNotIn("vacuum/pause", action_services)
         self.assertEqual(context["cleaning_mode"], "vacuum_mop")
+        self.assertEqual(context["room_repeat_count"], 2)
         self.assertIn({"value": "mop_only", "label": "Mop only"}, context["cleaning_modes"])
 
     def test_web_vacuum_setting_routes_select_number_and_child_lock(self):
@@ -2827,6 +3325,16 @@ class ViperReleaseTests(unittest.TestCase):
     def _setup_broadcast_dashboard(self, channels=None):
         main.is_shutting_down.clear()
         fake = FakeDashboard()
+        fake.config["speakers"] = {
+            "Kitchen": {
+                "id": "media_player.kitchen",
+                "type": "ha",
+                "enabled": True,
+                "doorbell": False,
+                "utilities": False,
+                "fridge": True,
+            }
+        }
         fake.config["broadcast_channels"] = channels or {
             "default": {"mode": "speak", "chime": ""},
             "fridge_open": {"mode": "chime", "chime": "fridge-open.mp3"},
@@ -2868,7 +3376,44 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["path"], "chime")
         self.assertEqual(result["resolved_channel"], "fridge_open")
+        self.assertEqual(result["target_count"], 1)
         self.assertEqual(calls, [("chime", ("fridge-open.mp3", "fridge_open"))])
+
+    def test_broadcast_chime_reports_no_enabled_fridge_targets(self):
+        fake = self._setup_broadcast_dashboard()
+        fake.config["speakers"]["Kitchen"]["enabled"] = False
+        calls = []
+
+        with patch.object(main.audio, "play_broadcast_chime", side_effect=lambda *args: calls.append(("chime", args))), \
+             patch.object(main.audio, "play_notification", side_effect=lambda *args: calls.append(("tts", args))), \
+             patch.object(main, "safe_submit", side_effect=self._immediate_future_submit):
+            result = main._dispatch_broadcast_message("The refrigerator door is open.", channel="fridge_open")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["path"], "no_chime_targets")
+        self.assertEqual(result["status_code"], 409)
+        self.assertEqual(result["target_count"], 0)
+        self.assertEqual(calls, [])
+
+    def test_broadcast_push_still_sends_pushover_for_chime_channel(self):
+        self._setup_broadcast_dashboard()
+        calls = []
+
+        with patch.object(main.audio, "play_broadcast_chime", side_effect=lambda *args: calls.append(("chime", args))), \
+             patch.object(main.audio, "play_notification", side_effect=lambda *args: calls.append(("tts", args))), \
+             patch.object(main.audio, "_send_text_pushover", side_effect=lambda *args: calls.append(("push", args))), \
+             patch.object(main, "safe_submit", side_effect=self._immediate_future_submit):
+            result = main._dispatch_broadcast_message("The refrigerator door is open.", push=True, channel="fridge_open")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["path"], "chime")
+        self.assertEqual(
+            calls,
+            [
+                ("chime", ("fridge-open.mp3", "fridge_open")),
+                ("push", ("Home Alert", "The refrigerator door is open.")),
+            ],
+        )
 
     def test_global_mute_broadcast_logs_without_audio(self):
         fake = self._setup_broadcast_dashboard()
@@ -3044,6 +3589,57 @@ class ViperReleaseTests(unittest.TestCase):
             [{"type": "broadcast", "channel": "fridge_open", "message": "The refrigerator door is open."}],
         )
 
+    def test_ha_listener_routes_fridge_state_aliases(self):
+        config = cfg.validate_and_normalize_config({})
+
+        aliases = [
+            ("binary_sensor.refrigerator_fridge_door", "off", "opened", "fridge_open", "The refrigerator door is open."),
+            ("binary_sensor.refrigerator_fridge_door", "true", "clear", "fridge_closed", "The refrigerator door is closed."),
+            ("binary_sensor.refrigerator_freezer_door", "false", "detected", "freezer_open", "The freezer door is open."),
+            ("binary_sensor.refrigerator_freezer_door", "open", "false", "freezer_closed", "The freezer door is closed."),
+        ]
+
+        for entity_id, old_state, new_state, channel, message in aliases:
+            with self.subTest(entity_id=entity_id, new_state=new_state):
+                self.assertEqual(
+                    ha_listener.route_state_change(config, entity_id, {"state": old_state}, {"state": new_state}),
+                    [{"type": "broadcast", "channel": channel, "message": message}],
+                )
+
+    def test_ha_listener_websocket_payload_dispatches_fridge_broadcast(self):
+        actions = []
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: cfg.validate_and_normalize_config({}),
+            actions.append,
+        )
+
+        listener._handle_ws_payload(
+            {
+                "type": "event",
+                "event": {
+                    "event_type": "state_changed",
+                    "data": {
+                        "entity_id": "binary_sensor.refrigerator_fridge_door",
+                        "old_state": {"state": "off"},
+                        "new_state": {"state": "on"},
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            actions,
+            [{"type": "broadcast", "channel": "fridge_open", "message": "The refrigerator door is open."}],
+        )
+        self.assertEqual(listener.status()["last_action_at"] > 0, True)
+        status = listener.status()
+        self.assertEqual(status["last_event_entity"], "binary_sensor.refrigerator_fridge_door")
+        self.assertEqual(status["last_event_old_state"], "off")
+        self.assertEqual(status["last_event_new_state"], "on")
+        self.assertEqual(status["last_event_new_normalized"], "on")
+        self.assertEqual(status["last_event_action_count"], 1)
+        self.assertEqual(status["last_routed_action"]["channel"], "fridge_open")
+
     def test_ha_listener_fridge_poll_catches_missed_transition(self):
         actions = []
         listener = ha_listener.HomeAssistantEventListener(
@@ -3072,6 +3668,78 @@ class ViperReleaseTests(unittest.TestCase):
                 {"type": "broadcast", "channel": "fridge_closed", "message": "The refrigerator door is closed."},
             ],
         )
+
+    def test_ha_listener_fridge_poll_catches_alias_transitions(self):
+        actions = []
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: cfg.validate_and_normalize_config({}),
+            actions.append,
+        )
+        states = {
+            "binary_sensor.refrigerator_fridge_door": "false",
+            "binary_sensor.refrigerator_freezer_door": "false",
+        }
+
+        def fake_state(_ha_ip, _ha_port, _token, entity_id):
+            return {"state": states[entity_id]}
+
+        with patch.object(listener, "_fetch_ha_state", side_effect=fake_state):
+            asyncio.run(listener._refresh_fridge_states("ha.local", "8123", "token", recover_open=False))
+            states["binary_sensor.refrigerator_fridge_door"] = "true"
+            asyncio.run(listener._refresh_fridge_states("ha.local", "8123", "token", recover_open=False))
+            states["binary_sensor.refrigerator_fridge_door"] = "clear"
+            asyncio.run(listener._refresh_fridge_states("ha.local", "8123", "token", recover_open=False))
+
+        self.assertEqual(
+            actions,
+            [
+                {"type": "broadcast", "channel": "fridge_open", "message": "The refrigerator door is open."},
+                {"type": "broadcast", "channel": "fridge_closed", "message": "The refrigerator door is closed."},
+            ],
+        )
+
+    def test_ha_listener_poll_health_resets_after_success(self):
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: cfg.validate_and_normalize_config({}),
+            lambda action: None,
+        )
+
+        listener._record_poll_health({"checked": True, "successes": 0, "failures": 2, "errors": ["timeout"]})
+        self.assertEqual(listener.status()["poll_failure_count"], 1)
+        self.assertEqual(listener.status()["last_poll_error"], "timeout")
+
+        listener._record_poll_health({"checked": True, "successes": 1, "failures": 1, "errors": ["one entity missing"]})
+
+        self.assertEqual(listener.status()["poll_failure_count"], 0)
+        self.assertEqual(listener.status()["last_poll_error"], "")
+        self.assertGreater(listener.status()["last_successful_poll_at"], 0)
+
+    def test_ha_listener_poll_watchdog_forces_reconnect_after_repeated_failures(self):
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: cfg.validate_and_normalize_config({}),
+            lambda action: None,
+        )
+
+        for _ in range(ha_listener.POLL_RECONNECT_FAILURE_LIMIT):
+            listener._record_poll_health({"checked": True, "successes": 0, "failures": 2, "errors": ["timeout"]})
+
+        with self.assertRaises(RuntimeError) as raised:
+            listener._raise_if_poll_watchdog_tripped()
+
+        self.assertIn("Home Assistant polling failed", str(raised.exception))
+
+    def test_ha_listener_fridge_poll_reports_failures_when_all_reads_fail(self):
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: cfg.validate_and_normalize_config({}),
+            lambda action: None,
+        )
+
+        with patch.object(listener, "_fetch_ha_state", side_effect=TimeoutError("timeout")):
+            result = asyncio.run(listener._refresh_fridge_states("ha.local", "8123", "token", recover_open=False))
+
+        self.assertEqual(result["successes"], 0)
+        self.assertEqual(result["failures"], 2)
+        self.assertTrue(result["errors"])
 
     def test_ha_listener_ignores_repeated_active_doorbell_state(self):
         config = cfg.validate_and_normalize_config(
@@ -3114,6 +3782,116 @@ class ViperReleaseTests(unittest.TestCase):
 
         self.assertEqual(status_actions, [{"type": "cinderella", "event": "washing", "error": "", "source": "vacuum"}])
         self.assertEqual(error_actions, [{"type": "cinderella", "event": "error", "error": "duct_blockage", "source": "dock"}])
+
+    def test_ha_listener_routes_roborock_status_aliases_and_custom_entities(self):
+        config = cfg.validate_and_normalize_config(
+            {
+                "cinderella_enabled": True,
+                "cinderella_status_entity": "sensor.saros_status",
+                "cinderella_vacuum_error_entity": "sensor.saros_error",
+                "cinderella_dock_error_entity": "sensor.saros_dock_error",
+                "cinderella_mop_drying_entity": "binary_sensor.saros_mop_drying",
+            }
+        )
+
+        self.assertEqual(
+            ha_listener.route_state_change(config, "sensor.saros_status", {"state": "idle"}, {"state": "room_cleaning"}),
+            [{"type": "cinderella", "event": "departure", "error": "", "source": "vacuum"}],
+        )
+        self.assertEqual(
+            ha_listener.route_state_change(config, "sensor.saros_status", {"state": "cleaning"}, {"state": "returning_to_dock"}),
+            [{"type": "cinderella", "event": "returning", "error": "", "source": "vacuum"}],
+        )
+        self.assertEqual(
+            ha_listener.route_state_change(config, "binary_sensor.saros_mop_drying", {"state": "false"}, {"state": "true"}),
+            [{"type": "cinderella", "event": "drying", "error": "", "source": "dock"}],
+        )
+        self.assertEqual(
+            ha_listener.route_state_change(config, "sensor.saros_error", {"state": "ok"}, {"state": "brush_jammed"}),
+            [{"type": "cinderella", "event": "error", "error": "brush_jammed", "source": "vacuum"}],
+        )
+
+    def test_ha_listener_websocket_payload_dispatches_vacuum_action(self):
+        actions = []
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: cfg.validate_and_normalize_config({"cinderella_enabled": True}),
+            actions.append,
+        )
+
+        listener._handle_ws_payload(
+            {
+                "type": "event",
+                "event": {
+                    "event_type": "state_changed",
+                    "data": {
+                        "entity_id": "sensor.cinderella_status",
+                        "old_state": {"state": "idle"},
+                        "new_state": {"state": "cleaning"},
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(actions, [{"type": "cinderella", "event": "departure", "error": "", "source": "vacuum"}])
+        self.assertEqual(listener.status()["last_action_at"] > 0, True)
+
+    def test_ha_listener_vacuum_poll_catches_missed_transition(self):
+        actions = []
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: cfg.validate_and_normalize_config({"cinderella_enabled": True}),
+            actions.append,
+        )
+        states = {
+            "sensor.cinderella_status": "idle",
+            "sensor.cinderella_vacuum_error": "ok",
+            "sensor.cinderella_dock_dock_error": "ok",
+            "binary_sensor.cinderella_dock_mop_drying": "off",
+        }
+
+        def fake_state(_ha_ip, _ha_port, _token, entity_id):
+            return {"state": states[entity_id]}
+
+        with patch.object(listener, "_fetch_ha_state", side_effect=fake_state):
+            asyncio.run(listener._refresh_cinderella_states("ha.local", "8123", "token", recover_active=False))
+            states["sensor.cinderella_status"] = "room_cleaning"
+            asyncio.run(listener._refresh_cinderella_states("ha.local", "8123", "token", recover_active=False))
+            states["sensor.cinderella_status"] = "returning_to_dock"
+            asyncio.run(listener._refresh_cinderella_states("ha.local", "8123", "token", recover_active=False))
+
+        self.assertEqual(
+            actions,
+            [
+                {"type": "cinderella", "event": "departure", "error": "", "source": "vacuum"},
+                {"type": "cinderella", "event": "returning", "error": "", "source": "vacuum"},
+            ],
+        )
+
+    def test_ha_listener_vacuum_poll_recovers_active_errors_only_on_connect(self):
+        actions = []
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: cfg.validate_and_normalize_config({"cinderella_enabled": True}),
+            actions.append,
+        )
+        states = {
+            "sensor.cinderella_status": "cleaning",
+            "sensor.cinderella_vacuum_error": "ok",
+            "sensor.cinderella_dock_dock_error": "duct_blockage",
+            "binary_sensor.cinderella_dock_mop_drying": "true",
+        }
+
+        def fake_state(_ha_ip, _ha_port, _token, entity_id):
+            return {"state": states[entity_id]}
+
+        with patch.object(listener, "_fetch_ha_state", side_effect=fake_state):
+            asyncio.run(listener._refresh_cinderella_states("ha.local", "8123", "token", recover_active=True))
+
+        self.assertEqual(
+            actions,
+            [
+                {"type": "cinderella", "event": "error", "error": "duct_blockage", "source": "dock"},
+                {"type": "cinderella", "event": "drying", "error": "", "source": "dock"},
+            ],
+        )
 
     def test_ha_listener_does_not_derive_ring_rtsp_url_from_flat_fields(self):
         triggers = ha_listener.normalize_doorbell_triggers(
@@ -3346,6 +4124,58 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("HA Core API: not responding", text)
         self.assertIn("HA Observer: responding", text)
 
+    def test_health_summary_includes_ha_event_health(self):
+        diag = diagnostics.collect_diagnostics(
+            cfg.validate_and_normalize_config({}),
+            ha_listener_status={
+                "connected": True,
+                "last_event_entity": "binary_sensor.refrigerator_fridge_door",
+                "last_event_old_state": "off",
+                "last_event_new_state": "on",
+                "last_event_old_normalized": "off",
+                "last_event_new_normalized": "on",
+                "last_event_action_count": 1,
+            },
+        )
+
+        text = diagnostics.health_summary_text(diag)
+
+        self.assertIn("HA event health:", text)
+        self.assertIn("Last event entity: binary_sensor.refrigerator_fridge_door", text)
+        self.assertIn("Last routed action count: 1", text)
+
+    def test_ha_integration_snapshot_diff_tracks_entity_shape_changes(self):
+        config = cfg.validate_and_normalize_config({})
+        states_before = [
+            {
+                "entity_id": "binary_sensor.refrigerator_fridge_door",
+                "state": "off",
+                "attributes": {"friendly_name": "Fridge door"},
+            }
+        ]
+        states_after = [
+            {
+                "entity_id": "binary_sensor.refrigerator_fridge_door",
+                "state": "on",
+                "attributes": {"friendly_name": "Fridge door"},
+            },
+            {
+                "entity_id": "sensor.cinderella_status",
+                "state": "room_cleaning",
+                "attributes": {"friendly_name": "Cinderella status"},
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            first = diagnostics.save_ha_integration_snapshot(config, ha_states=states_before, output_dir=tmp)
+            second = diagnostics.save_ha_integration_snapshot(config, ha_states=states_after, output_dir=tmp)
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertIn("sensor.cinderella_status", second["diff"]["added"])
+        changed = {item["entity_id"]: item for item in second["diff"]["changed"]}
+        self.assertEqual(changed["binary_sensor.refrigerator_fridge_door"]["fields"]["state"]["old"], "off")
+        self.assertEqual(changed["binary_sensor.refrigerator_fridge_door"]["fields"]["state"]["new"], "on")
+
     def test_refrigerator_diagnostics_flags_stale_fridge_sensor_when_freezer_moves(self):
         states = [
             {
@@ -3394,6 +4224,171 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(diag["fridge_sensor_health"]["status"], "fridge_sensor_stale")
         self.assertIn("Fridge sensor health: fridge_sensor_stale", text)
         self.assertIn("Freezer door events are reaching Home Assistant", text)
+
+    def test_refrigerator_event_health_flags_door_stream_stale_against_power_updates(self):
+        states = [
+            {
+                "entity_id": "binary_sensor.refrigerator_fridge_door",
+                "state": "off",
+                "last_updated": "2026-06-18T19:04:12+00:00",
+            },
+            {
+                "entity_id": "binary_sensor.refrigerator_freezer_door",
+                "state": "off",
+                "last_updated": "2026-06-18T18:22:47+00:00",
+            },
+            {
+                "entity_id": "sensor.refrigerator_power",
+                "state": "133",
+                "last_updated": "2026-06-19T01:12:47+00:00",
+            },
+        ]
+
+        result = viper_health.refrigerator_event_stream_health(
+            states,
+            now=viper_health.parse_ha_datetime("2026-06-19T01:21:00+00:00"),
+            stale_seconds=90 * 60,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "door_stream_stale")
+        self.assertIn("Viper should reload the SmartThings entry", result["message"])
+
+    def test_ha_listener_watchdog_reloads_stale_smartthings_entry(self):
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: {
+                "ha_smartthings_recovery_enabled": True,
+                "ha_smartthings_stale_minutes": 90,
+                "ha_smartthings_reload_cooldown_minutes": 60,
+            },
+            lambda action: None,
+        )
+        states = [
+            {
+                "entity_id": "binary_sensor.refrigerator_fridge_door",
+                "state": "off",
+                "last_updated": "2026-06-18T19:04:12+00:00",
+            },
+            {
+                "entity_id": "binary_sensor.refrigerator_freezer_door",
+                "state": "off",
+                "last_updated": "2026-06-18T18:22:47+00:00",
+            },
+            {
+                "entity_id": "sensor.refrigerator_power",
+                "state": "133",
+                "last_updated": "2026-06-19T01:12:47+00:00",
+            },
+        ]
+
+        async def fake_states(*_args):
+            return states, []
+
+        async def fake_entry(*_args):
+            return {"ok": True, "config_entry_id": "entry123", "platform": "smartthings"}
+
+        with patch.object(listener, "_fetch_refrigerator_health_states", side_effect=fake_states), \
+             patch.object(viper_health, "find_config_entry_for_entity", side_effect=fake_entry), \
+             patch.object(viper_health, "reload_config_entry", return_value={"ok": True, "message": "reloaded"}):
+            result = asyncio.run(listener._run_critical_health_watchdog("ha", "8123", "token"))
+
+        status = listener.status()
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["reloaded"])
+        self.assertEqual(status["smartthings_reload_count"], 1)
+        self.assertEqual(status["last_smartthings_reload_result"], "reloaded")
+
+    def test_beginner_health_lines_explain_watchdog_status(self):
+        diag = diagnostics.collect_diagnostics(
+            cfg.validate_and_normalize_config({"speakers": {"Kitchen": {"enabled": True}}}),
+            ha_listener_status={
+                "connected": True,
+                "critical_health_status": "door_stream_stale",
+                "critical_health_message": "Door stream looks stale.",
+                "last_smartthings_reload_at": 1,
+                "last_smartthings_reload_result": "reloaded",
+            },
+        )
+
+        text = diagnostics.health_summary_text(diag)
+
+        self.assertIn("Plain-English status:", text)
+        self.assertIn("Critical watchdog: door_stream_stale", text)
+        self.assertIn("Last automatic SmartThings reload:", text)
+
+    def test_health_journal_records_and_counts_recent_recoveries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "events.jsonl"
+            viper_health.record_health_event(
+                "smartthings_reload",
+                "ok",
+                "Reloaded refrigerator SmartThings.",
+                path=path,
+                now=viper_health.parse_ha_datetime("2026-06-19T01:00:00+00:00"),
+            )
+            viper_health.record_health_event(
+                "manual_smartthings_reload",
+                "ok",
+                "Manual reload.",
+                path=path,
+                now=viper_health.parse_ha_datetime("2026-06-19T01:05:00+00:00"),
+            )
+
+            events = viper_health.recent_health_events(path=path)
+            count = viper_health.count_recent_health_events(
+                "smartthings_reload",
+                path=path,
+                now=viper_health.parse_ha_datetime("2026-06-19T02:00:00+00:00"),
+            )
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual(count, 1)
+        self.assertEqual(events[0]["event_type"], "smartthings_reload")
+
+    def test_critical_workflow_summary_flags_missing_fridge_route(self):
+        config = cfg.validate_and_normalize_config({
+            "speakers": {"Kitchen": {"enabled": True, "doorbell": True, "utilities": True, "fridge": False}},
+        })
+        summary = viper_health.critical_workflow_status(
+            config,
+            diag={
+                "ha_listener": {"connected": True, "critical_health_status": "ok", "last_host": "ha:8123"},
+                "ha_connection": {"checked": True, "ok": True, "message": "ok"},
+                "fridge_sensor_health": {"checked": True, "ok": True, "message": "ok"},
+                "ffmpeg": {"available": True},
+            },
+        )
+
+        route = next(item for item in summary["items"] if item["name"] == "Fridge chime route")
+        self.assertEqual(summary["overall"], "BROKEN")
+        self.assertEqual(route["status"], "BROKEN")
+        self.assertIn("No enabled speaker", route["message"])
+
+    def test_diagnostics_text_includes_critical_workflows_and_recovery_journal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            viper_health.record_health_event(
+                "smartthings_reload",
+                "ok",
+                "Reloaded refrigerator SmartThings.",
+                path=data_dir / viper_health.HEALTH_JOURNAL_FILE,
+            )
+            with patch.object(cfg, "DATA_DIR", data_dir), patch.object(diagnostics, "ffmpeg_status", return_value={"available": True, "configured": "ffmpeg", "resolved": "ffmpeg"}):
+                diag = diagnostics.collect_diagnostics(
+                    cfg.validate_and_normalize_config({
+                        "ha_ip": "192.168.4.49",
+                        "ha_token": "token",
+                        "speakers": {"Entry": {"id": "media_player.entry", "enabled": True, "fridge": True}},
+                    }),
+                    ha_listener_status={"connected": True, "critical_health_status": "ok", "last_host": "ha:8123"},
+                    ha_connection={"checked": True, "ok": True, "message": "ok"},
+                )
+                text = diagnostics.health_summary_text(diag)
+
+        self.assertIn("Critical workflow canaries:", text)
+        self.assertIn("Critical workflows:", text)
+        self.assertIn("Recent health recovery journal:", text)
+        self.assertIn("Reloaded refrigerator SmartThings.", text)
 
     def test_diagnostics_health_summary_splits_active_and_historical_issues(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4535,6 +5530,7 @@ class ViperReleaseTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         watch = (root / "watch_ha_health.ps1").read_text(encoding="utf-8")
         harden = (root / "harden_ha_virtualbox.ps1").read_text(encoding="utf-8")
+        vm_watchdog = (root / "watch_home_assistant_vm.ps1").read_text(encoding="utf-8")
 
         self.assertIn("core_hung_vm_alive", watch)
         self.assertIn("4357", watch)
@@ -4542,6 +5538,147 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("--hostiocache on", harden)
         self.assertIn("UseVirtioNet", harden)
         self.assertIn("Windows Hypervisor/Hyper-V", harden)
+        self.assertIn("viper_ha_recovery.py", vm_watchdog)
+        self.assertIn("ViperVision.exe", vm_watchdog)
+        self.assertIn("--ha-recovery-once", vm_watchdog)
+        self.assertIn("--compact", vm_watchdog)
+        self.assertIn("Viper HA recovery engine", vm_watchdog)
+
+    def test_ha_recovery_classifies_virtualbox_driver_failure(self):
+        result = ha_recovery.classify_vbox_start_error(
+            "NtCreateFile(\\Device\\VBoxDrvStub) failed: STATUS_OBJECT_NAME_NOT_FOUND"
+        )
+
+        self.assertEqual(result["state"], "vbox_driver_broken")
+        self.assertIn("VirtualBox core driver", result["message"])
+
+    def test_ha_recovery_starts_powered_off_vm_and_sends_status_pushes(self):
+        states = [
+            {
+                "ok": False,
+                "state": "vm_stopped",
+                "message": "Home Assistant VM is poweroff.",
+                "severity": "broken",
+                "ha_health": {"ok": False},
+                "vm": {"state": "poweroff"},
+            },
+            {
+                "ok": True,
+                "state": "healthy",
+                "message": "Home Assistant Core and Observer are responding.",
+                "severity": "ok",
+                "ha_health": {"ok": True},
+                "vm": {"state": "running"},
+            },
+        ]
+        pushes = []
+        repairs = []
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(ha_recovery, "diagnose", side_effect=states), \
+             patch.object(ha_recovery, "_vbox", side_effect=lambda args, timeout=60: repairs.append(args) or {"ok": True, "output": ""}), \
+             patch.object(ha_recovery, "_record", return_value={}):
+            result = ha_recovery.repair_once(
+                notifier=lambda title, message: pushes.append((title, message)) or True,
+                state_path=Path(tmpdir) / "state.json",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "start_vm")
+        self.assertIn(["startvm", ha_recovery.VM_NAME, "--type", "headless"], repairs)
+        self.assertEqual([title for title, _message in pushes], [
+            "Viper HA problem detected",
+            "Viper HA recovery started",
+            "Viper HA recovery fixed",
+        ])
+
+    def test_ha_recovery_waits_before_resetting_running_unreachable_vm(self):
+        diagnosis = {
+            "ok": False,
+            "state": "ha_unreachable",
+            "message": "Home Assistant is unreachable.",
+            "severity": "broken",
+            "ha_health": {"ok": False},
+            "vm": {"state": "running"},
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(ha_recovery, "diagnose", return_value=diagnosis), \
+             patch.object(ha_recovery, "_vbox") as vbox, \
+             patch.object(ha_recovery, "_record", return_value={}):
+            result = ha_recovery.repair_once(
+                notifier=lambda title, message: True,
+                state_path=Path(tmpdir) / "state.json",
+                reset_after_failures=3,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["action"], "wait")
+        vbox.assert_not_called()
+
+    def test_release_bundle_includes_ha_recovery_watchdog(self):
+        root = Path(__file__).resolve().parents[1]
+        spec = (root / "ViperVision.spec").read_text(encoding="utf-8")
+        main_text = (root / "main.pyw").read_text(encoding="utf-8")
+
+        self.assertIn('("watch_home_assistant_vm.ps1", ".")', spec)
+        self.assertIn('("run_ha_watchdog_hidden.vbs", ".")', spec)
+        self.assertIn("--ha-recovery-once", main_text)
+        self.assertIn("--ha-recovery-test-push", main_text)
+        self.assertIn("ha_recovery.repair_once", main_text)
+
+    def test_ha_recovery_compact_result_omits_raw_virtualbox_dump(self):
+        result = {
+            "ok": True,
+            "action": "none",
+            "message": "healthy",
+            "before": {
+                "ok": True,
+                "state": "healthy",
+                "message": "ok",
+                "admin": True,
+                "ha_health": {
+                    "core": {"ok": True, "status_code": 200, "elapsed_ms": 12, "message": "HTTP 200."},
+                    "observer": {"ok": True, "status_code": 200, "elapsed_ms": 4, "message": "HTTP 200."},
+                },
+                "vm": {"ok": True, "state": "running", "raw": {"output": "very long raw dump"}},
+                "services": {"VBoxSDS": "running", "vboxsup": "running"},
+                "virtualbox": {"installed": True, "version": "7.2.10", "path": "VBoxManage.exe"},
+            },
+        }
+        result["after"] = result["before"]
+
+        compact = ha_recovery.compact_result(result)
+        line = ha_recovery.compact_status_line(result)
+
+        self.assertTrue(compact["ok"])
+        self.assertEqual(compact["after"]["vm"]["state"], "running")
+        self.assertNotIn("raw", compact["after"]["vm"])
+        self.assertIn("state=healthy", line)
+        self.assertIn("vm=running", line)
+
+    def test_diagnostics_watchdog_status_text_is_readable(self):
+        status = {
+            "installed": True,
+            "state": "Ready",
+            "silent": True,
+            "run_level": "Highest",
+            "last_run_time": "6/21/2026 8:06:35 PM",
+            "last_task_result": "0",
+            "next_run_time": "6/21/2026 8:07:34 PM",
+            "action_execute": "C:\\WINDOWS\\System32\\wscript.exe",
+            "action_arguments": '"C:\\viper_publish_work\\run_ha_watchdog_hidden.vbs"',
+            "last_recovery_state": {"failures": 0, "last_problem_state": ""},
+            "message": "Watchdog task is installed and last run was clean.",
+            "recent_log_lines": ["ok=True action=none state=healthy core=200 observer=200 vm=running"],
+        }
+
+        text = diagnostics.ha_watchdog_status_text(status)
+
+        self.assertIn("Installed: yes", text)
+        self.assertIn("Silent runner: yes", text)
+        self.assertIn("Last result: 0", text)
+        self.assertIn("Recent watchdog log:", text)
 
 
 if __name__ == "__main__":

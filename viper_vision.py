@@ -7,6 +7,7 @@ import time
 import threading
 import requests
 import base64
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +59,8 @@ _MAX_IMAGE_DIM = 800
 # than enough to catch a 5fps stream the moment a good frame lands.
 _FRAME_POLL_INTERVAL = 0.05
 _GREEN_ARTIFACT_PIXEL_FRACTION = 0.03
+_FAST_FIRST_FRAME_STRONG_MARGIN = 1.35
+_FAST_LATER_FRAME_STRONG_MARGIN = 1.10
 _BACKGROUND_REFINEMENT_FRAME_COUNT = 2
 _BACKGROUND_REFINEMENT_FRAME_DELAY = 0.35
 
@@ -76,6 +79,20 @@ LEGACY_GEMINI_VISION_MODELS = {
 }
 _video_followup_last = {"front": 0.0, "back": 0.0}
 _video_followup_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class VideoFollowupDecision:
+    run: bool
+    reason: str
+    markers: tuple[str, ...] = ()
+
+    def __bool__(self):
+        return self.run
+
+    @property
+    def marker_text(self) -> str:
+        return ",".join(self.markers) if self.markers else "none"
 
 
 def normalize_video_analysis_settings(config_data=None):
@@ -194,6 +211,22 @@ def _frame_passes_sanity_check(frame_path: Path) -> bool:
         return False
 
 
+def _rtsp_sequence_number(frame_path: Path) -> int:
+    stem = frame_path.stem
+    try:
+        return int(stem.rsplit("_", 1)[-1])
+    except (TypeError, ValueError):
+        return 0
+
+
+def _fast_frame_ready_for_first_pass(frame_path: Path, size: int, min_bytes: int) -> bool:
+    """Prefer the first stable burst frame, not merely the first valid JPEG."""
+    sequence = _rtsp_sequence_number(frame_path)
+    if sequence <= 1:
+        return size >= int(min_bytes * _FAST_FIRST_FRAME_STRONG_MARGIN)
+    return size >= int(min_bytes * _FAST_LATER_FRAME_STRONG_MARGIN)
+
+
 # ==========================================
 # GEMINI CONNECTION WARMUP
 # ==========================================
@@ -303,7 +336,16 @@ def grab_frame(
                             if usable:
                                 largest_size = size
                                 largest_frame = str(frame)
-                        if size >= min_bytes:
+                        strong_enough = size >= min_bytes
+                        if fast_mode and strong_enough:
+                            strong_enough = _fast_frame_ready_for_first_pass(frame, size, min_bytes)
+                            if not strong_enough:
+                                logging.info(
+                                    "[RTSP] Holding borderline fast frame %s size=%s threshold=%s elapsed=%.2fs",
+                                    frame.name, size, min_bytes, time.time() - start_time,
+                                )
+
+                        if strong_enough:
                             usable = sanity_checked_frames.get(str(frame))
                             if usable is None:
                                 usable = _frame_passes_sanity_check(frame)
@@ -833,39 +875,74 @@ def _description_is_service_unavailable(text: str) -> bool:
     return (text or "").strip().lower() == "the ai service is currently unavailable."
 
 
-def _description_needs_video_followup(text: str) -> bool:
+def _find_markers(text: str, markers) -> tuple[str, ...]:
     lowered = (text or "").strip().lower()
-    if _description_is_weak(lowered) or _description_is_service_unavailable(lowered):
-        return True
-    escalation_markers = (
-        "no one", "no person", "no people", "nothing important", "unable",
-        "unavailable", "cannot determine", "can't determine", "not visible",
-        "dark", "blurred", "partial", "obscured", "motion", "movement",
-        "unclear", "hard to tell", "can't tell", "cannot tell",
+    return tuple(marker for marker in markers if marker in lowered)
+
+
+def _classify_video_followup_need(text: str) -> VideoFollowupDecision:
+    lowered = (text or "").strip().lower()
+    if _description_is_service_unavailable(lowered):
+        return VideoFollowupDecision(True, "service_unavailable", ("ai service unavailable",))
+
+    uncertainty_markers = _find_markers(
+        lowered,
+        (
+            "unclear", "hard to tell", "cannot tell", "can't tell",
+            "cannot determine", "can't determine", "not sure", "maybe",
+            "possibly", "appears to be", "seems to be", "unable",
+        ),
     )
-    return any(marker in lowered for marker in escalation_markers)
+    visibility_markers = _find_markers(
+        lowered,
+        ("dark", "blurred", "partial", "obscured", "not visible"),
+    )
+    motion_markers = _find_markers(lowered, ("motion", "movement", "moving", "walks", "walking"))
+    security_markers = _find_markers(
+        lowered,
+        ("person", "people", "man", "woman", "child", "package", "box", "vehicle", "car", "animal", "dog"),
+    )
+
+    if motion_markers and uncertainty_markers:
+        return VideoFollowupDecision(True, "motion_uncertain", motion_markers + uncertainty_markers)
+    if security_markers and uncertainty_markers:
+        return VideoFollowupDecision(True, "security_relevant_uncertain", security_markers + uncertainty_markers)
+    if visibility_markers and (motion_markers or security_markers):
+        return VideoFollowupDecision(True, "visibility_issue", visibility_markers + motion_markers + security_markers)
+    if _description_is_weak(lowered):
+        return VideoFollowupDecision(True, "weak_description", ())
+
+    return VideoFollowupDecision(False, "strong_still_description", ())
 
 
-def should_run_automatic_video_followup(mode: str, description: str, side: str, config_data=None) -> bool:
+def _description_needs_video_followup(text: str) -> bool:
+    return bool(_classify_video_followup_need(text))
+
+
+def should_run_automatic_video_followup(mode: str, description: str, side: str, config_data=None) -> VideoFollowupDecision:
     settings = normalize_video_analysis_settings(config_data)
     mode = (mode or settings["mode"]).strip().lower()
     if mode in {"fast", "manual"}:
-        return False
+        return VideoFollowupDecision(False, f"{mode}_mode", ())
     if mode == "detailed":
-        return True
+        return VideoFollowupDecision(True, "detailed_mode", ())
     if mode != "smart":
-        return False
-    if not _description_needs_video_followup(description):
-        return False
+        return VideoFollowupDecision(False, "unknown_mode", ())
+    decision = _classify_video_followup_need(description)
+    if not decision.run:
+        return decision
     now = time.time()
     cooldown = settings["smart_cooldown_seconds"]
     key = "back" if side == "back" else "front"
     with _video_followup_lock:
         if now - _video_followup_last.get(key, 0.0) < cooldown:
-            logging.info("[VIDEO ANALYSIS] smart_followup_suppressed side=%s cooldown=%ss", key, cooldown)
-            return False
+            logging.info(
+                "[VIDEO ANALYSIS] smart_followup_suppressed side=%s cooldown=%ss reason=%s markers=%s",
+                key, cooldown, decision.reason, decision.marker_text,
+            )
+            return VideoFollowupDecision(False, "cooldown", decision.markers)
         _video_followup_last[key] = now
-    return True
+    return decision
 
 
 def _video_followup_prompt(location: str, first_description: str, mode: str, config_data=None) -> str:
@@ -1006,22 +1083,30 @@ def log_api_usage(usage_metadata):
 # PUSHOVER
 # ==========================================
 def _send_pushover(location: str, description: str, image_bytes: bytes):
-    if not cfg.PUSHOVER_API_TOKEN or not cfg.PUSHOVER_USER_KEY:
-        return
+    settings = cfg.get_api_settings(include_env=True)
+    api_token = settings.get("pushover_api_token")
+    user_key = settings.get("pushover_user_key")
+    if not settings.get("pushover_enabled") or not api_token or not user_key:
+        logging.info("[PUSHOVER] Image Pushover skipped: not configured.")
+        return False
     try:
-        _pushover_session.post(
+        response = _pushover_session.post(
             "https://api.pushover.net/1/messages.json",
             data={
-                "token":   cfg.PUSHOVER_API_TOKEN,
-                "user":    cfg.PUSHOVER_USER_KEY,
+                "token":   api_token,
+                "user":    user_key,
                 "title":   f"{location.title()} Activity",
                 "message": description,
             },
             files={"attachment": ("snap.jpg", image_bytes, "image/jpeg")},
             timeout=10,
         )
+        response.raise_for_status()
+        logging.info("[PUSHOVER] Image Pushover sent for %s status=%s", location, response.status_code)
+        return True
     except Exception as e:
-        logging.error(f"Pushover failure: {e}")
+        logging.error("[PUSHOVER ERROR] Image push failed location=%s error=%s", location, e)
+        return False
 
 
 # ==========================================
@@ -1104,7 +1189,7 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
                     logging.warning("[AI SELECT] Backup model did not recover before speech")
             elif weak_first_pass:
                 logging.warning(
-                    "[AI SELECT] Fast-pass result looked weak; speaking it now and refining in background"
+                    "[AI SELECT] Fast-pass result looked weak; speaking it now and refining still frames in background"
                 )
             else:
                 logging.info("[AI SELECT] Using fast-pass result from %s", first_model)
@@ -1128,6 +1213,10 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
 
         video_settings = normalize_video_analysis_settings(current_config)
         video_mode = video_settings["mode"]
+
+        def record_video_followup_decision(decision: VideoFollowupDecision):
+            if dash_app and hasattr(dash_app, "record_video_followup_decision"):
+                dash_app.record_video_followup_decision(key, decision, mode=video_mode)
 
         def background_video_followup_pipeline():
             try:
@@ -1159,11 +1248,35 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
             except Exception:
                 logging.exception("[VIDEO ANALYSIS] followup_failed trace=%s event=%s", trace_id, key)
 
-        if should_run_automatic_video_followup(video_mode, description, key, current_config):
-            logging.info("[VIDEO ANALYSIS] followup_submitted trace=%s event=%s mode=%s", trace_id, key, video_mode)
+        def submit_video_followup(decision: VideoFollowupDecision):
+            record_video_followup_decision(decision)
+            logging.info(
+                "[VIDEO ANALYSIS] followup_submitted trace=%s event=%s mode=%s reason=%s markers=%s",
+                trace_id, key, video_mode, decision.reason, decision.marker_text,
+            )
             executor.submit(background_video_followup_pipeline)
+
+        def skip_video_followup(decision: VideoFollowupDecision):
+            record_video_followup_decision(decision)
+            logging.info(
+                "[VIDEO ANALYSIS] automatic_followup_skipped trace=%s event=%s mode=%s reason=%s markers=%s",
+                trace_id, key, video_mode, decision.reason, decision.marker_text,
+            )
+
+        if video_mode == "detailed" or (video_mode == "smart" and not weak_first_pass):
+            video_decision = should_run_automatic_video_followup(video_mode, description, key, current_config)
+            if video_decision:
+                submit_video_followup(video_decision)
+            else:
+                skip_video_followup(video_decision)
+        elif video_mode != "smart":
+            video_decision = should_run_automatic_video_followup(video_mode, description, key, current_config)
+            skip_video_followup(video_decision)
         else:
-            logging.info("[VIDEO ANALYSIS] automatic_followup_skipped trace=%s event=%s mode=%s", trace_id, key, video_mode)
+            logging.info(
+                "[VIDEO ANALYSIS] smart_followup_deferred trace=%s event=%s reason=weak_first_pass",
+                trace_id, key,
+            )
 
         # ── STAGE 2: BACKGROUND PUSHOVER / HD REFINEMENT ──────────────────
         def background_pushover_pipeline():
@@ -1182,10 +1295,10 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
                     except Exception as e:
                         logging.error("[PUSHOVER] Fast-pass send failed for %s: %s", key, e)
 
-                # First pass was weak — refine in the background. Speech has
+                # First pass was weak — refine still frames in the background. Speech has
                 # already happened, so this path can spend a little extra time
                 # on multiple still frames without delaying the doorbell alert.
-                logging.info("[PUSHOVER] First pass weak; refining in background for %s trace=%s", key, trace_id)
+                logging.info("[PUSHOVER] First pass weak; refining still frames in background for %s trace=%s", key, trace_id)
                 target_frame = fast_frame
                 if not target_frame or not Path(target_frame).exists():
                     hd_frame = grab_frame(
@@ -1199,6 +1312,17 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
                     target_frame = hd_frame
                     if not target_frame or not Path(target_frame).exists():
                         logging.warning("[PUSHOVER] No usable frame for %s", key)
+                        if video_mode == "smart":
+                            smart_video_decision = should_run_automatic_video_followup(
+                                video_mode,
+                                description,
+                                key,
+                                current_config,
+                            )
+                            if smart_video_decision:
+                                submit_video_followup(smart_video_decision)
+                            else:
+                                skip_video_followup(smart_video_decision)
                         return
 
                 pushover_description = description
@@ -1215,11 +1339,17 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
                     )
                     if not _description_is_weak(refined_description):
                         pushover_description = refined_description
-                        logging.info("[PUSHOVER] Using multi-frame refined description for %s", key)
+                        logging.info("[PUSHOVER] Using multi-frame still refined description for %s", key)
                         if refined_description != description and _video_followup_adds_value(description, refined_description):
-                            audio.play_notification("doorbell", f"Update: {refined_description}")
-                            if dash_app:
-                                dash_app.notify(f"Update: {refined_description}", priority=1, interrupt=True)
+                            if video_mode == "fast":
+                                logging.info(
+                                    "[PUSHOVER] Fast mode kept still-frame refinement silent for %s trace=%s",
+                                    key, trace_id,
+                                )
+                            else:
+                                audio.play_notification("doorbell", f"Update: {refined_description}")
+                                if dash_app:
+                                    dash_app.notify(f"Update: {refined_description}", priority=1, interrupt=True)
                     else:
                         logging.info("[PUSHOVER] Refined still weak; keeping first-pass text for %s", key)
                         if not hd_frame:
@@ -1235,10 +1365,22 @@ def process_doorbell(location, rtsp_url, key, dash_app, executor, trace_id=None,
                             if hd_frame and Path(hd_frame).exists():
                                 target_frame = hd_frame
 
+                    if video_mode == "smart":
+                        smart_video_decision = should_run_automatic_video_followup(
+                            video_mode,
+                            pushover_description,
+                            key,
+                            current_config,
+                        )
+                        if smart_video_decision:
+                            submit_video_followup(smart_video_decision)
+                        else:
+                            skip_video_followup(smart_video_decision)
+
                 with open(target_frame, "rb") as f:
                     pushover_bytes = f.read()
                 _send_pushover(location, pushover_description, pushover_bytes)
-                logging.info("[TIMING] Pushover sent after HD/refinement path trace=%s total=%.2fs.", trace_id, time.time() - time_start_total)
+                logging.info("[TIMING] Pushover sent after HD/still-refinement path trace=%s total=%.2fs.", trace_id, time.time() - time_start_total)
 
             except Exception as e:
                 logging.error(f"Pushover pipeline failed: {e}")

@@ -6,34 +6,68 @@ import time
 from copy import deepcopy
 from urllib import request as urlrequest
 
+import viper_health
+
 
 DEFAULT_ACTIVE_STATES = ["on", "true", "detected", "motion", "ding", "pressed", "open"]
 INACTIVE_STATES = {"", "off", "false", "idle", "closed", "clear", "none", "unknown", "unavailable"}
 ERROR_CLEAR_STATES = {"", "none", "ok", "no_error", "no error", "unknown", "unavailable", "0"}
 FRIDGE_POLL_INTERVAL_SECONDS = 30
+POLL_RECONNECT_FAILURE_LIMIT = 3
+CRITICAL_HEALTH_INTERVAL_SECONDS = 5 * 60
 
 FRIDGE_DOOR_MESSAGES = {
     "binary_sensor.refrigerator_fridge_door": {
         "open": ("fridge_open", "The refrigerator door is open."),
+        "opened": ("fridge_open", "The refrigerator door is open."),
         "on": ("fridge_open", "The refrigerator door is open."),
+        "true": ("fridge_open", "The refrigerator door is open."),
+        "detected": ("fridge_open", "The refrigerator door is open."),
         "closed": ("fridge_closed", "The refrigerator door is closed."),
         "off": ("fridge_closed", "The refrigerator door is closed."),
+        "false": ("fridge_closed", "The refrigerator door is closed."),
+        "clear": ("fridge_closed", "The refrigerator door is closed."),
     },
     "binary_sensor.refrigerator_freezer_door": {
         "open": ("freezer_open", "The freezer door is open."),
+        "opened": ("freezer_open", "The freezer door is open."),
         "on": ("freezer_open", "The freezer door is open."),
+        "true": ("freezer_open", "The freezer door is open."),
+        "detected": ("freezer_open", "The freezer door is open."),
         "closed": ("freezer_closed", "The freezer door is closed."),
         "off": ("freezer_closed", "The freezer door is closed."),
+        "false": ("freezer_closed", "The freezer door is closed."),
+        "clear": ("freezer_closed", "The freezer door is closed."),
     },
 }
-FRIDGE_OPEN_STATES = {"open", "on"}
+FRIDGE_OPEN_STATES = {"open", "opened", "on", "true", "detected"}
+
+CINDERELLA_DEFAULT_ENTITIES = {
+    "status": "sensor.cinderella_status",
+    "vacuum_error": "sensor.cinderella_vacuum_error",
+    "dock_error": "sensor.cinderella_dock_dock_error",
+    "mop_drying": "binary_sensor.cinderella_dock_mop_drying",
+}
+CINDERELLA_ENTITY_CONFIG_KEYS = {
+    "status": "cinderella_status_entity",
+    "vacuum_error": "cinderella_vacuum_error_entity",
+    "dock_error": "cinderella_dock_error_entity",
+    "mop_drying": "cinderella_mop_drying_entity",
+}
+CINDERELLA_DRYING_ACTIVE_STATES = {"on", "true", "detected", "open", "drying"}
 
 CINDERELLA_STATUS_EVENT_MAP = {
     "starting": "departure",
     "cleaning": "departure",
+    "vacuuming": "departure",
+    "mopping": "departure",
     "spot_cleaning": "departure",
+    "spot_clean": "departure",
     "zoned_cleaning": "departure",
     "zone_cleaning": "departure",
+    "room_cleaning": "departure",
+    "room_clean": "departure",
+    "segment_clean": "departure",
     "segment_cleaning": "departure",
     "mapping": "departure",
     "patrol": "departure",
@@ -49,6 +83,8 @@ CINDERELLA_STATUS_EVENT_MAP = {
     "washing_mop": "washing",
     "washing_the_mop": "washing",
     "washing_the_mop_2": "washing",
+    "mop_washing": "washing",
+    "cleaning_mop": "washing",
     "back_to_dock_washing_duster": "washing",
     "emptying": "emptying",
     "emptying_bin": "emptying",
@@ -56,7 +92,11 @@ CINDERELLA_STATUS_EVENT_MAP = {
     "emptying_the_bin": "emptying",
     "returning": "returning",
     "returning_home": "returning",
+    "returning_to_dock": "returning",
+    "returning_to_base": "returning",
     "docking": "returning",
+    "going_to_dock": "returning",
+    "going_to_base": "returning",
     "going_to_target": "returning",
     "going_to_wash_the_mop": "returning",
     "attaching_the_mop": "returning",
@@ -142,6 +182,35 @@ def doorbell_state_is_active(state, active_states=None):
     return normalized in active
 
 
+def cinderella_entities(config):
+    config = config if isinstance(config, dict) else {}
+    entities = {}
+    for role, default in CINDERELLA_DEFAULT_ENTITIES.items():
+        value = str(config.get(CINDERELLA_ENTITY_CONFIG_KEYS[role]) or default).strip()
+        if value:
+            entities[role] = value
+    return entities
+
+
+def route_cinderella_state_change(config, entity_id, old_norm, new_norm):
+    if not bool(config.get("cinderella_enabled", True)) or new_norm == old_norm:
+        return []
+
+    entities = cinderella_entities(config)
+    actions = []
+    if entity_id == entities.get("status"):
+        event = CINDERELLA_STATUS_EVENT_MAP.get(new_norm)
+        if event:
+            actions.append({"type": "cinderella", "event": event, "error": "", "source": "vacuum"})
+    elif entity_id == entities.get("vacuum_error") and new_norm not in ERROR_CLEAR_STATES:
+        actions.append({"type": "cinderella", "event": "error", "error": new_norm, "source": "vacuum"})
+    elif entity_id == entities.get("dock_error") and new_norm not in ERROR_CLEAR_STATES:
+        actions.append({"type": "cinderella", "event": "error", "error": new_norm, "source": "dock"})
+    elif entity_id == entities.get("mop_drying") and new_norm in CINDERELLA_DRYING_ACTIVE_STATES and old_norm not in CINDERELLA_DRYING_ACTIVE_STATES:
+        actions.append({"type": "cinderella", "event": "drying", "error": "", "source": "dock"})
+    return actions
+
+
 def route_state_change(config, entity_id, old_state, new_state):
     """Convert a Home Assistant state_changed event into Viper actions."""
     entity_id = str(entity_id or "").strip()
@@ -167,17 +236,7 @@ def route_state_change(config, entity_id, old_state, new_state):
                 }
             )
 
-    if bool(config.get("cinderella_enabled", True)):
-        if entity_id == "sensor.cinderella_status" and new_norm != old_norm:
-            event = CINDERELLA_STATUS_EVENT_MAP.get(new_norm)
-            if event:
-                actions.append({"type": "cinderella", "event": event, "error": "", "source": "vacuum"})
-        elif entity_id == "sensor.cinderella_vacuum_error" and new_norm not in ERROR_CLEAR_STATES and new_norm != old_norm:
-            actions.append({"type": "cinderella", "event": "error", "error": new_norm, "source": "vacuum"})
-        elif entity_id == "sensor.cinderella_dock_dock_error" and new_norm not in ERROR_CLEAR_STATES and new_norm != old_norm:
-            actions.append({"type": "cinderella", "event": "error", "error": new_norm, "source": "dock"})
-        elif entity_id == "binary_sensor.cinderella_dock_mop_drying" and new_norm == "on" and old_norm != "on":
-            actions.append({"type": "cinderella", "event": "drying", "error": "", "source": "dock"})
+    actions.extend(route_cinderella_state_change(config, entity_id, old_norm, new_norm))
 
     if entity_id in FRIDGE_DOOR_MESSAGES and new_norm != old_norm:
         match = FRIDGE_DOOR_MESSAGES[entity_id].get(new_norm)
@@ -202,6 +261,7 @@ class HomeAssistantEventListener:
         self.stop_event = stop_event or threading.Event()
         self.thread = None
         self._fridge_states = {}
+        self._cinderella_states = {}
         self._status = {
             "running": False,
             "connected": False,
@@ -210,6 +270,28 @@ class HomeAssistantEventListener:
             "last_action_at": 0.0,
             "last_host": "",
             "last_fridge_poll_at": 0.0,
+            "last_cinderella_poll_at": 0.0,
+            "last_event_entity": "",
+            "last_event_old_state": "",
+            "last_event_new_state": "",
+            "last_event_old_normalized": "",
+            "last_event_new_normalized": "",
+            "last_event_action_count": 0,
+            "last_routed_action": {},
+            "last_connected_at": 0.0,
+            "last_reconnect_at": 0.0,
+            "reconnect_count": 0,
+            "poll_failure_count": 0,
+            "last_successful_poll_at": 0.0,
+            "last_poll_error": "",
+            "last_critical_health_check_at": 0.0,
+            "critical_health_status": "",
+            "critical_health_message": "",
+            "last_smartthings_reload_at": 0.0,
+            "last_smartthings_reload_result": "",
+            "smartthings_reload_count": 0,
+            "last_health_journal_event": {},
+            "repeated_smartthings_reloads_24h": 0,
         }
         self._status_lock = threading.Lock()
 
@@ -245,6 +327,29 @@ class HomeAssistantEventListener:
         except Exception:
             return FRIDGE_POLL_INTERVAL_SECONDS
 
+    def _smartthings_stale_seconds(self):
+        try:
+            config = self.config_provider() or {}
+            minutes = int(config.get("ha_smartthings_stale_minutes", 90))
+            return max(15 * 60, min(minutes * 60, 24 * 60 * 60))
+        except Exception:
+            return viper_health.DEFAULT_SMARTTHINGS_STALE_SECONDS
+
+    def _smartthings_reload_cooldown_seconds(self):
+        try:
+            config = self.config_provider() or {}
+            minutes = int(config.get("ha_smartthings_reload_cooldown_minutes", 60))
+            return max(15 * 60, min(minutes * 60, 24 * 60 * 60))
+        except Exception:
+            return viper_health.DEFAULT_SMARTTHINGS_RELOAD_COOLDOWN_SECONDS
+
+    def _smartthings_recovery_enabled(self):
+        try:
+            config = self.config_provider() or {}
+            return bool(config.get("ha_smartthings_recovery_enabled", True))
+        except Exception:
+            return True
+
     def _thread_main(self):
         try:
             asyncio.run(self._run_forever())
@@ -273,7 +378,12 @@ class HomeAssistantEventListener:
                 backoff = 2
             except Exception as e:
                 logging.warning("[HA LISTENER] connection failed: %s", e)
-                self._set_status(connected=False, last_error=str(e))
+                self._set_status(
+                    connected=False,
+                    last_error=str(e),
+                    last_reconnect_at=time.time(),
+                    reconnect_count=int(self.status().get("reconnect_count", 0)) + 1,
+                )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)
         self._set_status(running=False, connected=False)
@@ -299,23 +409,62 @@ class HomeAssistantEventListener:
             if not subscribe_result.get("success"):
                 raise RuntimeError(subscribe_result.get("error", {}).get("message") or "state_changed subscribe failed.")
             logging.info("[HA LISTENER] connected to %s", url)
-            self._set_status(connected=True, last_error="")
-            await self._refresh_fridge_states(ha_ip, ha_port, token, recover_open=True)
-            next_fridge_poll = time.monotonic() + self._poll_interval_seconds()
+            self._set_status(connected=True, last_error="", last_connected_at=time.time(), poll_failure_count=0, last_poll_error="")
+            fridge_poll = await self._refresh_fridge_states(ha_ip, ha_port, token, recover_open=True)
+            cinderella_poll = await self._refresh_cinderella_states(ha_ip, ha_port, token, recover_active=True)
+            self._record_poll_health(fridge_poll, cinderella_poll)
+            await self._run_critical_health_watchdog(ha_ip, ha_port, token)
+            next_status_poll = time.monotonic() + self._poll_interval_seconds()
+            next_critical_health = time.monotonic() + CRITICAL_HEALTH_INTERVAL_SECONDS
 
             while not self.stop_event.is_set():
                 try:
                     message = await asyncio.wait_for(ws.recv(), timeout=2)
                 except asyncio.TimeoutError:
-                    if time.monotonic() >= next_fridge_poll:
-                        await self._refresh_fridge_states(ha_ip, ha_port, token, recover_open=False)
-                        next_fridge_poll = time.monotonic() + self._poll_interval_seconds()
+                    if time.monotonic() >= next_status_poll:
+                        fridge_poll = await self._refresh_fridge_states(ha_ip, ha_port, token, recover_open=False)
+                        cinderella_poll = await self._refresh_cinderella_states(ha_ip, ha_port, token, recover_active=False)
+                        self._record_poll_health(fridge_poll, cinderella_poll)
+                        self._raise_if_poll_watchdog_tripped()
+                        next_status_poll = time.monotonic() + self._poll_interval_seconds()
+                    if time.monotonic() >= next_critical_health:
+                        await self._run_critical_health_watchdog(ha_ip, ha_port, token)
+                        next_critical_health = time.monotonic() + CRITICAL_HEALTH_INTERVAL_SECONDS
                     continue
                 payload = json.loads(message)
                 self._handle_ws_payload(payload)
-                if time.monotonic() >= next_fridge_poll:
-                    await self._refresh_fridge_states(ha_ip, ha_port, token, recover_open=False)
-                    next_fridge_poll = time.monotonic() + self._poll_interval_seconds()
+                if time.monotonic() >= next_status_poll:
+                    fridge_poll = await self._refresh_fridge_states(ha_ip, ha_port, token, recover_open=False)
+                    cinderella_poll = await self._refresh_cinderella_states(ha_ip, ha_port, token, recover_active=False)
+                    self._record_poll_health(fridge_poll, cinderella_poll)
+                    self._raise_if_poll_watchdog_tripped()
+                    next_status_poll = time.monotonic() + self._poll_interval_seconds()
+                if time.monotonic() >= next_critical_health:
+                    await self._run_critical_health_watchdog(ha_ip, ha_port, token)
+                    next_critical_health = time.monotonic() + CRITICAL_HEALTH_INTERVAL_SECONDS
+
+    def _record_poll_health(self, *results):
+        checked = [item for item in results if item and item.get("checked")]
+        if not checked:
+            return
+        successes = sum(int(item.get("successes", 0)) for item in checked)
+        errors = []
+        for item in checked:
+            errors.extend(item.get("errors", []) or [])
+        if successes:
+            self._set_status(poll_failure_count=0, last_successful_poll_at=time.time(), last_poll_error="")
+            return
+        failure_count = int(self.status().get("poll_failure_count", 0)) + 1
+        error_text = "; ".join(errors[-4:]) or "all Home Assistant poll reads failed"
+        self._set_status(poll_failure_count=failure_count, last_poll_error=error_text)
+
+    def _raise_if_poll_watchdog_tripped(self):
+        failures = int(self.status().get("poll_failure_count", 0) or 0)
+        if failures >= POLL_RECONNECT_FAILURE_LIMIT:
+            raise RuntimeError(
+                f"Home Assistant polling failed {failures} consecutive times while websocket was open: "
+                f"{self.status().get('last_poll_error') or 'no detail'}"
+            )
 
     def _fetch_ha_state(self, ha_ip, ha_port, token, entity_id):
         url = f"http://{ha_ip}:{ha_port}/api/states/{entity_id}"
@@ -325,14 +474,127 @@ class HomeAssistantEventListener:
                 raise RuntimeError(f"state request returned HTTP {response.status}")
             return json.loads(response.read().decode("utf-8"))
 
+    async def _fetch_refrigerator_health_states(self, ha_ip, ha_port, token):
+        entities = (
+            tuple(FRIDGE_DOOR_MESSAGES.keys())
+            + tuple(viper_health.REFRIGERATOR_SUPPORT_ENTITIES)
+        )
+        states = []
+        errors = []
+        for entity_id in entities:
+            try:
+                states.append(await asyncio.to_thread(self._fetch_ha_state, ha_ip, ha_port, token, entity_id))
+            except Exception as e:
+                errors.append(f"{entity_id}: {e}")
+        return states, errors
+
+    async def _run_critical_health_watchdog(self, ha_ip, ha_port, token):
+        self._set_status(last_critical_health_check_at=time.time())
+        if not self._smartthings_recovery_enabled():
+            self._set_status(
+                critical_health_status="disabled",
+                critical_health_message="SmartThings recovery is turned off in Viper settings.",
+            )
+            return {"ok": True, "status": "disabled"}
+        states, errors = await self._fetch_refrigerator_health_states(ha_ip, ha_port, token)
+        if not states:
+            message = "; ".join(errors[-4:]) or "Viper could not read refrigerator entities from Home Assistant."
+            event = viper_health.record_health_event("critical_health_check", "failed", message, details={"errors": errors[-8:]})
+            self._set_status(critical_health_status="ha_read_failed", critical_health_message=message)
+            self._set_status(last_health_journal_event=event)
+            return {"ok": False, "status": "ha_read_failed", "message": message}
+        health = viper_health.refrigerator_event_stream_health(
+            states,
+            stale_seconds=self._smartthings_stale_seconds(),
+        )
+        self._set_status(
+            critical_health_status=health.get("status") or "",
+            critical_health_message=health.get("message") or "",
+        )
+        if health.get("ok"):
+            return health
+        if health.get("status") != "door_stream_stale":
+            return health
+
+        now = time.time()
+        cooldown = self._smartthings_reload_cooldown_seconds()
+        last_reload = float(self.status().get("last_smartthings_reload_at") or 0)
+        if last_reload and now - last_reload < cooldown:
+            remaining = int((cooldown - (now - last_reload)) / 60) + 1
+            message = f"{health.get('message')} Reload skipped for cooldown; next automatic reload allowed in about {remaining} minutes."
+            event = viper_health.record_health_event(
+                "smartthings_reload_skipped",
+                "cooldown",
+                message,
+                details={"remaining_minutes": remaining, "health": health},
+            )
+            self._set_status(critical_health_message=message)
+            self._set_status(last_health_journal_event=event)
+            return {**health, "reloaded": False, "cooldown": True}
+
+        registry = await viper_health.find_config_entry_for_entity(
+            ha_ip,
+            ha_port,
+            token,
+            viper_health.FRIDGE_DOOR_ENTITY,
+        )
+        if not registry.get("ok"):
+            message = f"{health.get('message')} Viper could not find the SmartThings config entry: {registry.get('message')}"
+            event = viper_health.record_health_event(
+                "smartthings_reload",
+                "failed",
+                message,
+                details={"registry": registry, "health": health},
+            )
+            self._set_status(critical_health_message=message)
+            self._set_status(last_health_journal_event=event)
+            return {**health, "reloaded": False, "registry": registry}
+        entry_id = registry.get("config_entry_id")
+        reload_result = await asyncio.to_thread(
+            viper_health.reload_config_entry,
+            ha_ip,
+            ha_port,
+            token,
+            entry_id,
+        )
+        count = int(self.status().get("smartthings_reload_count") or 0) + (1 if reload_result.get("ok") else 0)
+        result_text = reload_result.get("message") or "unknown result"
+        event = viper_health.record_health_event(
+            "smartthings_reload",
+            "ok" if reload_result.get("ok") else "failed",
+            f"Refrigerator SmartThings automatic reload: {result_text}",
+            details={"entry_id": entry_id, "reload_result": reload_result, "health": health},
+        )
+        repeat_count = viper_health.count_recent_health_events("smartthings_reload")
+        self._set_status(
+            last_smartthings_reload_at=now,
+            last_smartthings_reload_result=result_text,
+            smartthings_reload_count=count,
+            repeated_smartthings_reloads_24h=repeat_count,
+            last_health_journal_event=event,
+            critical_health_message=f"{health.get('message')} Automatic reload result: {result_text}",
+        )
+        logging.warning(
+            "[HA LISTENER] SmartThings refrigerator watchdog reloaded entry=%s ok=%s result=%s",
+            entry_id,
+            reload_result.get("ok"),
+            result_text,
+        )
+        self._fridge_states.clear()
+        return {**health, "reloaded": bool(reload_result.get("ok")), "reload_result": reload_result}
+
     async def _refresh_fridge_states(self, ha_ip, ha_port, token, recover_open=False):
+        result = {"checked": True, "successes": 0, "failures": 0, "errors": []}
         for entity_id in FRIDGE_DOOR_MESSAGES:
             try:
                 new_state = await asyncio.to_thread(self._fetch_ha_state, ha_ip, ha_port, token, entity_id)
             except Exception as e:
                 logging.debug("[HA LISTENER] fridge poll failed entity=%s error=%s", entity_id, e)
+                result["failures"] += 1
+                result["errors"].append(f"{entity_id}: {e}")
                 continue
 
+            result["successes"] += 1
             new_norm = normalize_state(state_text(new_state))
             old_norm = self._fridge_states.get(entity_id)
             self._fridge_states[entity_id] = new_norm
@@ -347,13 +609,70 @@ class HomeAssistantEventListener:
             if new_norm != old_norm:
                 logging.info("[HA LISTENER] fridge/freezer poll noticed entity=%s old=%s new=%s", entity_id, old_norm, new_norm)
                 self._dispatch_state_change(entity_id, {"state": old_norm}, new_state)
+        return result
+
+    async def _refresh_cinderella_states(self, ha_ip, ha_port, token, recover_active=False):
+        config = self.config_provider() or {}
+        if not bool(config.get("cinderella_enabled", True)):
+            return {"checked": False, "successes": 0, "failures": 0, "errors": []}
+        result = {"checked": True, "successes": 0, "failures": 0, "errors": []}
+        for role, entity_id in cinderella_entities(config).items():
+            try:
+                new_state = await asyncio.to_thread(self._fetch_ha_state, ha_ip, ha_port, token, entity_id)
+            except Exception as e:
+                logging.debug("[HA LISTENER] Cinderella poll failed entity=%s error=%s", entity_id, e)
+                result["failures"] += 1
+                result["errors"].append(f"{entity_id}: {e}")
+                continue
+
+            result["successes"] += 1
+            new_norm = normalize_state(state_text(new_state))
+            old_norm = self._cinderella_states.get(entity_id)
+            self._cinderella_states[entity_id] = new_norm
+            self._set_status(last_cinderella_poll_at=time.time())
+
+            if old_norm is None:
+                if recover_active and role in {"vacuum_error", "dock_error", "mop_drying"}:
+                    actions = route_cinderella_state_change(config, entity_id, "off", new_norm)
+                    if actions:
+                        logging.info("[HA LISTENER] recovered active Cinderella state entity=%s state=%s", entity_id, new_norm)
+                        self._dispatch_state_change(entity_id, {"state": "off"}, new_state)
+                continue
+
+            if new_norm != old_norm:
+                logging.info("[HA LISTENER] Cinderella poll noticed entity=%s old=%s new=%s", entity_id, old_norm, new_norm)
+                self._dispatch_state_change(entity_id, {"state": old_norm}, new_state)
+        return result
 
     def _dispatch_state_change(self, entity_id, old_state, new_state):
         config = self.config_provider() or {}
-        self._set_status(last_event_at=time.time())
-        for action in route_state_change(config, entity_id, old_state, new_state):
-            logging.info("[HA LISTENER] routed entity=%s action=%s", entity_id, action)
+        old_raw = state_text(old_state)
+        new_raw = state_text(new_state)
+        old_norm = normalize_state(old_raw)
+        new_norm = normalize_state(new_raw)
+        actions = route_state_change(config, entity_id, old_state, new_state)
+        self._set_status(
+            last_event_at=time.time(),
+            last_event_entity=entity_id,
+            last_event_old_state=old_raw,
+            last_event_new_state=new_raw,
+            last_event_old_normalized=old_norm,
+            last_event_new_normalized=new_norm,
+            last_event_action_count=len(actions),
+        )
+        logging.info(
+            "[HA LISTENER] event entity=%s raw_old=%s raw_new=%s norm_old=%s norm_new=%s actions=%s",
+            entity_id,
+            old_raw,
+            new_raw,
+            old_norm,
+            new_norm,
+            len(actions),
+        )
+        for action in actions:
+            logging.info("[HA LISTENER] routed entity=%s normalized_state=%s action=%s", entity_id, new_norm, action)
             self._set_status(last_action_at=time.time())
+            self._set_status(last_routed_action=deepcopy(action))
             self.action_handler(action)
 
     def _handle_ws_payload(self, payload):
@@ -368,4 +687,6 @@ class HomeAssistantEventListener:
         new_state = data.get("new_state") or {}
         if entity_id in FRIDGE_DOOR_MESSAGES:
             self._fridge_states[entity_id] = normalize_state(state_text(new_state))
+        if entity_id in cinderella_entities(self.config_provider() or {}).values():
+            self._cinderella_states[entity_id] = normalize_state(state_text(new_state))
         self._dispatch_state_change(entity_id, old_state, new_state)

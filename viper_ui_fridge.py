@@ -1,4 +1,5 @@
 import requests
+import time
 import wx
 
 import viper_audio as audio
@@ -217,6 +218,32 @@ class FridgeTabMixin:
 
     def _call_ha_service(self, domain_service: str, entity_id: str):
         return self._call_ha_service_data(domain_service, {"entity_id": entity_id})
+
+    def _reset_ice_maker_counter(self, entities):
+        counter = entities.get("counter")
+        if not counter:
+            return False
+        return self._call_ha_service("counter/reset", counter)
+
+    def _ice_maker_switch_matches(self, entities, expected_state, *, timeout=5):
+        switch_entity = entities.get("switch")
+        if not switch_entity:
+            return False
+        state = self._get_ha_entity_state(switch_entity, timeout=timeout)
+        if not state.get("ok") or not state.get("exists"):
+            return False
+        current = str((state.get("entity") or {}).get("state") or "").strip().lower()
+        return current == expected_state
+
+    def _set_ice_maker_switch_with_confirmation(self, entities, expected_state):
+        service = "switch/turn_on" if expected_state == "on" else "switch/turn_off"
+        ok = self._call_ha_service(service, entities["switch"])
+        time.sleep(1.0)
+        if ok and self._ice_maker_switch_matches(entities, expected_state, timeout=3):
+            return True
+        retry_ok = self._call_ha_service(service, entities["switch"])
+        time.sleep(1.0)
+        return bool(retry_ok and self._ice_maker_switch_matches(entities, expected_state, timeout=3))
 
     def _refrigerator_control_entities(self):
         return {
@@ -516,26 +543,36 @@ class FridgeTabMixin:
     def on_ice_maker_on(self, event):
         entities = self._configured_ice_maker_entities()
         ok_helper = self._call_ha_service("input_boolean/turn_on", entities["keep_on"])
-        ok_switch = self._call_ha_service("switch/turn_on", entities["switch"])
-        if ok_helper and ok_switch:
+        switch_on = self._set_ice_maker_switch_with_confirmation(entities, "on")
+        ok_counter = self._reset_ice_maker_counter(entities)
+        if ok_helper and switch_on:
             msg = "Ice maker turned on with refill override enabled."
+            if ok_counter:
+                msg += " Counter reset."
             self.notify(msg, priority=10)
             self._safe_submit(audio.play_notification, "utilities", msg)
             wx.CallLater(750, self.refresh_ice_maker_status)
             return msg
-        return "Ice maker on request failed. Check Home Assistant status."
+        msg = "Ice maker on request failed. Home Assistant accepted the helper change, but the refrigerator is not reporting the ice maker as on."
+        self.notify(msg, priority=10)
+        return msg
 
     def on_ice_maker_off(self, event):
         entities = self._configured_ice_maker_entities()
-        ok_switch = self._call_ha_service("switch/turn_off", entities["switch"])
+        switch_off = self._set_ice_maker_switch_with_confirmation(entities, "off")
         ok_helper = self._call_ha_service("input_boolean/turn_off", entities["keep_on"])
-        if ok_switch and ok_helper:
+        ok_counter = self._reset_ice_maker_counter(entities)
+        if switch_off and ok_helper:
             msg = "Ice maker turned off and refill override cleared."
+            if ok_counter:
+                msg += " Counter reset."
             self.notify(msg, priority=10)
             self._safe_submit(audio.play_notification, "utilities", msg)
             wx.CallLater(750, self.refresh_ice_maker_status)
             return msg
-        return "Ice maker off request failed. Check Home Assistant status."
+        msg = "Ice maker off request failed. Home Assistant accepted the helper change, but the refrigerator is not reporting the ice maker as off."
+        self.notify(msg, priority=10)
+        return msg
 
     def on_ice_maker_toggle(self, event):
         if getattr(self, "_ice_maker_switch_state", "unknown") == "on":

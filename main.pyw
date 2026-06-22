@@ -40,7 +40,9 @@ import viper_ha_addons as ha_addons
 import viper_diagnostics as diagnostics
 import viper_ha_listener as ha_listener
 import viper_ha_package as ha_package
+import viper_health
 import viper_ha_vm as ha_vm
+import viper_ha_recovery as ha_recovery
 from viper_ui_fridge import FridgeTabMixin
 from viper_ui_vacuum import VacuumTabMixin
 from viper_ui_diagnostics import DiagnosticsTabMixin
@@ -704,6 +706,7 @@ def _dispatch_broadcast_message(raw_message: str, push: bool = False, channel: s
         submit=safe_submit,
         play_notification=audio.play_notification,
         play_broadcast_chime=audio.play_broadcast_chime,
+        send_text_push=audio._send_text_pushover,
         system_ready=bool(dash_app is not None and not is_shutting_down.is_set()),
         push=push,
         channel=channel,
@@ -856,6 +859,7 @@ def remote_ui():
         doorbell_video_settings=_doorbell_video_settings(dash_app.config),
         doorbell_video_modes=vision.VIDEO_ANALYSIS_LABELS,
         last_video_analysis=getattr(dash_app, "last_video_analysis", {}),
+        last_video_followup_decision=getattr(dash_app, "last_video_followup_decision", {}),
         setup_status_summary=dash_app.build_setup_next_action_summary() if hasattr(dash_app, "build_setup_next_action_summary") else "",
         setup_checklist_summary=dash_app.build_setup_checklist_summary() if hasattr(dash_app, "build_setup_checklist_summary") else "",
         setup_smoke_report=getattr(dash_app, "last_remote_setup_smoke_report", ""),
@@ -921,6 +925,35 @@ def _current_diagnostics(*, check_ha=False):
     )
 
 
+def _current_ha_states(timeout=8):
+    if dash_app is None:
+        return {"ok": False, "message": "System not ready.", "states": []}
+    ha_settings = cfg.get_ha_settings(dash_app.config, include_env=True)
+    return discovery.get_ha_states(
+        token=ha_settings.get("ha_token"),
+        ha_ip=ha_settings.get("ha_ip"),
+        ha_port=ha_settings.get("ha_port"),
+        timeout=timeout,
+    )
+
+
+def _save_current_ha_snapshot():
+    if dash_app is None:
+        return {"ok": False, "message": "System not ready."}
+    states_result = _current_ha_states(timeout=8)
+    if not states_result.get("ok"):
+        return {
+            "ok": False,
+            "message": states_result.get("message") or states_result.get("error") or "Could not read Home Assistant states.",
+        }
+    listener_status = dash_app.ha_listener.status() if hasattr(dash_app, "ha_listener") else {}
+    return diagnostics.save_ha_integration_snapshot(
+        dash_app.config,
+        ha_states=states_result.get("states", []),
+        ha_listener_status=listener_status,
+    )
+
+
 @app.route("/remote/diagnostics", methods=["GET"])
 def web_diagnostics():
     if dash_app is None:
@@ -930,6 +963,68 @@ def web_diagnostics():
     if wants_json:
         return jsonify(diag)
     return "<pre>" + diagnostics.diagnostics_text(diag).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</pre>"
+
+
+@app.route("/remote/diagnostics/ha_snapshot", methods=["POST"])
+def web_ha_snapshot():
+    if dash_app is None:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    try:
+        result = _save_current_ha_snapshot()
+        if result.get("ok"):
+            diff = result.get("diff", {})
+            flash(
+                "HA snapshot saved: "
+                f"{result.get('path')}. "
+                f"Added {len(diff.get('added', []))}, removed {len(diff.get('removed', []))}, changed {len(diff.get('changed', []))}."
+            )
+        else:
+            flash(f"HA snapshot failed: {result.get('message') or 'unknown error'}")
+    except Exception as e:
+        logging.exception("HA snapshot creation failed")
+        flash(f"HA snapshot failed: {e}")
+    return redirect(url_for("remote_ui"))
+
+
+@app.route("/remote/diagnostics/reload_fridge_smartthings", methods=["POST"])
+def web_reload_fridge_smartthings():
+    if dash_app is None:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    try:
+        import asyncio
+
+        ha_settings = cfg.get_ha_settings(dash_app.config, include_env=True)
+        entry = asyncio.run(viper_health.find_config_entry_for_entity(
+            ha_settings.get("ha_ip"),
+            ha_settings.get("ha_port") or "8123",
+            ha_settings.get("ha_token"),
+            diagnostics.FRIDGE_DOOR_ENTITY,
+        ))
+        if not entry.get("ok"):
+            flash(f"Refrigerator SmartThings reload failed: {entry.get('message') or 'config entry not found'}")
+            return redirect(url_for("remote_ui") + "#diagnostics-heading")
+        result = viper_health.reload_config_entry(
+            ha_settings.get("ha_ip"),
+            ha_settings.get("ha_port") or "8123",
+            ha_settings.get("ha_token"),
+            entry.get("config_entry_id"),
+        )
+        viper_health.record_health_event(
+            "manual_smartthings_reload",
+            "ok" if result.get("ok") else "failed",
+            f"Manual refrigerator SmartThings reload from web remote: {result.get('message') or 'unknown result'}",
+            details={"entry": entry, "result": result},
+        )
+        if result.get("ok"):
+            flash("Refrigerator SmartThings entry reloaded. Open and close the fridge once, then refresh diagnostics.")
+        else:
+            flash(f"Refrigerator SmartThings reload failed: {result.get('message') or 'unknown error'}")
+    except Exception as e:
+        logging.exception("Refrigerator SmartThings reload failed")
+        flash(f"Refrigerator SmartThings reload failed: {e}")
+    return redirect(url_for("remote_ui") + "#diagnostics-heading")
 
 
 @app.route("/remote/diagnostics/support_bundle", methods=["POST"])
@@ -1013,6 +1108,7 @@ def _build_web_vacuum_context():
         "cleaning_modes": [{"value": key, "label": VACUUM_CLEANING_MODES[key]} for key in VACUUM_CLEANING_MODE_ORDER],
         "cleaning_mode": "vacuum_mop",
         "cleaning_mode_label": VACUUM_CLEANING_MODES["vacuum_mop"],
+        "room_repeat_count": 1,
         "fan_speeds": [],
         "settings": [],
         "related_controls": [],
@@ -1094,6 +1190,8 @@ def _build_web_vacuum_context():
         })
     rooms = dash_app.config.get("vacuum_rooms", {}).get(selected, [])
     current_mode = _normalize_vacuum_cleaning_mode(dash_app.config.get("vacuum_cleaning_mode", "vacuum_mop"))
+    room_repeat_count = max(1, min(3, int(dash_app.config.get("vacuum_room_repeat_count", 1) or 1)))
+    fan_speeds = [str(speed) for speed in attrs.get("fan_speed_list", [])] if isinstance(attrs.get("fan_speed_list"), list) else []
     return {
         "ok": bool(vacuums),
         "message": "Vacuum controls loaded." if vacuums else "No vacuum entities found in Home Assistant.",
@@ -1106,7 +1204,8 @@ def _build_web_vacuum_context():
         "cleaning_modes": [{"value": key, "label": VACUUM_CLEANING_MODES[key]} for key in VACUUM_CLEANING_MODE_ORDER],
         "cleaning_mode": current_mode,
         "cleaning_mode_label": VACUUM_CLEANING_MODES[current_mode],
-        "fan_speeds": [str(speed) for speed in attrs.get("fan_speed_list", [])] if isinstance(attrs.get("fan_speed_list"), list) else [],
+        "room_repeat_count": room_repeat_count,
+        "fan_speeds": fan_speeds,
         "current_fan_speed": str(attrs.get("fan_speed", "")),
         "settings": settings,
         "related_controls": related,
@@ -1329,6 +1428,24 @@ def web_vacuum_cleaning_mode():
     flash(f"Vacuum cleaning mode saved: {VACUUM_CLEANING_MODES[mode]}.")
     return redirect(url_for("remote_ui", vacuum_entity=entity_id))
 
+
+@app.route("/remote/vacuum/room_repeat", methods=["POST"])
+def web_vacuum_room_repeat():
+    if not dash_app:
+        flash("System not ready.")
+        return redirect(url_for("remote_ui"))
+    entity_id = request.form.get("vacuum_entity", "").strip()
+    try:
+        repeat = int(request.form.get("repeat", "1"))
+    except ValueError:
+        repeat = 1
+    repeat = max(1, min(3, repeat))
+    dash_app.config["vacuum_room_repeat_count"] = repeat
+    dash_app.save_config()
+    flash(f"Room cleaning repeat count saved: {repeat}.")
+    return redirect(url_for("remote_ui", vacuum_entity=entity_id))
+
+
 @app.route("/remote/vacuum/fan_speed", methods=["POST"])
 def web_vacuum_fan_speed():
     if not dash_app:
@@ -1416,6 +1533,7 @@ def web_vacuum_clean_rooms():
         return redirect(url_for("remote_ui", vacuum_entity=entity_id))
     mode = _normalize_vacuum_cleaning_mode(request.form.get("cleaning_mode") or dash_app.config.get("vacuum_cleaning_mode"))
     dash_app.config["vacuum_cleaning_mode"] = mode
+    dash_app.config["vacuum_room_repeat_count"] = repeat
     for mode_service, mode_payload in vacuum_cleaning_mode_service_calls(entity_id, _cached_web_vacuum_controls(entity_id), mode):
         dash_app._call_ha_service_data(mode_service, mode_payload, timeout=30)
     payload = {"entity_id": entity_id, "command": "app_segment_clean", "params": [{"segments": segments, "repeat": repeat}]}
@@ -1834,7 +1952,10 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         self.setup_events = []
         self.last_setup_status = ""
         self.last_video_analysis = {}
+        self.last_video_followup_decision = {}
         self._last_focus_snapshot_log = {}
+        self._last_smartthings_reload_notice_at = 0.0
+        self._startup_health_checked = False
         cfg.sync_globals_from_config()
 
         try:
@@ -1897,6 +2018,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
 
         threading.Thread(target=self.speech_worker, daemon=True).start()
         self.ha_listener.start()
+        wx.CallLater(20000, self.run_startup_health_self_test)
         self._ha_address_recovery_stop = threading.Event()
         threading.Thread(target=self._ha_address_recovery_worker, name="ViperHAAddressRecovery", daemon=True).start()
 
@@ -2163,6 +2285,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         event.Skip()
 
     def _on_ha_listener_status(self, status):
+        self._maybe_notify_health_recovery(status)
         if not hasattr(self, "ha_listener_status_txt"):
             return
         if not status.get("running"):
@@ -2173,6 +2296,42 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
             err = status.get("last_error") or "connecting"
             label = f"HA listener: not connected. {err}"
         wx.CallAfter(self.ha_listener_status_txt.SetLabel, label)
+
+    def _maybe_notify_health_recovery(self, status):
+        try:
+            reload_at = float(status.get("last_smartthings_reload_at") or 0)
+        except (TypeError, ValueError):
+            reload_at = 0
+        if reload_at <= 0 or reload_at == getattr(self, "_last_smartthings_reload_notice_at", 0):
+            return
+        self._last_smartthings_reload_notice_at = reload_at
+        repeats = int(status.get("repeated_smartthings_reloads_24h") or 0)
+        result = status.get("last_smartthings_reload_result") or "reload attempted"
+        message = f"Viper reloaded Refrigerator SmartThings because door events looked stale. Result: {result}"
+        if repeats >= 3:
+            message += f" Warning: this has happened {repeats} times in the last 24 hours."
+        wx.CallAfter(self.notify, message, priority=1, interrupt=False, speak=False)
+        logging.warning("[HEALTH] %s", message)
+
+    def run_startup_health_self_test(self):
+        if getattr(self, "_startup_health_checked", False) or is_shutting_down.is_set():
+            return
+        self._startup_health_checked = True
+        try:
+            diag = self._current_diagnostics(check_ha=False)
+            critical = diag.get("critical_workflows") or {}
+            overall = critical.get("overall") or "UNKNOWN"
+            if overall != "OK":
+                issues = [
+                    f"{item.get('name')}: {item.get('message')}"
+                    for item in critical.get("items", [])
+                    if item.get("status") in {"BROKEN", "SUSPICIOUS"}
+                ]
+                first = issues[0] if issues else "Open Diagnostics for details."
+                self.notify(f"Startup health check needs attention: {overall}. {first}", priority=10, speak=False)
+            logging.info("[HEALTH] Startup self-test overall=%s items=%s", overall, critical.get("items", []))
+        except Exception:
+            logging.debug("Startup health self-test failed.", exc_info=True)
 
     def restore_startup_focus(self):
         try:
@@ -2881,11 +3040,37 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         smart_line = "Smart rules are inactive right now."
         if mode == "smart":
             smart_line = "Smart rules active: 3 second clip, 2 frames per second, at most one video follow-up per camera per minute."
+        decision_lines = []
+        decisions = self.last_video_followup_decision if hasattr(self, "last_video_followup_decision") else {}
+        reason_labels = {
+            "strong_still_description": "still image was clear",
+            "weak_description": "still image was still too weak",
+            "service_unavailable": "AI service was unavailable",
+            "motion_uncertain": "motion was unclear",
+            "security_relevant_uncertain": "person, package, vehicle, or animal detail was uncertain",
+            "visibility_issue": "visibility was poor",
+            "detailed_mode": "Detailed mode always follows up",
+            "fast_mode": "Fast mode skips automatic video",
+            "manual_mode": "Manual mode only runs from the analyze button",
+            "cooldown": "camera was inside the Smart cooldown window",
+            "unknown_mode": "unknown video mode",
+        }
+        for side in ("front", "back"):
+            decision = decisions.get(side, {})
+            if decision:
+                status = "video follow-up" if decision.get("run") else "skipped"
+                reason = reason_labels.get(decision.get("reason"), decision.get("reason", "unknown"))
+                markers = decision.get("markers") or []
+                marker_text = f" Markers: {', '.join(markers)}." if markers else ""
+                decision_lines.append(f"Last {side} Smart decision: {status}, {reason}.{marker_text}")
+        if not decision_lines:
+            decision_lines.append("No Smart video decision has run yet.")
         return "\n".join(
             [
                 f"Mode: {mode_names.get(mode, mode.title())}.",
                 f"What this mode does: {mode_descriptions.get(mode, '')}",
                 smart_line,
+                *decision_lines,
                 f"Manual Analyze Camera Video Now buttons upload {settings['manual_clip_seconds']} seconds.",
                 "",
                 *last_lines,
@@ -2964,6 +3149,26 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         self.record_video_analysis_result(side, description, result, source=source)
         wx.CallAfter(self.notify, f"{side.title()} camera video: {description}", 1, True)
         audio.play_notification("doorbell", f"{side.title()} camera video: {description}")
+
+    def record_video_followup_decision(self, side, decision, mode="smart"):
+        if not hasattr(self, "last_video_followup_decision"):
+            self.last_video_followup_decision = {}
+        label = "back" if side == "back" else "front"
+        entry = {
+            "side": label,
+            "mode": mode,
+            "run": bool(getattr(decision, "run", False)),
+            "reason": getattr(decision, "reason", "unknown"),
+            "markers": list(getattr(decision, "markers", ()) or ()),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        }
+        self.last_video_followup_decision[label] = entry
+        logging.info(
+            "[VIDEO ANALYSIS] decision side=%s mode=%s run=%s reason=%s markers=%s",
+            label, mode, entry["run"], entry["reason"], ",".join(entry["markers"]) or "none",
+        )
+        if hasattr(self, "video_analysis_status_txt"):
+            wx.CallAfter(self.video_analysis_status_txt.SetValue, self._video_analysis_summary_text())
 
     def record_video_analysis_result(self, side, description, result=None, source="unknown"):
         if not hasattr(self, "last_video_analysis"):
@@ -4200,6 +4405,9 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
     def _dispatch_broadcast_message(self, message, *, channel="manual"):
         return _dispatch_broadcast_message(message, channel=channel)
 
+    def _dispatch_cinderella_event(self, event, error="", source="vacuum"):
+        return _dispatch_cinderella_event(event, error=error, source=source)
+
     def _open_url(self, url):
         return open_url(url)
 
@@ -4602,6 +4810,15 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
             summary = f"Home Assistant status check failed: {e}"
         wx.CallAfter(self.ha_status_txt.SetValue, summary)
 
+    def _format_ha_status_timestamp(self, value):
+        try:
+            value = float(value or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value <= 0:
+            return "never"
+        return datetime.fromtimestamp(value).isoformat(timespec="seconds")
+
     def _build_ha_status_summary(self):
         ha_settings = cfg.get_ha_settings(self.config, include_env=True)
         lines = [
@@ -4614,6 +4831,17 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
             f"Viper HA listener enabled: {'yes' if self.config.get('ha_listener_enabled', True) else 'no'}",
             f"Viper HA listener connected: {'yes' if listener_status.get('connected') else 'no'}",
             f"Viper HA listener last error: {listener_status.get('last_error') or 'none'}",
+            f"Last HA event entity: {listener_status.get('last_event_entity') or 'none'}",
+            f"Last HA event raw state: {listener_status.get('last_event_old_state') or ''} -> {listener_status.get('last_event_new_state') or ''}",
+            f"Last HA event normalized: {listener_status.get('last_event_old_normalized') or ''} -> {listener_status.get('last_event_new_normalized') or ''}",
+            f"Last HA event routed actions: {listener_status.get('last_event_action_count', 0)}",
+            f"Last routed action: {listener_status.get('last_routed_action') or 'none'}",
+            f"Last fridge/freezer poll: {self._format_ha_status_timestamp(listener_status.get('last_fridge_poll_at'))}",
+            f"Last vacuum poll: {self._format_ha_status_timestamp(listener_status.get('last_cinderella_poll_at'))}",
+            f"Last successful poll: {self._format_ha_status_timestamp(listener_status.get('last_successful_poll_at'))}",
+            f"Reconnect count: {listener_status.get('reconnect_count', 0)}",
+            f"Poll failure count: {listener_status.get('poll_failure_count', 0)}",
+            f"Last poll error: {listener_status.get('last_poll_error') or 'none'}",
             "",
         ])
 
@@ -4672,10 +4900,10 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
             ("Ice maker switch", ice_entities["switch"]),
             ("Ice maker keep-on helper", ice_entities["keep_on"]),
             ("Ice usage counter", ice_entities["counter"]),
-            ("Cinderella status", "sensor.cinderella_status"),
-            ("Cinderella vacuum error", "sensor.cinderella_vacuum_error"),
-            ("Cinderella dock error", "sensor.cinderella_dock_dock_error"),
-            ("Cinderella mop drying", "binary_sensor.cinderella_dock_mop_drying"),
+            ("Cinderella status", self.config.get("cinderella_status_entity") or "sensor.cinderella_status"),
+            ("Cinderella vacuum error", self.config.get("cinderella_vacuum_error_entity") or "sensor.cinderella_vacuum_error"),
+            ("Cinderella dock error", self.config.get("cinderella_dock_error_entity") or "sensor.cinderella_dock_dock_error"),
+            ("Cinderella mop drying", self.config.get("cinderella_mop_drying_entity") or "binary_sensor.cinderella_dock_mop_drying"),
         ]:
             entity_ids.append((label, entity_id))
 
@@ -5455,10 +5683,26 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
 
     def _run_batt(self):
         try:
-            r = requests.get(f"http://{cfg.HA_IP}:{cfg.HA_PORT}/api/states", headers={"Authorization": f"Bearer {cfg.HA_TOKEN}"}, timeout=10)
-            r.raise_for_status()
+            ha_settings = self._ha_settings_for_utility_query()
+            result = discovery.get_ha_states(
+                token=ha_settings.get("ha_token"),
+                ha_ip=ha_settings.get("ha_ip"),
+                ha_port=ha_settings.get("ha_port"),
+                timeout=10,
+            )
+            if not result.get("ok") and result.get("error") in {"unreachable", "timeout"}:
+                self.check_and_repair_home_assistant_address()
+                ha_settings = self._ha_settings_for_utility_query()
+                result = discovery.get_ha_states(
+                    token=ha_settings.get("ha_token"),
+                    ha_ip=ha_settings.get("ha_ip"),
+                    ha_port=ha_settings.get("ha_port"),
+                    timeout=10,
+                )
+            if not result.get("ok"):
+                raise RuntimeError(self._format_ha_utility_error(result))
             stats = []
-            for s in r.json():
+            for s in result.get("states", []):
                 eid = s.get("entity_id", "").lower()
                 if any(k in eid for k in cfg.BATTERY_KEYWORDS) and ("front" in eid or "back" in eid):
                     friendly = s["attributes"].get("friendly_name", eid)
@@ -5479,13 +5723,27 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
     def _run_filter(self):
         try:
             entity_id = "sensor.refrigerator_water_filter_usage"
-            r = requests.get(
-                f"http://{cfg.HA_IP}:{cfg.HA_PORT}/api/states/{entity_id}",
-                headers={"Authorization": f"Bearer {cfg.HA_TOKEN}"},
+            ha_settings = self._ha_settings_for_utility_query()
+            result = discovery.get_entity(
+                entity_id,
+                token=ha_settings.get("ha_token"),
+                ha_ip=ha_settings.get("ha_ip"),
+                ha_port=ha_settings.get("ha_port"),
                 timeout=10,
             )
-            r.raise_for_status()
-            s = r.json()
+            if not result.get("ok") and result.get("error") in {"unreachable", "timeout"}:
+                self.check_and_repair_home_assistant_address()
+                ha_settings = self._ha_settings_for_utility_query()
+                result = discovery.get_entity(
+                    entity_id,
+                    token=ha_settings.get("ha_token"),
+                    ha_ip=ha_settings.get("ha_ip"),
+                    ha_port=ha_settings.get("ha_port"),
+                    timeout=10,
+                )
+            if not result.get("ok"):
+                raise RuntimeError(self._format_ha_utility_error(result, entity_id=entity_id))
+            s = result.get("entity") or {}
             friendly = s.get("attributes", {}).get("friendly_name", "Refrigerator Water filter usage")
             raw_state = str(s.get("state", "")).strip()
             msg = f"{friendly}: {raw_state} percent."
@@ -5493,6 +5751,22 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
             safe_submit(audio.play_notification, "utilities", msg)
         except Exception as e:
             self.notify(f"Filter query failed: {e}", priority=10)
+
+    def _ha_settings_for_utility_query(self):
+        return cfg.get_ha_settings(self.config, include_env=True)
+
+    def _format_ha_utility_error(self, result, *, entity_id=""):
+        message = result.get("message") or result.get("error") or "Home Assistant request failed."
+        url = result.get("url") or ""
+        if result.get("error") == "unreachable":
+            host = (cfg.get_ha_settings(self.config, include_env=True).get("ha_ip") or "").strip()
+            if host and not discovery.resolve_host_to_ip(host):
+                message += f" The saved Home Assistant host '{host}' does not resolve from Windows right now."
+        if entity_id and result.get("error") == "not_found":
+            message += f" Missing entity: {entity_id}."
+        if url:
+            message += f" URL: {url}"
+        return message
 
     def on_scan_sonos(self, event):
         self.notify("Scanning network for Sonos. This will only show what is available.", priority=10)
@@ -5587,15 +5861,20 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
             other_trigger = triggers.get(other_side, {})
             entity_id = trigger.get("trigger_entity_id") or ""
             rtsp_url = trigger.get("rtsp_url") or _doorbell_rtsp_for_key(side)
+            listener_warning = ""
             if not self.config.get("ha_listener_enabled", True):
-                wx.CallAfter(self.notify, "Home Assistant listener is disabled. Turn it on before running the doorbell full flow test.", 10)
-                return
+                listener_warning = (
+                    "Home Assistant listener is disabled. Sending the test event anyway, then running the doorbell flow directly."
+                )
             if hasattr(self, "ha_listener"):
                 status = self.ha_listener.status()
                 if not status.get("connected"):
                     error = status.get("last_error") or "not connected"
-                    wx.CallAfter(self.notify, f"Home Assistant listener is not connected: {error}. The full flow test was not sent.", 10)
-                    return
+                    listener_warning = (
+                        f"Home Assistant listener is not connected: {error}. Sending the test event anyway, then running the doorbell flow directly."
+                    )
+            if listener_warning:
+                wx.CallAfter(self.notify, listener_warning, 10)
             if not trigger.get("enabled"):
                 wx.CallAfter(self.notify, f"{label} doorbell trigger is not enabled. Save a trigger entity and RTSP URL in Home Assistant Setup first.", 10)
                 return
@@ -5665,8 +5944,15 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
             )
             wx.CallAfter(
                 self.notify,
-                f"{label} doorbell test event sent through Home Assistant. Watch for chime, camera capture, AI verdict, and speech.",
+                f"{label} doorbell test event accepted by Home Assistant. Running the full doorbell flow now.",
                 10,
+            )
+            status_text, status_code = _handle_doorbell(f"{side} door", rtsp_url, side)
+            logging.info(
+                "[HA SETUP] Direct %s doorbell full flow completed code=%s status=%s",
+                side,
+                status_code,
+                status_text,
             )
         except Exception as e:
             logging.exception("[HA SETUP] Doorbell full flow test failed side=%s", side)
@@ -5695,6 +5981,24 @@ if __name__ == "__main__":
     file_handler = RotatingFileHandler(LOG_PATH, maxBytes=5 * 1024 * 1024, backupCount=2, encoding="utf-8")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", handlers=[file_handler, logging.StreamHandler()], force=True)
     install_crash_hooks()
+    if "--ha-recovery-diagnose" in sys.argv:
+        diagnosis = ha_recovery.diagnose()
+        if "--compact" in sys.argv:
+            diagnosis = ha_recovery.compact_diagnosis(diagnosis)
+        print(json.dumps(diagnosis, indent=2, sort_keys=True))
+        sys.exit(0)
+    if "--ha-recovery-test-push" in sys.argv:
+        ok = ha_recovery.send_recovery_test_push()
+        print(json.dumps({"ok": ok, "message": "HA recovery Pushover test sent." if ok else "HA recovery Pushover test failed."}, indent=2, sort_keys=True))
+        sys.exit(0)
+    if "--ha-recovery-once" in sys.argv:
+        result = ha_recovery.repair_once(push="--no-push" not in sys.argv)
+        if "--compact" in sys.argv:
+            print(ha_recovery.compact_status_line(result))
+            print(json.dumps(ha_recovery.compact_result(result), indent=2, sort_keys=True))
+        else:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        sys.exit(0 if result.get("ok") else 1)
     if not acquire_single_instance_lock():
         focused = focus_existing_viper_window()
         logging.warning("Another Viper Vision instance is already running; exiting duplicate startup. focused_existing_window=%s", focused)

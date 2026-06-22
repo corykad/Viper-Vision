@@ -392,6 +392,9 @@ CONFIG_SCHEMA = {
         "mqtt_password": "",
         "show_advanced_ring_mqtt": False,
         "ha_listener_enabled": True,
+        "ha_smartthings_recovery_enabled": True,
+        "ha_smartthings_stale_minutes": 90,
+        "ha_smartthings_reload_cooldown_minutes": 60,
         "ice_maker_switch_entity": ICE_MAKER_SWITCH_ENTITY,
         "ice_maker_keep_on_entity": ICE_MAKER_KEEP_ON_ENTITY,
         "ice_maker_counter_entity": ICE_MAKER_COUNTER_ENTITY,
@@ -461,7 +464,12 @@ CONFIG_SCHEMA = {
         # ── Roborock / Cinderella ──────────────────────────────────────────
         "cinderella_enabled": True,
         "cinderella_ai_mode": False,
+        "cinderella_status_entity": "sensor.cinderella_status",
+        "cinderella_vacuum_error_entity": "sensor.cinderella_vacuum_error",
+        "cinderella_dock_error_entity": "sensor.cinderella_dock_dock_error",
+        "cinderella_mop_drying_entity": "binary_sensor.cinderella_dock_mop_drying",
         "vacuum_cleaning_mode": "vacuum_mop",
+        "vacuum_room_repeat_count": 1,
         "vacuum_rooms": {},
         "cinderella_ai_prompt": (
             "You are a dry, witty narrator for a robot vacuum cleaner named Cinderella. "
@@ -1060,6 +1068,24 @@ def validate_and_normalize_config(config_data):
         defaults["show_advanced_ring_mqtt"],
     )
     normalized["ha_listener_enabled"] = _as_bool(normalized.get("ha_listener_enabled"), defaults["ha_listener_enabled"])
+    normalized["ha_smartthings_recovery_enabled"] = _as_bool(
+        normalized.get("ha_smartthings_recovery_enabled"),
+        defaults["ha_smartthings_recovery_enabled"],
+    )
+    normalized["ha_smartthings_stale_minutes"] = max(
+        15,
+        min(_as_int(normalized.get("ha_smartthings_stale_minutes"), defaults["ha_smartthings_stale_minutes"]), 1440),
+    )
+    normalized["ha_smartthings_reload_cooldown_minutes"] = max(
+        15,
+        min(
+            _as_int(
+                normalized.get("ha_smartthings_reload_cooldown_minutes"),
+                defaults["ha_smartthings_reload_cooldown_minutes"],
+            ),
+            1440,
+        ),
+    )
     normalized["ice_maker_switch_entity"] = _as_str(normalized.get("ice_maker_switch_entity"), defaults["ice_maker_switch_entity"]).strip() or defaults["ice_maker_switch_entity"]
     normalized["ice_maker_keep_on_entity"] = _as_str(normalized.get("ice_maker_keep_on_entity"), defaults["ice_maker_keep_on_entity"]).strip() or defaults["ice_maker_keep_on_entity"]
     normalized["ice_maker_counter_entity"] = _as_str(normalized.get("ice_maker_counter_entity"), defaults["ice_maker_counter_entity"]).strip() or defaults["ice_maker_counter_entity"]
@@ -1080,6 +1106,12 @@ def validate_and_normalize_config(config_data):
     normalized["vacuum_cleaning_mode"] = _as_str(normalized.get("vacuum_cleaning_mode"), defaults["vacuum_cleaning_mode"]).strip() or defaults["vacuum_cleaning_mode"]
     if normalized["vacuum_cleaning_mode"] not in {"vacuum_mop", "vacuum_only", "mop_only"}:
         normalized["vacuum_cleaning_mode"] = defaults["vacuum_cleaning_mode"]
+    normalized["vacuum_room_repeat_count"] = min(
+        3,
+        _as_int(normalized.get("vacuum_room_repeat_count"), defaults["vacuum_room_repeat_count"], minimum=1),
+    )
+    normalized.pop("vacuum_custom_suction_value", None)
+    normalized.pop("vacuum_custom_suction_percent", None)
     normalized["cinderella_enabled"] = _as_bool(normalized.get("cinderella_enabled"), defaults["cinderella_enabled"])
     normalized["cinderella_ai_mode"] = _as_bool(normalized.get("cinderella_ai_mode"), defaults["cinderella_ai_mode"])
     normalized["cinderella_ai_prompt"] = _as_str(normalized.get("cinderella_ai_prompt"), defaults["cinderella_ai_prompt"]) or defaults["cinderella_ai_prompt"]

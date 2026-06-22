@@ -3,6 +3,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import sys
 import time
 import zipfile
@@ -12,6 +13,7 @@ from datetime import timezone
 from pathlib import Path
 
 import viper_config as cfg
+import viper_health
 
 
 APP_VERSION = "1.2.3"
@@ -19,6 +21,7 @@ LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 2
 FRIDGE_DOOR_ENTITY = "binary_sensor.refrigerator_fridge_door"
 FREEZER_DOOR_ENTITY = "binary_sensor.refrigerator_freezer_door"
+HA_SNAPSHOT_LATEST = "ha_integration_snapshot_latest.json"
 
 SECRET_KEYWORDS = (
     "token",
@@ -41,6 +44,171 @@ RING_ID_KEYS = {
     "front_doorbell_mqtt_topic",
     "back_doorbell_mqtt_topic",
 }
+
+
+def _entity_domain(entity_id):
+    return str(entity_id or "").split(".", 1)[0] if "." in str(entity_id or "") else ""
+
+
+def _entity_name_text(entity):
+    attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
+    return " ".join(
+        str(value or "").lower()
+        for value in (
+            entity.get("entity_id", ""),
+            attrs.get("friendly_name", ""),
+            attrs.get("device_class", ""),
+        )
+    )
+
+
+def _snapshot_entity_relevant(entity, config_data):
+    entity_id = str(entity.get("entity_id") or "")
+    if not entity_id:
+        return False
+    text = _entity_name_text(entity)
+    configured = set()
+    config_data = config_data if isinstance(config_data, dict) else {}
+    for key in (
+        "cinderella_status_entity",
+        "cinderella_vacuum_error_entity",
+        "cinderella_dock_error_entity",
+        "cinderella_mop_drying_entity",
+        "ice_maker_switch_entity",
+        "ice_maker_keep_on_entity",
+        "ice_maker_counter_entity",
+    ):
+        value = str(config_data.get(key) or "").strip()
+        if value:
+            configured.add(value)
+    triggers = config_data.get("doorbell_triggers") if isinstance(config_data.get("doorbell_triggers"), dict) else {}
+    for trigger in triggers.values():
+        if isinstance(trigger, dict) and trigger.get("trigger_entity_id"):
+            configured.add(str(trigger.get("trigger_entity_id")))
+    for speaker in (config_data.get("speakers") or {}).values() if isinstance(config_data.get("speakers"), dict) else []:
+        if isinstance(speaker, dict) and speaker.get("id"):
+            configured.add(str(speaker.get("id")))
+    if entity_id in configured:
+        return True
+    tokens = (
+        "refrigerator",
+        "fridge",
+        "freezer",
+        "water_filter",
+        "filter",
+        "cinderella",
+        "roborock",
+        "saros",
+        "ring",
+        "doorbell",
+        "viper_",
+    )
+    return any(token in text for token in tokens)
+
+
+def build_ha_integration_snapshot(config_data=None, *, ha_states=None, ha_listener_status=None, generated_at=None):
+    config_data = cfg.validate_and_normalize_config(config_data if config_data is not None else cfg.load_config())
+    ha_states = ha_states if isinstance(ha_states, list) else []
+    relevant = [entity for entity in ha_states if isinstance(entity, dict) and _snapshot_entity_relevant(entity, config_data)]
+    entities = {}
+    categories = {
+        "doorbell": 0,
+        "fridge": 0,
+        "freezer": 0,
+        "vacuum": 0,
+        "speakers": 0,
+        "other": 0,
+    }
+    for entity in sorted(relevant, key=lambda item: str(item.get("entity_id") or "")):
+        entity_id = str(entity.get("entity_id") or "")
+        attrs = entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {}
+        options = attrs.get("options") if isinstance(attrs.get("options"), list) else None
+        entry = {
+            "domain": _entity_domain(entity_id),
+            "state": str(entity.get("state", "")),
+            "friendly_name": str(attrs.get("friendly_name") or ""),
+            "device_class": str(attrs.get("device_class") or ""),
+            "last_changed": str(entity.get("last_changed") or ""),
+            "last_updated": str(entity.get("last_updated") or ""),
+        }
+        if options is not None:
+            entry["options"] = [str(item) for item in options]
+        if isinstance(attrs.get("fan_speed_list"), list):
+            entry["fan_speed_list"] = [str(item) for item in attrs.get("fan_speed_list")]
+        entities[entity_id] = entry
+        text = _entity_name_text(entity)
+        if "freezer" in text:
+            categories["freezer"] += 1
+        elif "refrigerator" in text or "fridge" in text or "filter" in text:
+            categories["fridge"] += 1
+        elif any(token in text for token in ("cinderella", "roborock", "saros")):
+            categories["vacuum"] += 1
+        elif any(token in text for token in ("ring", "doorbell", "viper_")):
+            categories["doorbell"] += 1
+        elif _entity_domain(entity_id) == "media_player":
+            categories["speakers"] += 1
+        else:
+            categories["other"] += 1
+    return {
+        "generated_at": (generated_at or datetime.now()).isoformat(timespec="seconds"),
+        "entity_count": len(entities),
+        "categories": categories,
+        "listener": deepcopy(ha_listener_status or {}),
+        "entities": entities,
+    }
+
+
+def diff_ha_integration_snapshots(previous, current):
+    previous_entities = (previous or {}).get("entities") if isinstance(previous, dict) else {}
+    current_entities = (current or {}).get("entities") if isinstance(current, dict) else {}
+    previous_entities = previous_entities if isinstance(previous_entities, dict) else {}
+    current_entities = current_entities if isinstance(current_entities, dict) else {}
+    previous_ids = set(previous_entities)
+    current_ids = set(current_entities)
+    changed = []
+    for entity_id in sorted(previous_ids & current_ids):
+        old = previous_entities[entity_id]
+        new = current_entities[entity_id]
+        fields = {}
+        for key in ("state", "friendly_name", "device_class", "options", "fan_speed_list"):
+            if old.get(key) != new.get(key):
+                fields[key] = {"old": old.get(key), "new": new.get(key)}
+        if fields:
+            changed.append({"entity_id": entity_id, "fields": fields})
+    return {
+        "added": sorted(current_ids - previous_ids),
+        "removed": sorted(previous_ids - current_ids),
+        "changed": changed,
+    }
+
+
+def save_ha_integration_snapshot(config_data=None, *, ha_states=None, ha_listener_status=None, output_dir=None):
+    output = Path(output_dir or cfg.DATA_DIR)
+    output.mkdir(parents=True, exist_ok=True)
+    latest = output / HA_SNAPSHOT_LATEST
+    previous = {}
+    if latest.exists():
+        try:
+            previous = json.loads(latest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+    snapshot = build_ha_integration_snapshot(
+        config_data,
+        ha_states=ha_states,
+        ha_listener_status=ha_listener_status,
+    )
+    diff = diff_ha_integration_snapshots(previous, snapshot) if previous else {"added": [], "removed": [], "changed": []}
+    stamped = output / f"ha_integration_snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    text = json.dumps(snapshot, indent=2, sort_keys=True)
+    stamped.write_text(text, encoding="utf-8")
+    latest.write_text(text, encoding="utf-8")
+    return {
+        "ok": True,
+        "path": str(stamped),
+        "latest_path": str(latest),
+        "snapshot": snapshot,
+        "diff": diff,
+    }
 
 
 def _mask(value):
@@ -104,6 +272,150 @@ def recent_log_lines(log_path=None, limit=80):
         return []
     interesting = [line for line in lines if any(word in line for word in ("ERROR", "WARNING", "Traceback", "CRITICAL"))]
     return [redact_text(line) for line in interesting[-limit:]]
+
+
+def _hidden_subprocess_kwargs():
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return {"startupinfo": startupinfo, "creationflags": subprocess.CREATE_NO_WINDOW}
+
+
+def _run_powershell_json(command, *, timeout=10):
+    if os.name != "nt":
+        return {"ok": False, "message": "Windows Task Scheduler checks only run on Windows."}
+    exe = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not exe:
+        return {"ok": False, "message": "PowerShell was not found."}
+    try:
+        result = subprocess.run(
+            [exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            **_hidden_subprocess_kwargs(),
+        )
+    except Exception as e:
+        return {"ok": False, "message": str(e)}
+    output = (result.stdout or "").strip()
+    if result.returncode != 0:
+        return {"ok": False, "message": (result.stderr or output or f"PowerShell exited {result.returncode}").strip()}
+    if not output:
+        return {"ok": False, "message": "PowerShell returned no data."}
+    try:
+        return {"ok": True, "data": json.loads(output)}
+    except json.JSONDecodeError:
+        return {"ok": False, "message": output}
+
+
+def _read_json_file(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _tail_file(path, limit=12):
+    path = Path(path)
+    if not path.exists():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore").replace("\x00", "")
+        return [line for line in text.splitlines() if line.strip()][-limit:]
+    except OSError:
+        return []
+
+
+def ha_watchdog_status():
+    task_name = "Viper Home Assistant Watchdog"
+    log_path = cfg.DATA_DIR / "ha_vm_watchdog.log"
+    state_path = cfg.DATA_DIR / "ha_recovery_state.json"
+    status = {
+        "checked": True,
+        "task_name": task_name,
+        "installed": False,
+        "state": "unknown",
+        "last_run_time": "",
+        "last_task_result": "",
+        "next_run_time": "",
+        "action_execute": "",
+        "action_arguments": "",
+        "silent": False,
+        "last_recovery_state": _read_json_file(state_path),
+        "log_path": str(log_path),
+        "recent_log_lines": [redact_text(line) for line in _tail_file(log_path, limit=12)],
+        "message": "Watchdog task has not been checked.",
+    }
+    command = rf"""
+$task = Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue
+if ($null -eq $task) {{
+  [pscustomobject]@{{ installed=$false; message='Scheduled task is not installed.' }} | ConvertTo-Json -Compress
+}} else {{
+  $info = Get-ScheduledTaskInfo -TaskName '{task_name}'
+  $action = $task.Actions | Select-Object -First 1
+  [pscustomobject]@{{
+    installed=$true
+    state=[string]$task.State
+    execute=[string]$action.Execute
+    arguments=[string]$action.Arguments
+    lastRunTime=[string]$info.LastRunTime
+    lastTaskResult=[string]$info.LastTaskResult
+    nextRunTime=[string]$info.NextRunTime
+    missedRuns=[int]$info.NumberOfMissedRuns
+    runLevel=[string]$task.Principal.RunLevel
+  }} | ConvertTo-Json -Compress
+}}
+"""
+    result = _run_powershell_json(command)
+    if result.get("ok"):
+        data = result.get("data") or {}
+        status.update({
+            "installed": bool(data.get("installed")),
+            "state": str(data.get("state") or "missing"),
+            "last_run_time": str(data.get("lastRunTime") or ""),
+            "last_task_result": str(data.get("lastTaskResult") or ""),
+            "next_run_time": str(data.get("nextRunTime") or ""),
+            "action_execute": str(data.get("execute") or ""),
+            "action_arguments": str(data.get("arguments") or ""),
+            "missed_runs": data.get("missedRuns"),
+            "run_level": str(data.get("runLevel") or ""),
+        })
+    else:
+        status["message"] = result.get("message") or "Could not query scheduled task."
+        return status
+    status["silent"] = "wscript.exe" in status["action_execute"].lower()
+    if not status["installed"]:
+        status["message"] = "Scheduled task is not installed."
+    elif status["last_task_result"] in {"0", ""}:
+        status["message"] = "Watchdog task is installed and last run was clean."
+    else:
+        status["message"] = f"Watchdog task is installed, but last result was {status['last_task_result']}."
+    return status
+
+
+def ha_watchdog_status_text(status):
+    status = status if isinstance(status, dict) else {}
+    recovery = status.get("last_recovery_state") if isinstance(status.get("last_recovery_state"), dict) else {}
+    lines = [
+        "HA watchdog status:",
+        f"Installed: {'yes' if status.get('installed') else 'no'}",
+        f"Task state: {status.get('state') or 'unknown'}",
+        f"Silent runner: {'yes' if status.get('silent') else 'no'}",
+        f"Run level: {status.get('run_level') or 'unknown'}",
+        f"Last run: {status.get('last_run_time') or 'never'}",
+        f"Last result: {status.get('last_task_result') or 'unknown'}",
+        f"Next run: {status.get('next_run_time') or 'unknown'}",
+        f"Action: {status.get('action_execute') or 'unknown'} {status.get('action_arguments') or ''}".strip(),
+        f"Recovery failures: {recovery.get('failures', 0)}",
+        f"Last problem: {recovery.get('last_problem_state') or 'none'}",
+        f"Message: {status.get('message') or ''}",
+    ]
+    logs = status.get("recent_log_lines") or []
+    if logs:
+        lines.extend(["", "Recent watchdog log:"])
+        lines.extend(logs[-8:])
+    return "\n".join(lines)
 
 
 def _recent_log_noise(log_path=None, limit=20):
@@ -292,6 +604,12 @@ def build_health_summary(config_data, *, ha_listener_status=None, ha_connection=
             active.append(f"Home Assistant listener is not connected: {ha_listener_status.get('last_error') or 'no error detail'}.")
         elif ha_listener_status.get("last_error"):
             history.append(f"Home Assistant listener last reported: {ha_listener_status.get('last_error')}.")
+        critical_status = ha_listener_status.get("critical_health_status")
+        if critical_status and critical_status not in {"ok", "disabled"}:
+            active.append(
+                f"Critical HA watchdog says {critical_status}: "
+                f"{ha_listener_status.get('critical_health_message') or 'no detail'}"
+            )
 
     if ha_connection.get("checked") and not ha_connection.get("ok"):
         active.append(f"Home Assistant connection check failed: {ha_connection.get('message') or ha_connection.get('error') or 'no detail'}.")
@@ -358,6 +676,14 @@ def collect_diagnostics(config_data=None, *, ha_listener_status=None, ha_connect
         fridge_sensor_health=fridge_sensor_health,
         recent_errors=recent_errors,
     )
+    diag_base = {
+        "health": health,
+        "ha_listener": ha_listener_status or {},
+        "fridge_sensor_health": fridge_sensor_health,
+        "ffmpeg": ffmpeg_status(),
+        "ha_connection": ha_connection or {"checked": False},
+    }
+    critical_workflows = viper_health.critical_workflow_status(config_data, diag=diag_base)
     return {
         "app": {
             "name": "Viper Vision",
@@ -373,12 +699,16 @@ def collect_diagnostics(config_data=None, *, ha_listener_status=None, ha_connect
             "config_file": str(cfg.CONFIG_FILE),
             "log_file": str(cfg.DATA_DIR / "viper_full_debug.log"),
         },
-        "ffmpeg": ffmpeg_status(),
+        "ffmpeg": diag_base["ffmpeg"],
         "config_shape": config_shape(config_data),
         "ha_listener": ha_listener_status or {},
         "ha_connection": ha_connection or {"checked": False},
         "ha_health": ha_health or {"checked": False},
+        "ha_watchdog": ha_watchdog_status(),
         "fridge_sensor_health": fridge_sensor_health,
+        "critical_workflows": critical_workflows,
+        "recent_health_events": viper_health.recent_health_events(limit=8),
+        "beginner_health": viper_health.beginner_health_lines(diag_base),
         "health": health,
         "recent_errors": recent_errors,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -387,12 +717,20 @@ def collect_diagnostics(config_data=None, *, ha_listener_status=None, ha_connect
 
 def health_summary_text(diag):
     health = diag.get("health", {}) if isinstance(diag, dict) else {}
+    listener = diag.get("ha_listener", {}) if isinstance(diag, dict) else {}
     status = health.get("status") or "unknown"
     lines = [
         f"Health status: {status.upper()}",
         "",
-        "Active issues:",
+        "Plain-English status:",
     ]
+    lines.extend(diag.get("beginner_health") or ["No plain-English health details were generated."])
+    lines.extend(["", "Critical workflow canaries:"])
+    lines.extend(viper_health.critical_workflow_lines(diag.get("critical_workflows") or {}))
+    lines.extend([
+        "",
+        "Active issues:",
+    ])
     lines.extend(health.get("active_issues") or ["None detected."])
     lines.extend(["", "Resolved or historical notes:"])
     lines.extend((health.get("stale_history") or ["None."])[:8])
@@ -404,8 +742,29 @@ def health_summary_text(diag):
             "",
             f"Log rotation: {rotation.get('max_bytes', LOG_MAX_BYTES)} bytes, {rotation.get('backup_count', LOG_BACKUP_COUNT)} backups.",
         ])
+    lines.extend(
+        [
+            "",
+            ha_watchdog_status_text(diag.get("ha_watchdog") or {}),
+            "",
+            "HA event health:",
+            f"Listener connected: {'yes' if listener.get('connected') else 'no'}",
+            f"Last event entity: {listener.get('last_event_entity') or 'none'}",
+            f"Last event raw: {listener.get('last_event_old_state') or ''} -> {listener.get('last_event_new_state') or ''}",
+            f"Last event normalized: {listener.get('last_event_old_normalized') or ''} -> {listener.get('last_event_new_normalized') or ''}",
+            f"Last routed action count: {listener.get('last_event_action_count', 0)}",
+            f"Reconnect count: {listener.get('reconnect_count', 0)}",
+            f"Poll failures: {listener.get('poll_failure_count', 0)}",
+            f"Last poll error: {listener.get('last_poll_error') or 'none'}",
+        ]
+    )
     if health.get("last_log_line"):
         lines.extend(["", f"Latest log line: {health['last_log_line']}"])
+    events = diag.get("recent_health_events") or []
+    if events:
+        lines.extend(["", "Recent health recovery journal:"])
+        for item in events[-6:]:
+            lines.append(f"{item.get('timestamp')}: {item.get('event_type')} {item.get('status')}: {item.get('message')}")
     return "\n".join(lines)
 
 
@@ -424,6 +783,18 @@ def diagnostics_text(diag):
         f"Log rotation: {diag.get('health', {}).get('log_rotation', {}).get('max_bytes', LOG_MAX_BYTES)} bytes, {diag.get('health', {}).get('log_rotation', {}).get('backup_count', LOG_BACKUP_COUNT)} backups",
         f"HA listener connected: {'yes' if diag.get('ha_listener', {}).get('connected') else 'no'}",
         f"HA listener last error: {diag.get('ha_listener', {}).get('last_error') or 'none'}",
+        f"HA listener last event entity: {diag.get('ha_listener', {}).get('last_event_entity') or 'none'}",
+        f"HA listener last event raw: {diag.get('ha_listener', {}).get('last_event_old_state') or ''} -> {diag.get('ha_listener', {}).get('last_event_new_state') or ''}",
+        f"HA listener last event normalized: {diag.get('ha_listener', {}).get('last_event_old_normalized') or ''} -> {diag.get('ha_listener', {}).get('last_event_new_normalized') or ''}",
+        f"HA listener last event action count: {diag.get('ha_listener', {}).get('last_event_action_count', 0)}",
+        f"HA listener reconnect count: {diag.get('ha_listener', {}).get('reconnect_count', 0)}",
+        f"HA listener poll failures: {diag.get('ha_listener', {}).get('poll_failure_count', 0)}",
+        f"HA listener last poll error: {diag.get('ha_listener', {}).get('last_poll_error') or 'none'}",
+        f"HA watchdog installed: {'yes' if diag.get('ha_watchdog', {}).get('installed') else 'no'}",
+        f"HA watchdog last result: {diag.get('ha_watchdog', {}).get('last_task_result') or 'unknown'}",
+        f"HA watchdog silent: {'yes' if diag.get('ha_watchdog', {}).get('silent') else 'no'}",
+        f"Critical workflows: {diag.get('critical_workflows', {}).get('overall', 'unknown')}",
+        f"SmartThings reloads in 24h: {diag.get('ha_listener', {}).get('repeated_smartthings_reloads_24h', 0)}",
         f"Fridge sensor health: {diag.get('fridge_sensor_health', {}).get('status', 'unknown')}",
         f"Fridge sensor message: {diag.get('fridge_sensor_health', {}).get('message', 'not checked')}",
         f"HA host configured: {'yes' if diag['config_shape']['has_ha_host'] else 'no'}",
@@ -530,6 +901,7 @@ def create_support_bundle(
             (cfg.DATA_DIR / "viper_full_debug.log.1", "logs/viper_full_debug.log.1"),
             (cfg.DATA_DIR / "viper_full_debug.log.2", "logs/viper_full_debug.log.2"),
             (cfg.DATA_DIR / "viper_ha_install.log", "logs/viper_ha_install.log"),
+            (cfg.DATA_DIR / HA_SNAPSHOT_LATEST, f"home_assistant/{HA_SNAPSHOT_LATEST}"),
             (cfg.API_LOG_PATH, "logs/api_usage.json"),
             (cfg.DATA_DIR / "viper_last_crash.txt", "logs/viper_last_crash.txt"),
         ]:

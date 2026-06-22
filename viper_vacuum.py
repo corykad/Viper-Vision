@@ -163,6 +163,48 @@ def select_best_cleaning_mode_option(options, mode):
     return scored[0][0] if scored and scored[0][1] > 0 else ""
 
 
+def _normalized_option(option):
+    return str(option or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _select_first_option(options, preferred):
+    by_normalized = {_normalized_option(option): str(option) for option in options}
+    for item in preferred:
+        if item in by_normalized:
+            return by_normalized[item]
+    for option in options:
+        text = _normalized_option(option)
+        if any(item in text for item in preferred):
+            return str(option)
+    return ""
+
+
+def select_mop_intensity_option(options, mode):
+    options = [str(option) for option in options]
+    if mode == "vacuum_only":
+        return _select_first_option(options, ("off", "none", "close", "closed"))
+    return _select_first_option(options, ("moderate", "medium", "standard", "normal", "low", "slight", "high", "extreme"))
+
+
+def select_mop_mode_option(options, mode):
+    options = [str(option) for option in options]
+    if mode == "vacuum_only":
+        return ""
+    if mode == "mop_only":
+        return _select_first_option(options, ("standard", "smart_mode", "deep", "deep_plus", "fast", "custom"))
+    return _select_first_option(options, ("standard", "smart_mode", "fast", "custom"))
+
+
+def select_fan_speed_for_mode(options, mode, current=""):
+    options = [str(option) for option in options]
+    if mode == "mop_only":
+        return _select_first_option(options, ("off_raise_main_brush", "off", "quiet", "balanced"))
+    current_text = _normalized_option(current)
+    if current_text in {"off_raise_main_brush", "off"}:
+        return _select_first_option(options, ("balanced", "standard", "turbo", "max", "quiet"))
+    return str(current or "") if str(current or "") in options else ""
+
+
 def vacuum_cleaning_mode_service_calls(entity_id, controls, mode, fan_speed=""):
     mode = normalize_vacuum_cleaning_mode(mode)
     calls = []
@@ -171,10 +213,18 @@ def vacuum_cleaning_mode_service_calls(entity_id, controls, mode, fan_speed=""):
         domain = ha_domain_from_entity_id(control_id)
         attrs = control.get("attributes") if isinstance(control.get("attributes"), dict) else {}
         name_text = " ".join(str(part).lower() for part in [control_id, attrs.get("friendly_name")])
-        if domain == "select" and any(token in name_text for token in ("cleaning_mode", "clean mode", "mop_mode", "mop mode", "water_box_mode", "water box")):
-            options = [str(option) for option in attrs.get("options", [])] if isinstance(attrs.get("options"), list) else []
+        options = [str(option) for option in attrs.get("options", [])] if isinstance(attrs.get("options"), list) else []
+        if domain == "select" and any(token in name_text for token in ("cleaning_mode", "clean mode", "water_box_mode", "water box")):
             option = select_best_cleaning_mode_option(options, mode)
             if option:
+                calls.append(("select/select_option", {"entity_id": control_id, "option": option}))
+        elif domain == "select" and any(token in name_text for token in ("mop_intensity", "mop intensity", "water", "flow")):
+            option = select_mop_intensity_option(options, mode)
+            if option and option != str(control.get("state", "")):
+                calls.append(("select/select_option", {"entity_id": control_id, "option": option}))
+        elif domain == "select" and any(token in name_text for token in ("mop_mode", "mop mode")):
+            option = select_mop_mode_option(options, mode)
+            if option and option != str(control.get("state", "")):
                 calls.append(("select/select_option", {"entity_id": control_id, "option": option}))
         elif domain == "number" and mode == "vacuum_only" and any(token in name_text for token in ("mop_intensity", "water", "flow")):
             minimum = attrs.get("min", 0)
@@ -183,13 +233,10 @@ def vacuum_cleaning_mode_service_calls(entity_id, controls, mode, fan_speed=""):
             except (TypeError, ValueError):
                 value = 0
             calls.append(("number/set_value", {"entity_id": control_id, "value": value}))
-    if mode == "mop_only":
-        fan_options = []
-        selected_vacuum = next((control for control in controls or [] if control.get("entity_id") == entity_id), None)
-        attrs = selected_vacuum.get("attributes") if selected_vacuum and isinstance(selected_vacuum.get("attributes"), dict) else {}
-        if isinstance(attrs.get("fan_speed_list"), list):
-            fan_options = [str(item) for item in attrs.get("fan_speed_list")]
-        quiet = select_best_cleaning_mode_option(fan_options, "vacuum_only")
-        if quiet and quiet != str(fan_speed):
-            calls.append(("vacuum/set_fan_speed", {"entity_id": entity_id, "fan_speed": quiet}))
+    selected_vacuum = next((control for control in controls or [] if control.get("entity_id") == entity_id), None)
+    attrs = selected_vacuum.get("attributes") if selected_vacuum and isinstance(selected_vacuum.get("attributes"), dict) else {}
+    fan_options = [str(item) for item in attrs.get("fan_speed_list", [])] if isinstance(attrs.get("fan_speed_list"), list) else []
+    fan = select_fan_speed_for_mode(fan_options, mode, fan_speed)
+    if fan and fan != str(fan_speed):
+        calls.append(("vacuum/set_fan_speed", {"entity_id": entity_id, "fan_speed": fan}))
     return calls
