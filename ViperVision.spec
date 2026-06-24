@@ -28,6 +28,8 @@ datas = [
     ("watch_ha_health.ps1", "."),
     ("watch_home_assistant_vm.ps1", "."),
     ("run_ha_watchdog_hidden.vbs", "."),
+    ("backup_home_assistant_to_d.ps1", "."),
+    ("run_ha_backup_hidden.vbs", "."),
     ("harden_ha_virtualbox.ps1", "."),
 ]
 

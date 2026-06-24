@@ -43,6 +43,7 @@ import viper_ha_package as ha_package
 import viper_health
 import viper_ha_vm as ha_vm
 import viper_ha_recovery as ha_recovery
+import viper_matter
 from viper_ui_fridge import FridgeTabMixin
 from viper_ui_vacuum import VacuumTabMixin
 from viper_ui_diagnostics import DiagnosticsTabMixin
@@ -817,6 +818,91 @@ def _handle_ha_listener_action(action: dict):
                 result.get("resolved_channel", ""),
                 result.get("message", ""),
             )
+
+
+def _api_bool_value():
+    payload = request.get_json(silent=True) or {}
+    value = payload.get("state", payload.get("enabled", payload.get("muted", request.form.get("state"))))
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "on", "yes", "enabled", "armed", "mute", "muted"}:
+        return True
+    if text in {"0", "false", "off", "no", "disabled", "disarmed", "unmute", "unmuted"}:
+        return False
+    return None
+
+
+def _viper_control_state():
+    if dash_app is None:
+        return {"ready": False}
+    speakers_state = {}
+    for name, speaker in (dash_app.config.get("speakers") or {}).items():
+        speakers_state[name] = {
+            "enabled": bool(speaker.get("enabled", True)),
+            "type": speaker.get("type", ""),
+            "id": speaker.get("id", ""),
+        }
+    return {
+        "ready": True,
+        "armed": bool(getattr(dash_app, "is_armed", dash_app.config.get("is_armed", True))),
+        "global_mute": bool(dash_app.config.get("global_mute", False)),
+        "speakers": speakers_state,
+    }
+
+
+@app.route("/api/control/state", methods=["GET"])
+def api_control_state():
+    if dash_app is None:
+        return jsonify(_viper_control_state()), 503
+    return jsonify(_viper_control_state())
+
+
+@app.route("/api/control/armed", methods=["POST"])
+def api_control_armed():
+    if dash_app is None:
+        return jsonify({"ok": False, "message": "System initializing."}), 503
+    enabled = _api_bool_value()
+    if enabled is None:
+        return jsonify({"ok": False, "message": "Send JSON {'state': true} or {'state': false}."}), 400
+    dash_app.is_armed = bool(enabled)
+    dash_app.config["is_armed"] = dash_app.is_armed
+    dash_app.save_config()
+    if hasattr(dash_app, "btn_arm"):
+        wx.CallAfter(dash_app.btn_arm.SetLabel, "Disarm System" if dash_app.is_armed else "Arm System")
+    message = f"Viper Vision {'Armed' if dash_app.is_armed else 'Disarmed'} from API."
+    wx.CallAfter(dash_app.notify, message, 1, True, True)
+    return jsonify({"ok": True, "armed": dash_app.is_armed, "state": _viper_control_state()})
+
+
+@app.route("/api/control/global_mute", methods=["POST"])
+def api_control_global_mute():
+    if dash_app is None:
+        return jsonify({"ok": False, "message": "System initializing."}), 503
+    muted = _api_bool_value()
+    if muted is None:
+        return jsonify({"ok": False, "message": "Send JSON {'state': true} or {'state': false}."}), 400
+    dash_app.set_global_mute(muted, source="api")
+    return jsonify({"ok": True, "global_mute": bool(dash_app.config.get("global_mute", False)), "state": _viper_control_state()})
+
+
+@app.route("/api/control/speakers/<path:name>/enabled", methods=["POST"])
+def api_control_speaker_enabled(name):
+    if dash_app is None:
+        return jsonify({"ok": False, "message": "System initializing."}), 503
+    speakers_cfg = dash_app.config.get("speakers") or {}
+    if name not in speakers_cfg:
+        return jsonify({"ok": False, "message": f"Unknown speaker: {name}", "speakers": sorted(speakers_cfg.keys())}), 404
+    enabled = _api_bool_value()
+    if enabled is None:
+        return jsonify({"ok": False, "message": "Send JSON {'state': true} or {'state': false}."}), 400
+    speakers_cfg[name]["enabled"] = bool(enabled)
+    dash_app.save_config()
+    if hasattr(dash_app, "refresh_speaker_list"):
+        wx.CallAfter(dash_app.refresh_speaker_list)
+    status_msg = f"{name} {'enabled' if enabled else 'disabled'} from API"
+    wx.CallAfter(dash_app.notify, status_msg, 10, False, False)
+    return jsonify({"ok": True, "speaker": name, "enabled": bool(enabled), "state": _viper_control_state()})
 
 # ==========================================
 # FLASK ROUTES & WEBHOOKS
@@ -3282,15 +3368,18 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         buttons.AddGrowableCol(1, 1)
         self.btn_setup_wizard = wx.Button(self.tab_setup, label="Open Setup Wizard", size=(-1, 44))
         self.btn_choose_setup_speakers = wx.Button(self.tab_setup, label="Choose Alert Speakers", size=(-1, 44))
+        self.btn_setup_matter = wx.Button(self.tab_setup, label="Set Up Alexa And Google Switches", size=(-1, 44))
         self.btn_refresh_setup_checklist = wx.Button(self.tab_setup, label="Refresh Setup Status", size=(-1, 44))
         self.btn_test_everything = wx.Button(self.tab_setup, label="Test Everything", size=(-1, 44))
         self.btn_setup_wizard.Bind(wx.EVT_BUTTON, self.on_open_setup_wizard)
         self.btn_choose_setup_speakers.Bind(wx.EVT_BUTTON, self.on_choose_setup_speakers)
+        self.btn_setup_matter.Bind(wx.EVT_BUTTON, self.on_setup_matter_switches)
         self.btn_refresh_setup_checklist.Bind(wx.EVT_BUTTON, lambda event: self.refresh_setup_checklist())
         self.btn_test_everything.Bind(wx.EVT_BUTTON, self.on_test_everything)
         for button, description in {
             self.btn_setup_wizard: "Open Setup Wizard button. Opens the beginner setup wizard for Home Assistant, Ring, live video, speakers, AI speech, and final testing.",
             self.btn_choose_setup_speakers: "Choose Alert Speakers button. Opens speaker discovery or the speaker list so you can choose which speakers Viper uses.",
+            self.btn_setup_matter: "Set Up Alexa And Google Switches button. Creates or checks Home Assistant switches for Viper arm, mute, and speaker controls so Matterbridge can expose them to voice assistants.",
             self.btn_refresh_setup_checklist: "Refresh Setup Checklist button. Updates the read-only checklist above.",
             self.btn_test_everything: "Test Everything button. Runs safe setup checks and diagnostics without changing settings.",
         }.items():
@@ -3315,6 +3404,27 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
                     break
         wx.CallAfter(self.speaker_list.SetFocus)
         self.notify("Choose alert speakers. Use Spacebar to toggle each speaker, then choose routing for the selected speaker.", priority=10)
+
+    def on_setup_matter_switches(self, event):
+        self.notify("Setting up Alexa and Google switches...", priority=10)
+        safe_submit(self._run_setup_matter_switches)
+
+    def _run_setup_matter_switches(self):
+        try:
+            report = viper_matter.setup_status_report(self.config)
+            text = viper_matter.format_setup_report(report)
+            wx.CallAfter(self._show_text_dialog, "Alexa And Google Switch Setup", text)
+            install_ok = bool(report.get("install", {}).get("ok"))
+            ha_ok = bool(report.get("ha", {}).get("ok"))
+            if install_ok and ha_ok:
+                wx.CallAfter(self.notify, "Alexa and Google switches are ready in Home Assistant. Pair Matterbridge or refresh Alexa and Google.", priority=10)
+            elif install_ok:
+                wx.CallAfter(self.notify, "Matter switch package installed. Restart Home Assistant, then run this setup again.", priority=10)
+            else:
+                wx.CallAfter(self.notify, "Matter switch setup needs manual package install. See the setup report.", priority=10)
+        except Exception as e:
+            logging.exception("Matter switch setup failed")
+            wx.CallAfter(self.notify, f"Alexa and Google switch setup failed: {e}", priority=10)
 
     def on_fix_tts_setup(self, event):
         for idx in range(self.notebook.GetPageCount()):

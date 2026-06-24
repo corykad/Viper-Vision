@@ -3,6 +3,7 @@ import asyncio
 import tempfile
 import zipfile
 import re
+from concurrent.futures import Future
 from pathlib import Path
 from html.parser import HTMLParser
 from unittest import mock
@@ -17,6 +18,7 @@ import viper_ha_package as ha_package
 import viper_health
 import viper_ha_recovery as ha_recovery
 import viper_ha_listener as ha_listener
+import viper_matter
 import viper_vacuum as vacuum
 import viper_ui_vacuum as ui_vacuum
 import viper_vision as vision
@@ -510,6 +512,13 @@ class ViperReleaseTests(unittest.TestCase):
         normalized = cfg.validate_and_normalize_config({"vacuum_custom_suction_value": 120, "vacuum_custom_suction_percent": 83})
         self.assertNotIn("vacuum_custom_suction_value", normalized)
         self.assertNotIn("vacuum_custom_suction_percent", normalized)
+
+    def test_config_defaults_smartthings_recovery_to_quicker_watchdog(self):
+        normalized = cfg.validate_and_normalize_config({})
+        self.assertEqual(normalized["ha_smartthings_stale_minutes"], 20)
+        self.assertEqual(normalized["ha_smartthings_reload_cooldown_minutes"], 15)
+        self.assertEqual(viper_health.DEFAULT_SMARTTHINGS_STALE_SECONDS, 20 * 60)
+        self.assertEqual(viper_health.DEFAULT_SMARTTHINGS_RELOAD_COOLDOWN_SECONDS, 15 * 60)
 
     def test_vacuum_ui_module_exports_cleaning_mode_helpers(self):
         self.assertIs(ui_vacuum._normalize_vacuum_cleaning_mode, vacuum.normalize_vacuum_cleaning_mode)
@@ -3351,6 +3360,14 @@ class ViperReleaseTests(unittest.TestCase):
         func(*args)
         return object()
 
+    def _future_submit(self, func, *args):
+        future = Future()
+        try:
+            future.set_result(func(*args))
+        except Exception as exc:
+            future.set_exception(exc)
+        return future
+
     def test_broadcast_fridge_chime_channel_never_calls_tts(self):
         self._setup_broadcast_dashboard()
         calls = []
@@ -3378,6 +3395,20 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(result["resolved_channel"], "fridge_open")
         self.assertEqual(result["target_count"], 1)
         self.assertEqual(calls, [("chime", ("fridge-open.mp3", "fridge_open"))])
+
+    def test_dispatch_broadcast_reports_failed_chime_queue(self):
+        self._setup_broadcast_dashboard()
+
+        with patch.object(main.audio, "play_broadcast_chime", return_value={"ok": False, "reason": "missing_chime", "target_count": 0}), \
+             patch.object(main.audio, "play_notification") as tts, \
+             patch.object(main, "safe_submit", side_effect=self._future_submit):
+            result = main._dispatch_broadcast_message("The refrigerator door is open.", channel="fridge_open")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["path"], "chime_failed")
+        self.assertEqual(result["reason"], "missing_chime")
+        self.assertEqual(result["status_code"], 409)
+        tts.assert_not_called()
 
     def test_broadcast_chime_reports_no_enabled_fridge_targets(self):
         fake = self._setup_broadcast_dashboard()
@@ -3435,6 +3466,262 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("web_toggle_global_mute", template)
         self.assertIn("Turn On Global Mute", template)
         self.assertIn("Turn Off Global Mute", template)
+
+    def test_viper_control_api_exposes_exact_state_for_matter_bridge(self):
+        fake = FakeDashboard()
+        fake.is_armed = True
+        fake.config["global_mute"] = False
+        fake.config["speakers"] = {
+            "entry way speaker": {"id": "media_player.entry", "type": "ha", "enabled": True},
+            "office sonos": {"id": "192.168.4.34", "type": "sonos", "enabled": False},
+        }
+        main.dash_app = fake
+
+        with main.app.test_client() as client:
+            response = client.get("/api/control/state")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["ready"])
+        self.assertTrue(data["armed"])
+        self.assertFalse(data["global_mute"])
+        self.assertTrue(data["speakers"]["entry way speaker"]["enabled"])
+        self.assertFalse(data["speakers"]["office sonos"]["enabled"])
+
+    def test_viper_control_api_sets_armed_without_toggling(self):
+        fake = FakeDashboard()
+        fake.is_armed = True
+        fake.btn_arm = mock.Mock()
+        fake.notifications = []
+        fake.notify = lambda *args, **kwargs: fake.notifications.append((args, kwargs))
+        main.dash_app = fake
+
+        with patch.object(main.wx, "CallAfter", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)):
+            with main.app.test_client() as client:
+                first = client.post("/api/control/armed", json={"state": False})
+                second = client.post("/api/control/armed", json={"state": False})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertFalse(fake.is_armed)
+        self.assertFalse(fake.config["is_armed"])
+        self.assertTrue(fake.saved)
+        fake.btn_arm.SetLabel.assert_called_with("Arm System")
+
+    def test_viper_control_api_sets_global_mute_and_speaker_enabled(self):
+        fake = FakeDashboard()
+        fake.config["speakers"] = {
+            "entry way speaker": {"id": "media_player.entry", "type": "ha", "enabled": True},
+        }
+        mute_calls = []
+        fake.set_global_mute = lambda muted, source="api": (mute_calls.append((muted, source)), fake.config.__setitem__("global_mute", bool(muted)))
+        fake.refresh_speaker_list = mock.Mock()
+        fake.notify = lambda *args, **kwargs: None
+        main.dash_app = fake
+
+        with patch.object(main.wx, "CallAfter", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)):
+            with main.app.test_client() as client:
+                mute_response = client.post("/api/control/global_mute", json={"state": True})
+                speaker_response = client.post("/api/control/speakers/entry%20way%20speaker/enabled", json={"state": False})
+
+        self.assertEqual(mute_response.status_code, 200)
+        self.assertEqual(speaker_response.status_code, 200)
+        self.assertEqual(mute_calls, [(True, "api")])
+        self.assertTrue(fake.config["global_mute"])
+        self.assertFalse(fake.config["speakers"]["entry way speaker"]["enabled"])
+        fake.refresh_speaker_list.assert_called_once()
+
+    def test_matter_package_generates_exact_state_switches_for_voice_assistants(self):
+        config = cfg.validate_and_normalize_config({
+            "viper_host": "192.168.4.56",
+            "flask_port": 5050,
+            "speakers": {
+                "Entry way speaker": {"id": "media_player.entry", "type": "ha", "enabled": True},
+                "Office Sonos": {"id": "192.168.4.34", "type": "sonos", "enabled": False},
+            },
+        })
+
+        package_text = viper_matter.generate_matter_controls_package(config)
+
+        self.assertIn("rest_command:", package_text)
+        self.assertIn("viper_set_armed:", package_text)
+        self.assertIn("http://192.168.4.56:5050/api/control/armed", package_text)
+        self.assertIn("viper_set_global_mute:", package_text)
+        self.assertIn("viper_entryway_speaker_enabled:", package_text)
+        self.assertIn("viper_office_sonos_speaker_enabled:", package_text)
+        self.assertIn("/api/control/speakers/Entry%20way%20speaker/enabled", package_text)
+        self.assertIn('name: "Viper Armed"', package_text)
+        self.assertIn('name: "Viper Global Mute"', package_text)
+        self.assertIn('name: "Viper Entryway Speaker"', package_text)
+        self.assertIn("state_attr('sensor.viper_control_state', 'armed')", package_text)
+        self.assertIn("state_attr('sensor.viper_control_state', 'speakers')", package_text)
+        self.assertIn('{"state": {{ state | tojson }}}', package_text)
+
+    def test_matter_entity_ids_match_generated_template_switches(self):
+        config = cfg.validate_and_normalize_config({
+            "speakers": {
+                "Entry way speaker": {"id": "media_player.entry", "type": "ha", "enabled": True},
+            },
+        })
+
+        entity_ids = viper_matter.matter_entity_ids(config)
+
+        self.assertEqual(
+            entity_ids,
+            [
+                "switch.viper_armed",
+                "switch.viper_global_mute",
+                "switch.viper_entryway_speaker",
+            ],
+        )
+
+    def test_setup_tab_has_alexa_google_switch_setup_button(self):
+        main_text = Path("main.pyw").read_text(encoding="utf-8")
+        self.assertIn("Set Up Alexa And Google Switches", main_text)
+        self.assertIn("on_setup_matter_switches", main_text)
+
+    def test_matter_setup_report_uses_configured_ha_host_and_no_hardcoded_pairing_code(self):
+        config = cfg.validate_and_normalize_config({
+            "ha_ip": "10.0.0.25",
+            "ha_port": "8123",
+            "ha_token": "token",
+            "speakers": {
+                "Kitchen": {"id": "media_player.kitchen", "type": "ha", "enabled": True},
+            },
+        })
+        report = {
+            "api": {"ok": True, "message": "ok"},
+            "samba_install": {"ok": True, "message": "ok"},
+            "install": {"ok": True, "message": "ok"},
+            "ha": {"ok": True, "message": "ok", "missing": []},
+            "matterbridge_install": {"ok": False, "message": "Matterbridge add-on unavailable."},
+            "matterbridge": {"ok": False, "message": "Matterbridge is not reachable."},
+            "entity_ids": viper_matter.matter_entity_ids(config),
+            "matterbridge_url": "http://10.0.0.25:8283",
+        }
+
+        text = viper_matter.format_setup_report(report)
+
+        self.assertIn("http://10.0.0.25:8283", text)
+        self.assertIn("ws://10.0.0.25:8123", text)
+        self.assertIn("switch.viper_kitchen_speaker", text)
+        self.assertIn("pairing code is unique", text)
+        self.assertNotIn("192.168.4.49", text)
+        self.assertNotIn("16213156459", text)
+        self.assertNotIn("Y.K90SO", text)
+
+    def test_matterbridge_addon_already_installed_is_started(self):
+        calls = []
+        config = cfg.validate_and_normalize_config({"ha_ip": "10.0.0.25", "ha_token": "token"})
+
+        def fake_hassio(settings, method, path, **kwargs):
+            calls.append((method, path))
+            if path == "/supervisor/info":
+                return {"data": {}}
+            if path == "/addons":
+                return {"data": {"addons": [{"slug": "246dd49f_matterbridge", "name": "Matterbridge"}]}}
+            if path == "/addons/246dd49f_matterbridge/info":
+                return {"data": {"state": "started"}}
+            return {"data": {}}
+
+        with patch.object(viper_matter, "_hassio_request", side_effect=fake_hassio):
+            result = viper_matter.ensure_matterbridge_addon(config)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["slug"], "246dd49f_matterbridge")
+        self.assertIn(("GET", "/supervisor/info"), calls)
+
+    def test_matterbridge_addon_fresh_install_adds_repo_installs_and_starts(self):
+        calls = []
+        config = cfg.validate_and_normalize_config({"ha_ip": "10.0.0.25", "ha_token": "token"})
+
+        def fake_hassio(settings, method, path, **kwargs):
+            calls.append((method, path, kwargs.get("payload")))
+            if path == "/supervisor/info":
+                return {"data": {}}
+            if path == "/addons":
+                return {"data": {"addons": []}}
+            if path == "/store/addons":
+                return {"data": {"addons": [{"slug": "246dd49f_matterbridge", "name": "Matterbridge", "installed": False}]}}
+            if path == "/addons/246dd49f_matterbridge/info":
+                return {"data": {"state": "started"}}
+            return {"data": {}}
+
+        with patch.object(viper_matter, "_hassio_request", side_effect=fake_hassio):
+            result = viper_matter.ensure_matterbridge_addon(config)
+
+        self.assertTrue(result["ok"])
+        self.assertIn(("POST", "/store/repositories", {"repository": viper_matter.MATTERBRIDGE_REPOSITORY_URL}), calls)
+        self.assertIn(("POST", "/store/addons/246dd49f_matterbridge/install", {"background": False}), calls)
+
+    def test_samba_addon_fresh_install_installs_core_samba(self):
+        calls = []
+        config = cfg.validate_and_normalize_config({"ha_ip": "10.0.0.25", "ha_token": "token"})
+
+        def fake_hassio(settings, method, path, **kwargs):
+            calls.append((method, path, kwargs.get("payload")))
+            if path == "/supervisor/info":
+                return {"data": {}}
+            if path == "/addons":
+                return {"data": {"addons": []}}
+            if path == "/store/addons":
+                return {"data": {"addons": [{"slug": "core_samba", "name": "Samba share", "installed": False}]}}
+            if path == "/addons/core_samba/info":
+                return {"data": {"state": "started"}}
+            return {"data": {}}
+
+        with patch.object(viper_matter, "_hassio_request", side_effect=fake_hassio):
+            result = viper_matter.ensure_samba_addon(config)
+
+        self.assertTrue(result["ok"])
+        self.assertIn(("POST", "/store/addons/core_samba/install", {"background": False}), calls)
+
+    def test_samba_addon_supervisor_blocked_reports_manual_steps(self):
+        config = cfg.validate_and_normalize_config({"ha_ip": "10.0.0.25", "ha_token": "token"})
+
+        with patch.object(viper_matter, "_hassio_request", side_effect=RuntimeError("forbidden")):
+            result = viper_matter.ensure_samba_addon(config)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "supervisor_unavailable")
+        self.assertTrue(any("Samba share" in step for step in result["manual_steps"]))
+
+    def test_matterbridge_addon_supervisor_blocked_reports_manual_steps(self):
+        config = cfg.validate_and_normalize_config({"ha_ip": "10.0.0.25", "ha_token": "token"})
+
+        with patch.object(viper_matter, "_hassio_request", side_effect=RuntimeError("forbidden")):
+            result = viper_matter.ensure_matterbridge_addon(config)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "supervisor_unavailable")
+        self.assertTrue(any("matterbridge-home-assistant-addon" in step for step in result["manual_steps"]))
+
+    def test_matterbridge_hass_plugin_installs_when_missing(self):
+        calls = []
+        config = cfg.validate_and_normalize_config({"ha_ip": "10.0.0.25", "ha_token": "token"})
+        plugin = {
+            "name": "matterbridge-hass",
+            "version": "1.3.1",
+            "configJson": {},
+            "registeredDevices": 0,
+        }
+
+        def fake_call(ws_url, method, params=None, timeout=12, **kwargs):
+            calls.append((method, params))
+            if method == "/api/plugins":
+                api_plugins_calls = [call for call in calls if call[0] == "/api/plugins"]
+                return [] if len(api_plugins_calls) == 1 else [plugin]
+            return {"ok": True}
+
+        with patch.object(viper_matter, "_matterbridge_call_with_retry", side_effect=fake_call), \
+             patch.object(viper_matter, "_matterbridge_call", side_effect=fake_call):
+            result = viper_matter.configure_matterbridge_hass(config, install_plugin=True)
+
+        self.assertTrue(result["ok"])
+        self.assertIn(("/api/install", {"packageName": "matterbridge-hass", "restart": False}), calls)
+        save_calls = [params for method, params in calls if method == "/api/savepluginconfig"]
+        self.assertEqual(save_calls[0]["formData"]["entityWhiteList"], ["switch"])
+        self.assertIn("switch.viper_armed", save_calls[0]["formData"]["whiteList"])
 
     def test_ha_listener_broadcast_uses_channel_routing_not_utility_tts(self):
         self._setup_broadcast_dashboard()
@@ -3604,6 +3891,23 @@ class ViperReleaseTests(unittest.TestCase):
                 self.assertEqual(
                     ha_listener.route_state_change(config, entity_id, {"state": old_state}, {"state": new_state}),
                     [{"type": "broadcast", "channel": channel, "message": message}],
+                )
+
+    def test_ha_listener_ignores_fridge_refreshes_that_do_not_change_open_closed_state(self):
+        config = cfg.validate_and_normalize_config({})
+
+        refreshes = [
+            ("binary_sensor.refrigerator_fridge_door", "off", "closed"),
+            ("binary_sensor.refrigerator_fridge_door", "unknown", "closed"),
+            ("binary_sensor.refrigerator_freezer_door", "false", "clear"),
+            ("binary_sensor.refrigerator_freezer_door", "open", "on"),
+        ]
+
+        for entity_id, old_state, new_state in refreshes:
+            with self.subTest(entity_id=entity_id, old_state=old_state, new_state=new_state):
+                self.assertEqual(
+                    ha_listener.route_state_change(config, entity_id, {"state": old_state}, {"state": new_state}),
+                    [],
                 )
 
     def test_ha_listener_websocket_payload_dispatches_fridge_broadcast(self):
@@ -4247,7 +4551,7 @@ class ViperReleaseTests(unittest.TestCase):
         result = viper_health.refrigerator_event_stream_health(
             states,
             now=viper_health.parse_ha_datetime("2026-06-19T01:21:00+00:00"),
-            stale_seconds=90 * 60,
+            stale_seconds=20 * 60,
         )
 
         self.assertFalse(result["ok"])
@@ -4258,8 +4562,8 @@ class ViperReleaseTests(unittest.TestCase):
         listener = ha_listener.HomeAssistantEventListener(
             lambda: {
                 "ha_smartthings_recovery_enabled": True,
-                "ha_smartthings_stale_minutes": 90,
-                "ha_smartthings_reload_cooldown_minutes": 60,
+                "ha_smartthings_stale_minutes": 20,
+                "ha_smartthings_reload_cooldown_minutes": 15,
             },
             lambda action: None,
         )

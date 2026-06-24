@@ -1,4 +1,8 @@
 import logging
+from concurrent.futures import TimeoutError
+
+
+CHIME_QUEUE_RESULT_TIMEOUT_SECONDS = 3
 
 
 def _chime_target_summary(config: dict, channel: str) -> dict:
@@ -210,8 +214,55 @@ def dispatch_broadcast_message(
             future = submit(play_broadcast_chime, chime, resolved_channel)
             if future is None:
                 return {"ok": False, "message": "System shutting down.", "status_code": 503}
+            play_result = None
+            if hasattr(future, "result"):
+                try:
+                    play_result = future.result(timeout=CHIME_QUEUE_RESULT_TIMEOUT_SECONDS)
+                except TimeoutError:
+                    logging.warning(
+                        "[BROADCAST] Chime channel=%r did not report queue status within %ss.",
+                        resolved_channel,
+                        CHIME_QUEUE_RESULT_TIMEOUT_SECONDS,
+                    )
+                except Exception as e:
+                    logging.exception("[BROADCAST] Chime channel=%r failed before playback queue.", resolved_channel)
+                    submit_push_if_requested()
+                    return {
+                        "ok": False,
+                        "message": f"Chime failed for {resolved_channel or 'default'}: {e}",
+                        "status_code": 500,
+                        "path": "chime_failed",
+                        "resolved_channel": resolved_channel,
+                        "chime": chime,
+                        "target_count": 0,
+                    }
+            if isinstance(play_result, dict) and not play_result.get("ok", True):
+                reason = play_result.get("reason") or "unknown"
+                logging.warning(
+                    "[BROADCAST] Chime channel=%r was not queued. reason=%s result=%s",
+                    resolved_channel,
+                    reason,
+                    play_result,
+                )
+                submit_push_if_requested()
+                return {
+                    "ok": False,
+                    "message": f"Chime not played for {resolved_channel or 'default'}: {reason}.",
+                    "status_code": 409,
+                    "path": "chime_failed",
+                    "resolved_channel": resolved_channel,
+                    "chime": chime,
+                    "reason": reason,
+                    "target_count": play_result.get("target_count", 0),
+                    "play_result": play_result,
+                }
             submit_push_if_requested()
             logging.info("[BROADCAST] Chime channel=%r chime=%r for: %r", resolved_channel, chime, msg)
+            actual_target_count = (
+                play_result.get("target_count")
+                if isinstance(play_result, dict) and play_result.get("target_count") is not None
+                else target_summary["target_count"]
+            )
             return {
                 "ok": True,
                 "message": f"Chime played for: {msg}",
@@ -219,7 +270,8 @@ def dispatch_broadcast_message(
                 "path": "chime",
                 "resolved_channel": resolved_channel,
                 "chime": chime,
-                "target_count": target_summary["target_count"],
+                "target_count": actual_target_count,
+                "play_result": play_result if isinstance(play_result, dict) else None,
             }
 
         future = submit(play_notification, "manual", msg, push)

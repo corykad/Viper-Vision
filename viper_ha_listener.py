@@ -41,6 +41,7 @@ FRIDGE_DOOR_MESSAGES = {
     },
 }
 FRIDGE_OPEN_STATES = {"open", "opened", "on", "true", "detected"}
+FRIDGE_CLOSED_STATES = {"closed", "off", "false", "clear"}
 
 CINDERELLA_DEFAULT_ENTITIES = {
     "status": "sensor.cinderella_status",
@@ -130,6 +131,16 @@ def state_text(state_obj):
 
 def normalize_state(value):
     return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def fridge_door_state_kind(value):
+    """Reduce HA's many door state spellings to the transitions that matter."""
+    normalized = normalize_state(value)
+    if normalized in FRIDGE_OPEN_STATES:
+        return "open"
+    if normalized in FRIDGE_CLOSED_STATES:
+        return "closed"
+    return "unknown"
 
 
 def default_doorbell_trigger(side, config):
@@ -238,7 +249,13 @@ def route_state_change(config, entity_id, old_state, new_state):
 
     actions.extend(route_cinderella_state_change(config, entity_id, old_norm, new_norm))
 
-    if entity_id in FRIDGE_DOOR_MESSAGES and new_norm != old_norm:
+    if entity_id in FRIDGE_DOOR_MESSAGES:
+        old_kind = fridge_door_state_kind(old_norm)
+        new_kind = fridge_door_state_kind(new_norm)
+        if old_kind == new_kind:
+            return actions
+        if new_kind == "closed" and old_kind != "open":
+            return actions
         match = FRIDGE_DOOR_MESSAGES[entity_id].get(new_norm)
         if match:
             channel, message = match

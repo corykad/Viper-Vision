@@ -62,6 +62,21 @@ try {
   Start-Sleep -Seconds 8
 
   if ($process.HasExited) {
+    $log = Join-Path $appData "viper_vision_1.0\viper_full_debug.log"
+    $duplicateInstance = $false
+    if (Test-Path -LiteralPath $log) {
+      $logText = Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue
+      $duplicateInstance = $logText -match "Another Viper Vision instance is already running"
+      if ($logText -match "Traceback|CRITICAL") {
+        throw "Smoke log contains a crash marker: $log"
+      }
+    }
+    if ($process.ExitCode -eq 0 -and $duplicateInstance) {
+      Write-Host "Installed app exited cleanly because another Viper Vision instance is already running."
+      Write-Host ""
+      Write-Host "Installer smoke test passed."
+      return
+    }
     throw "Installed app exited during smoke test with code $($process.ExitCode)"
   }
 

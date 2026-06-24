@@ -16,6 +16,7 @@ python -m py_compile `
   .\viper_ha_listener.py `
   .\viper_ring_discovery.py `
   .\viper_ha_package.py `
+  .\viper_matter.py `
   .\viper_runtime.py `
   .\viper_ui_diagnostics.py `
   .\viper_ui_fridge.py `

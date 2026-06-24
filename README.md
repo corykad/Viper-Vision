@@ -82,6 +82,7 @@ Recommended:
 - A static IP address for Home Assistant.
 - Home Assistant Roborock integration if using vacuum controls.
 - Mosquitto Broker and Ring-MQTT with Video Streaming if using Ring doorbell vision.
+- Home Assistant OS or Supervised if you want Viper to automatically install add-ons such as Samba share and Matterbridge.
 - A screen reader such as JAWS, NVDA, or Windows Narrator if you rely on speech feedback.
 
 ## Install Options
@@ -121,9 +122,9 @@ Use this path if you just installed Home Assistant and want the quickest route.
 8. Use **Confirm Doorbell Triggers** to confirm front and back ding or motion entities.
 9. Use **Speakers and Audio** to discover speakers, check the speakers Viper may use, save them, and press **Test Checked Speakers** on the same page.
 10. Use **AI and Speech**, then run **Final Test**.
-11. Use optional refrigerator alerts or robot vacuum setup after the core doorbell setup works.
+11. Use optional refrigerator alerts, robot vacuum setup, or **Set Up Alexa And Google Switches** after the core doorbell setup works.
 
-After this, Viper listens directly to Home Assistant state changes. You do not need to install Samba, edit `automations.yaml`, or copy a package unless you prefer the advanced Home Assistant YAML workflow.
+After this, Viper listens directly to Home Assistant state changes. You do not need to edit `automations.yaml` for the beginner path. Samba is optional for most of Viper, but Viper can install or use Samba share when it needs to copy Home Assistant packages for Matter/Alexa/Google switch setup.
 
 ## Built-In Help
 
@@ -140,6 +141,20 @@ The assistant also checks whether Windows hypervisor features may interfere with
 Viper cannot reserve a Home Assistant IP address inside every router, because router DHCP screens are all different. Instead, Viper uses bridged networking when possible and runs a lightweight background Home Assistant address recovery check. If the saved Home Assistant address stops responding and Home Assistant is found at a new local IP, Viper updates its saved address automatically.
 
 The Home Assistant setup dialog also includes a **Ring Setup Assistant** button. It checks the current discovery results and explains whether you need Ring trigger entities, RTSP setup, Mosquitto, or ring-mqtt.
+
+## Alexa And Google Switches
+
+Open the **Home Assistant** tab and press **Set Up Alexa And Google Switches** to expose Viper controls to voice assistants through Matter.
+
+Viper creates Home Assistant switches for:
+
+- Viper Armed.
+- Viper Global Mute.
+- Each saved Viper speaker, based on the speaker names in your Viper config.
+
+The setup checks the user's actual Home Assistant host and token. The token can be saved in Viper or provided through environment variables. If the token has Supervisor access on Home Assistant OS or Supervised, Viper can install and start the official Samba share add-on, install and start Matterbridge, install `matterbridge-hass`, copy the Viper Matter package into `/config/packages`, and configure the Matterbridge whitelist. If Supervisor access is blocked, or if the user runs Home Assistant Core or Container, Viper shows manual steps instead.
+
+The Matter pairing code is never hard-coded. Each Matterbridge install has its own code. After Viper reports the switches are ready, open Matterbridge and use the QR code or manual pairing code shown there when adding a Matter device in Alexa or Google Home.
 
 ## Doorbell RTSP Notes
 
@@ -1434,7 +1449,7 @@ Run everything:
 Or run the pieces manually:
 
 ```powershell
-python -m py_compile main.pyw viper_audio.py viper_config.py viper_discovery.py viper_ha_package.py viper_ring_discovery.py viper_vision.py tests\test_viper_release.py
+python -m py_compile main.pyw viper_audio.py viper_config.py viper_discovery.py viper_ha_package.py viper_matter.py viper_ring_discovery.py viper_vision.py tests\test_viper_release.py
 python -m unittest discover -s tests -v
 ```
 
