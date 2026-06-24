@@ -3553,6 +3553,7 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn('name: "Viper Armed"', package_text)
         self.assertIn('name: "Viper Global Mute"', package_text)
         self.assertIn('name: "Viper Entryway Speaker"', package_text)
+        self.assertIn('name: "Viper Office Sonos"', package_text)
         self.assertIn("state_attr('sensor.viper_control_state', 'armed')", package_text)
         self.assertIn("state_attr('sensor.viper_control_state', 'speakers')", package_text)
         self.assertIn('{"state": {{ state | tojson }}}', package_text)
@@ -3590,6 +3591,16 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn('unique_id: "viper_entryway_speaker_enabled"', package_text)
         self.assertNotIn('unique_id: "switch_viper_entryway_speaker"', package_text)
 
+    def test_matter_entity_id_for_sonos_matches_home_assistant_friendly_name(self):
+        config = cfg.validate_and_normalize_config({
+            "speakers": {
+                "Office Sonos": {"id": "192.168.4.34", "type": "sonos", "enabled": True},
+            },
+        })
+
+        self.assertIn("switch.viper_office_sonos", viper_matter.matter_entity_ids(config))
+        self.assertNotIn("switch.viper_office_sonos_speaker", viper_matter.matter_entity_ids(config))
+
     def test_matter_health_detects_duplicate_suffix_entities(self):
         config = cfg.validate_and_normalize_config({
             "ha_ip": "192.168.4.49",
@@ -3609,6 +3620,7 @@ class ViperReleaseTests(unittest.TestCase):
         with patch.object(viper_matter.discovery, "get_ha_states", return_value={"ok": True, "states": states}), \
              patch.object(viper_matter, "check_viper_control_api", return_value={"ok": True, "message": "ok"}), \
              patch.object(viper_matter, "check_samba_access", return_value={"ok": True, "message": "ok"}), \
+             patch.object(viper_matter, "check_ssh_config_access", return_value={"ok": True, "message": "ok"}), \
              patch.object(viper_matter, "_matterbridge_health", return_value={"reachable": True, "plugin_loaded": True, "device_count": 3, "restart_required": False, "alexa_fabric": True}):
             report = viper_matter.matter_health_report(config)
 
@@ -3627,6 +3639,30 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("Repair Matter And Alexa", text)
         self.assertIn("matter_health_report", text)
         self.assertIn("repair_matter_stack", text)
+
+    def test_matter_setup_prefers_ssh_package_install_over_samba(self):
+        config = cfg.validate_and_normalize_config({
+            "ha_ip": "192.168.4.49",
+            "ha_token": "token",
+            "speakers": {
+                "Office": {"id": "media_player.office", "type": "ha", "enabled": True},
+            },
+        })
+
+        with patch.object(viper_matter, "ensure_samba_addon", return_value={"ok": True, "message": "Samba installed."}), \
+             patch.object(viper_matter, "ensure_matterbridge_addon", return_value={"ok": True, "message": "Matterbridge installed."}), \
+             patch.object(viper_matter, "install_matter_package_via_samba", return_value={"ok": False, "message": "Samba credentials rejected."}) as samba_install, \
+             patch.object(viper_matter, "install_matter_package_via_ssh", return_value={"ok": True, "method": "ssh", "message": "Installed over SSH."}) as ssh_install, \
+             patch.object(viper_matter, "check_viper_control_api", return_value={"ok": True, "message": "API ok."}), \
+             patch.object(viper_matter, "check_ha_matter_entities", return_value={"ok": True, "message": "HA ok.", "missing": []}), \
+             patch.object(viper_matter, "configure_matterbridge_hass", return_value={"ok": True, "message": "Matterbridge ok."}):
+            report = viper_matter.setup_status_report(config)
+
+        ssh_install.assert_called_once()
+        samba_install.assert_not_called()
+        self.assertTrue(report["install"]["ok"])
+        self.assertEqual(report["install"]["method"], "ssh")
+        self.assertIn("Installed over SSH", report["install"]["message"])
 
     def test_matter_setup_report_uses_configured_ha_host_and_no_hardcoded_pairing_code(self):
         config = cfg.validate_and_normalize_config({

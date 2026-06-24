@@ -1,6 +1,8 @@
 import asyncio
 import json
 import re
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -56,12 +58,13 @@ def speaker_switches(config_data=None):
     for name in sorted(speakers.keys(), key=lambda value: str(value).lower()):
         slug = _unique_slug(f"viper_{_speaker_slug_base(name)}_speaker", used_ids)
         quoted_name = quote(str(name), safe="")
+        friendly_name = _speaker_friendly_name(name)
         controls.append(
             {
                 "speaker_name": str(name),
-                "entity_id": f"switch.{slug}",
+                "entity_id": f"switch.{_ha_entity_slug(friendly_name)}",
                 "unique_id": f"{slug}_enabled",
-                "friendly_name": _speaker_friendly_name(name),
+                "friendly_name": friendly_name,
                 "rest_command": f"{slug}_enabled",
                 "state_template": "{{ ((state_attr('sensor.viper_control_state', 'speakers') or {}).get('"
                 + _jinja_single_quote(name)
@@ -170,12 +173,50 @@ def install_matter_package_via_samba(config_data=None):
     packages_enabled = _configuration_has_packages_include(config_yaml)
     return {
         "ok": True,
+        "method": "samba",
         "target": str(target),
         "packages_enabled": packages_enabled,
         "message": (
             f"Installed {MATTER_PACKAGE_FILENAME} to {target}."
             if packages_enabled
             else f"Installed {MATTER_PACKAGE_FILENAME}, but Home Assistant packages may not be enabled in configuration.yaml."
+        ),
+    }
+
+
+def install_matter_package_via_ssh(config_data=None):
+    data = cfg.validate_and_normalize_config(config_data) if config_data is not None else cfg.load_config()
+    ha_settings = cfg.get_ha_settings(data, include_env=True)
+    host = str(ha_settings.get("ha_ip") or "").strip()
+    if host.startswith("http://") or host.startswith("https://"):
+        host, _port = discovery.normalize_ha_host(host)
+    if not host:
+        return {"ok": False, "method": "ssh", "reason": "missing_host", "message": "Home Assistant host is missing."}
+    if not shutil.which("ssh.exe") or not shutil.which("scp.exe"):
+        return {"ok": False, "method": "ssh", "reason": "missing_tools", "message": "Windows OpenSSH ssh.exe or scp.exe is missing."}
+    package_path = write_matter_package(data)
+    remote_path = f"/config/packages/{MATTER_PACKAGE_FILENAME}"
+    mkdir = _run_ssh(host, "mkdir -p /config/packages")
+    if not mkdir.get("ok"):
+        return {"ok": False, "method": "ssh", "reason": "ssh_unreachable", "message": f"Could not prepare /config/packages over SSH: {mkdir.get('message')}"}
+    copy = _run_scp_to_ha(host, package_path, remote_path)
+    if not copy.get("ok"):
+        return {"ok": False, "method": "ssh", "reason": "copy_failed", "message": f"Could not copy {MATTER_PACKAGE_FILENAME} over SSH: {copy.get('message')}"}
+    verify = _run_ssh(host, f"test -s '{remote_path}'")
+    if not verify.get("ok"):
+        return {"ok": False, "method": "ssh", "reason": "verify_failed", "message": f"Copied package was not found at {remote_path}: {verify.get('message')}"}
+    package_enabled = _run_ssh(host, "grep -qi 'include_dir_named packages' /config/configuration.yaml")
+    reload_result = _reload_ha_matter_entities(data)
+    return {
+        "ok": True,
+        "method": "ssh",
+        "target": remote_path,
+        "packages_enabled": bool(package_enabled.get("ok")),
+        "reload": reload_result,
+        "message": (
+            f"Installed {MATTER_PACKAGE_FILENAME} to {remote_path} over SSH."
+            if package_enabled.get("ok")
+            else f"Installed {MATTER_PACKAGE_FILENAME} over SSH, but Home Assistant packages may not be enabled in configuration.yaml."
         ),
     }
 
@@ -245,12 +286,29 @@ def check_samba_access(config_data=None):
     }
 
 
+def check_ssh_config_access(config_data=None):
+    data = cfg.validate_and_normalize_config(config_data) if config_data is not None else cfg.load_config()
+    ha_settings = cfg.get_ha_settings(data, include_env=True)
+    host = str(ha_settings.get("ha_ip") or "").strip()
+    if host.startswith("http://") or host.startswith("https://"):
+        host, _port = discovery.normalize_ha_host(host)
+    if not host:
+        return {"ok": False, "reason": "missing_host", "message": "Home Assistant host is missing."}
+    if not shutil.which("ssh.exe") or not shutil.which("scp.exe"):
+        return {"ok": False, "reason": "missing_tools", "message": "Windows OpenSSH ssh.exe or scp.exe is missing."}
+    probe = _run_ssh(host, "test -d /config && test -w /config && test -d /config/packages || mkdir -p /config/packages")
+    if not probe.get("ok"):
+        return {"ok": False, "reason": "ssh_unreachable", "message": f"Viper cannot write HA config over SSH: {probe.get('message')}"}
+    return {"ok": True, "reason": "ok", "message": "Viper can write Home Assistant config over SSH/SCP."}
+
+
 def matter_health_report(config_data=None):
     data = cfg.validate_and_normalize_config(config_data) if config_data is not None else cfg.load_config()
     ha_settings = cfg.get_ha_settings(data, include_env=True)
     expected = matter_entity_ids(data)
     api_result = check_viper_control_api(data)
     samba = check_samba_access(data)
+    ssh = check_ssh_config_access(data)
     ha_entities = _ha_matter_entity_health(data, expected)
     matterbridge = _matterbridge_health(data)
     issues = []
@@ -260,6 +318,8 @@ def matter_health_report(config_data=None):
         issues.append("Some Viper Matter entities are missing in Home Assistant.")
     if ha_entities.get("duplicates"):
         issues.append("Home Assistant has duplicate Viper Matter entities with _2 suffixes.")
+    if ha_entities.get("stale"):
+        issues.append("Home Assistant has stale unavailable Viper Matter entities.")
     if ha_entities.get("unavailable"):
         issues.append("Some Viper Matter entities are unavailable in Home Assistant.")
     if not matterbridge.get("reachable"):
@@ -276,6 +336,7 @@ def matter_health_report(config_data=None):
         "expected": expected,
         "api": api_result,
         "samba": samba,
+        "ssh": ssh,
         "ha": ha_entities,
         "matterbridge": matterbridge,
         "matterbridge_url": _matterbridge_url(data),
@@ -287,16 +348,19 @@ def format_matter_health_report(report):
     mb = report.get("matterbridge", {})
     ha = report.get("ha", {})
     samba = report.get("samba", {})
+    ssh = report.get("ssh", {})
     title = "PASS" if report.get("ok") else "NEEDS ATTENTION"
-    if report.get("ok") and not samba.get("ok"):
+    if report.get("ok") and (not samba.get("ok") or not ssh.get("ok")):
         title = "PASS WITH CONFIG WARNING"
     lines = [
         f"Matter/Alexa Health: {title}",
         "",
         _line("Viper control API", report.get("api", {}).get("ok"), report.get("api", {}).get("message", "")),
-        _line("Samba config share", samba.get("ok"), samba.get("message", "")),
+        _line("SSH config access", ssh.get("ok"), ssh.get("message", "")),
+        _line("Samba config share fallback", samba.get("ok"), samba.get("message", "")),
         _line("HA clean switch entities", not ha.get("missing"), f"missing {len(ha.get('missing') or [])}"),
         _line("HA duplicate entities", not ha.get("duplicates"), f"duplicates {len(ha.get('duplicates') or [])}"),
+        _line("HA stale entities", not ha.get("stale"), f"stale {len(ha.get('stale') or [])}"),
         _line("HA unavailable entities", not ha.get("unavailable"), f"unavailable {len(ha.get('unavailable') or [])}"),
         _line("Matterbridge reachable", mb.get("reachable"), mb.get("message", "")),
         _line("Matterbridge plugin", mb.get("plugin_loaded"), mb.get("plugin_message", "")),
@@ -313,6 +377,9 @@ def format_matter_health_report(report):
     if ha.get("unavailable"):
         lines.extend(["", "Unavailable HA entities:"])
         lines.extend(f"- {entity_id}" for entity_id in ha.get("unavailable") or [])
+    if ha.get("stale"):
+        lines.extend(["", "Stale HA entities to repair:"])
+        lines.extend(f"- {entity_id}" for entity_id in ha.get("stale") or [])
     if mb.get("devices"):
         lines.extend(["", "Matterbridge exposed devices:"])
         lines.extend(f"- {item.get('name')} ({item.get('reachable') and 'reachable' or 'not reachable'})" for item in mb.get("devices") or [])
@@ -321,10 +388,20 @@ def format_matter_health_report(report):
             [
                 "",
                 "Samba reachability:",
-                "Samba is only needed when Viper needs to copy packages into Home Assistant.",
+                "Samba is optional. Viper now prefers SSH/SCP for Home Assistant package copies.",
                 "To keep it reachable: keep the Samba share add-on installed, started, and Start on boot enabled.",
                 "Windows should be able to open: " + (samba.get("path") or "\\\\HOME_ASSISTANT_IP\\config"),
                 "If Windows asks for credentials, use the Samba add-on username/password, not your HA long-lived token.",
+            ]
+        )
+    if not ssh.get("ok"):
+        lines.extend(
+            [
+                "",
+                "SSH config access:",
+                "This is the preferred Viper-only setup path for Home Assistant config writes.",
+                "Make sure the Home Assistant SSH add-on or HA OS SSH access is enabled for root key login.",
+                "The existing HA backup task uses this same SSH/SCP path.",
             ]
         )
     if report.get("issues"):
@@ -338,7 +415,7 @@ def repair_matter_stack(config_data=None, *, cleanup_registry=True):
     data = cfg.validate_and_normalize_config(config_data) if config_data is not None else cfg.load_config()
     before = matter_health_report(data)
     actions = []
-    if cleanup_registry and before.get("ha", {}).get("duplicates"):
+    if cleanup_registry and (before.get("ha", {}).get("duplicates") or before.get("ha", {}).get("stale")):
         cleanup = cleanup_ha_matter_duplicates(data, before)
         actions.append(cleanup)
     config_result = configure_matterbridge_hass(data, install_plugin=True)
@@ -369,7 +446,17 @@ def setup_status_report(config_data=None):
     package_path = write_matter_package(data)
     samba_install = ensure_samba_addon(data)
     matterbridge_install = ensure_matterbridge_addon(data)
-    install_result = install_matter_package_via_samba(data)
+    install_result = install_matter_package_via_ssh(data)
+    if not install_result.get("ok"):
+        samba_result = install_matter_package_via_samba(data)
+        if samba_result.get("ok"):
+            install_result = samba_result
+        else:
+            install_result = {
+                **install_result,
+                "samba_fallback": samba_result,
+                "message": f"{install_result.get('message', '')} Samba fallback also failed: {samba_result.get('message', '')}".strip(),
+            }
     api_result = check_viper_control_api(data)
     ha_result = check_ha_matter_entities(data)
     matterbridge_result = configure_matterbridge_hass(data, install_plugin=True)
@@ -653,6 +740,10 @@ def _speaker_slug_base(value):
     return text or "speaker"
 
 
+def _ha_entity_slug(friendly_name):
+    return re.sub(r"[^a-z0-9]+", "_", str(friendly_name or "").lower()).strip("_") or "viper_speaker"
+
+
 def _jinja_single_quote(value):
     return str(value or "").replace("\\", "\\\\").replace("'", "\\'")
 
@@ -681,6 +772,7 @@ def _ha_matter_entity_health(config_data, expected):
             "missing": list(expected),
             "duplicates": [],
             "unavailable": [],
+            "stale": [],
         }
     states = {item.get("entity_id"): item for item in result.get("states", []) if item.get("entity_id")}
     expected_set = set(expected)
@@ -692,6 +784,7 @@ def _ha_matter_entity_health(config_data, expected):
         if entity_id in states and str(states[entity_id].get("state") or "").lower() == "unavailable"
     ]
     duplicates = []
+    stale = []
     for entity_id, state in sorted(states.items()):
         if not entity_id.startswith(("switch.viper_", "sensor.viper_control_state")):
             continue
@@ -705,12 +798,15 @@ def _ha_matter_entity_health(config_data, expected):
                     "base_state": states.get(base, {}).get("state"),
                 }
             )
+        elif entity_id not in expected_set and str(state.get("state") or "").lower() == "unavailable":
+            stale.append(entity_id)
     return {
-        "ok": not missing and not duplicates and not unavailable,
-        "message": "Home Assistant Viper Matter entities are clean." if not missing and not duplicates and not unavailable else "Home Assistant Viper Matter entities need cleanup.",
+        "ok": not missing and not duplicates and not unavailable and not stale,
+        "message": "Home Assistant Viper Matter entities are clean." if not missing and not duplicates and not unavailable and not stale else "Home Assistant Viper Matter entities need cleanup.",
         "missing": missing,
         "duplicates": duplicates,
         "unavailable": unavailable,
+        "stale": stale,
         "states": {entity_id: states.get(entity_id, {}).get("state") for entity_id in sorted(expected_set) if entity_id in states},
     }
 
@@ -770,7 +866,8 @@ def cleanup_ha_matter_duplicates(config_data=None, report=None):
     data = cfg.validate_and_normalize_config(config_data) if config_data is not None else cfg.load_config()
     health = (report or matter_health_report(data)).get("ha", {})
     duplicates = health.get("duplicates") or []
-    if not duplicates:
+    stale = health.get("stale") or []
+    if not duplicates and not stale:
         return {"ok": True, "action": "cleanup_ha_duplicates", "message": "No Viper Matter duplicate entities found.", "changes": []}
     settings = cfg.get_ha_settings(data, include_env=True)
     changes = []
@@ -786,6 +883,9 @@ def cleanup_ha_matter_duplicates(config_data=None, report=None):
                 changes.append(f"Removed stale {base_id}.")
             _ha_ws_command(settings, {"type": "config/entity_registry/update", "entity_id": duplicate_id, "new_entity_id": base_id}, timeout=12)
             changes.append(f"Renamed {duplicate_id} to {base_id}.")
+        for entity_id in stale:
+            _ha_ws_command(settings, {"type": "config/entity_registry/remove", "entity_id": entity_id}, timeout=12)
+            changes.append(f"Removed stale {entity_id}.")
     except Exception as e:
         return {"ok": False, "action": "cleanup_ha_duplicates", "message": f"HA duplicate cleanup failed: {e}", "changes": changes}
     return {"ok": True, "action": "cleanup_ha_duplicates", "message": "Viper Matter duplicate HA entities were cleaned up.", "changes": changes}
@@ -816,6 +916,81 @@ def restart_matterbridge_addon(config_data=None):
 
 def _ha_ws_command(settings, command, *, timeout=12):
     return ha_addons.ha_ws_command(settings, command, timeout=timeout)
+
+
+def _ssh_base_args(host):
+    return [
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=NUL",
+        "-o", "LogLevel=ERROR",
+        f"root@{host}",
+    ]
+
+
+def _run_ssh(host, command, *, timeout=20):
+    try:
+        completed = subprocess.run(
+            ["ssh.exe", *_ssh_base_args(host), command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception as e:
+        return {"ok": False, "message": str(e)}
+    output = "\n".join(part for part in [completed.stdout.strip(), completed.stderr.strip()] if part)
+    return {"ok": completed.returncode == 0, "exit_code": completed.returncode, "message": output or "ok"}
+
+
+def _run_scp_to_ha(host, local_path, remote_path, *, timeout=30):
+    try:
+        completed = subprocess.run(
+            [
+                "scp.exe",
+                "-q",
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=NUL",
+                "-o", "LogLevel=ERROR",
+                str(local_path),
+                f"root@{host}:{remote_path}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception as e:
+        return {"ok": False, "message": str(e)}
+    output = "\n".join(part for part in [completed.stdout.strip(), completed.stderr.strip()] if part)
+    return {"ok": completed.returncode == 0, "exit_code": completed.returncode, "message": output or "ok"}
+
+
+def _reload_ha_matter_entities(config_data):
+    ha = cfg.get_ha_settings(config_data, include_env=True)
+    host = str(ha.get("ha_ip") or "").strip()
+    port = str(ha.get("ha_port") or "8123")
+    token = ha.get("ha_token") or ""
+    if not host or not token:
+        return {"ok": False, "message": "Home Assistant host or token is missing."}
+    if host.startswith("http://") or host.startswith("https://"):
+        host, parsed_port = discovery.normalize_ha_host(host)
+        port = parsed_port or port
+    base_url = f"http://{host}:{port}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    results = []
+    for service in ("rest/reload", "template/reload"):
+        try:
+            response = requests.post(f"{base_url}/api/services/{service}", headers=headers, json={}, timeout=8)
+            results.append({"service": service, "ok": 200 <= response.status_code < 300, "status_code": response.status_code})
+        except Exception as e:
+            results.append({"service": service, "ok": False, "message": str(e)})
+    return {
+        "ok": all(item.get("ok") for item in results),
+        "results": results,
+        "message": "Requested HA rest/template reload." if all(item.get("ok") for item in results) else "One or more HA reload services failed.",
+    }
 
 
 def _matterbridge_url(config_data):
