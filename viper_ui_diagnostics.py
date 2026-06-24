@@ -12,6 +12,7 @@ import viper_discovery as discovery
 import viper_health
 import viper_ha_recovery
 import viper_ha_listener as ha_listener
+import viper_matter
 import viper_vision as vision
 
 
@@ -80,6 +81,8 @@ class DiagnosticsTabMixin:
         self.btn_sim_vacuum_event_diag = wx.Button(self.tab_diagnostics_overview, label="Simulate Vacuum Event", size=(-1, 40))
         self.btn_reload_fridge_smartthings_diag = wx.Button(self.tab_diagnostics_overview, label="Reload Refrigerator SmartThings", size=(-1, 40))
         self.btn_save_ha_snapshot_diag = wx.Button(self.tab_diagnostics_overview, label="Save HA Snapshot", size=(-1, 40))
+        self.btn_check_matter_diag = wx.Button(self.tab_diagnostics_overview, label="Check Matter And Alexa", size=(-1, 40))
+        self.btn_repair_matter_diag = wx.Button(self.tab_diagnostics_overview, label="Repair Matter And Alexa", size=(-1, 40))
         self.btn_run_safe_smoke.Bind(wx.EVT_BUTTON, self.on_run_safe_smoke_test)
         self.btn_test_front_camera_diag.Bind(wx.EVT_BUTTON, lambda event: self.on_test_diagnostics_camera(event, "front"))
         self.btn_test_back_camera_diag.Bind(wx.EVT_BUTTON, lambda event: self.on_test_diagnostics_camera(event, "back"))
@@ -91,6 +94,8 @@ class DiagnosticsTabMixin:
         self.btn_sim_vacuum_event_diag.Bind(wx.EVT_BUTTON, self.on_simulate_diagnostics_vacuum_event)
         self.btn_reload_fridge_smartthings_diag.Bind(wx.EVT_BUTTON, self.on_reload_diagnostics_fridge_smartthings)
         self.btn_save_ha_snapshot_diag.Bind(wx.EVT_BUTTON, self.on_save_diagnostics_ha_snapshot)
+        self.btn_check_matter_diag.Bind(wx.EVT_BUTTON, self.on_check_diagnostics_matter)
+        self.btn_repair_matter_diag.Bind(wx.EVT_BUTTON, self.on_repair_diagnostics_matter)
         for button, description in {
             self.btn_run_safe_smoke: "Run Safe Smoke Test button. Checks configuration, Home Assistant, listener, camera URLs, speaker routes, support bundle creation, and active health issues without playing audio.",
             self.btn_test_front_camera_diag: "Test Front Camera Frame button. Captures one frame from the configured front camera stream.",
@@ -103,6 +108,8 @@ class DiagnosticsTabMixin:
             self.btn_sim_vacuum_event_diag: "Simulate Vacuum Event button. Verifies the vacuum status entity exists, routes a sample transition through Viper, and dispatches a Cinderella alert.",
             self.btn_reload_fridge_smartthings_diag: "Reload Refrigerator SmartThings button. Reloads the Home Assistant SmartThings entry that owns the refrigerator door sensors.",
             self.btn_save_ha_snapshot_diag: "Save HA Snapshot button. Saves current important Home Assistant entities and reports what changed since the previous snapshot.",
+            self.btn_check_matter_diag: "Check Matter And Alexa button. Checks Viper Matter switches, Samba reachability, Matterbridge, exposed devices, and Alexa pairing fabric.",
+            self.btn_repair_matter_diag: "Repair Matter And Alexa button. Repairs Viper-owned Home Assistant Matter duplicates, refreshes Matterbridge configuration, and restarts Matterbridge when needed.",
         }.items():
             self._describe_control(button, description)
             smoke_grid.Add(button, 1, wx.ALL | wx.EXPAND, 5)
@@ -613,6 +620,36 @@ class DiagnosticsTabMixin:
             self.smoke_test_txt.SetValue("Saving Home Assistant integration snapshot.")
         self.notify("Saving Home Assistant snapshot.", priority=10)
         self._safe_submit(self._run_diagnostics_ha_snapshot)
+
+    def on_check_diagnostics_matter(self, event):
+        if hasattr(self, "smoke_test_txt"):
+            self.smoke_test_txt.SetValue("Checking Matter, Alexa, Samba, and Matterbridge.")
+        self.notify("Checking Matter and Alexa.", priority=10)
+        self._safe_submit(self._run_diagnostics_matter_check)
+
+    def _run_diagnostics_matter_check(self):
+        try:
+            report = viper_matter.matter_health_report(self.config)
+            text = viper_matter.format_matter_health_report(report)
+        except Exception as e:
+            logging.exception("Matter diagnostics check failed")
+            text = f"Matter/Alexa check failed: {e}"
+        wx.CallAfter(self._finish_diagnostics_action, text)
+
+    def on_repair_diagnostics_matter(self, event):
+        if hasattr(self, "smoke_test_txt"):
+            self.smoke_test_txt.SetValue("Repairing Matter and Alexa setup.")
+        self.notify("Repairing Matter and Alexa setup.", priority=10)
+        self._safe_submit(self._run_diagnostics_matter_repair)
+
+    def _run_diagnostics_matter_repair(self):
+        try:
+            result = viper_matter.repair_matter_stack(self.config, cleanup_registry=True)
+            text = viper_matter.format_matter_repair_report(result)
+        except Exception as e:
+            logging.exception("Matter diagnostics repair failed")
+            text = f"Matter/Alexa repair failed: {e}"
+        wx.CallAfter(self._finish_diagnostics_action, text)
 
     def _run_diagnostics_ha_snapshot(self):
         ha_settings = cfg.get_ha_settings(self.config, include_env=True)

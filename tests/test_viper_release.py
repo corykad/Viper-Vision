@@ -3575,10 +3575,58 @@ class ViperReleaseTests(unittest.TestCase):
             ],
         )
 
+    def test_matter_package_keeps_stable_home_assistant_unique_ids(self):
+        config = cfg.validate_and_normalize_config({
+            "speakers": {
+                "Entry way speaker": {"id": "media_player.entry", "type": "ha", "enabled": True},
+            },
+        })
+
+        package_text = viper_matter.generate_matter_controls_package(config)
+
+        self.assertIn("unique_id: viper_control_state", package_text)
+        self.assertIn('unique_id: "viper_armed"', package_text)
+        self.assertIn('unique_id: "viper_global_mute"', package_text)
+        self.assertIn('unique_id: "viper_entryway_speaker_enabled"', package_text)
+        self.assertNotIn('unique_id: "switch_viper_entryway_speaker"', package_text)
+
+    def test_matter_health_detects_duplicate_suffix_entities(self):
+        config = cfg.validate_and_normalize_config({
+            "ha_ip": "192.168.4.49",
+            "ha_token": "token",
+            "speakers": {
+                "Office": {"id": "media_player.office", "type": "ha", "enabled": True},
+            },
+        })
+        states = [
+            {"entity_id": "sensor.viper_control_state", "state": "True"},
+            {"entity_id": "switch.viper_armed", "state": "on"},
+            {"entity_id": "switch.viper_global_mute", "state": "off"},
+            {"entity_id": "switch.viper_office_speaker", "state": "unavailable"},
+            {"entity_id": "switch.viper_office_speaker_2", "state": "on"},
+        ]
+
+        with patch.object(viper_matter.discovery, "get_ha_states", return_value={"ok": True, "states": states}), \
+             patch.object(viper_matter, "check_viper_control_api", return_value={"ok": True, "message": "ok"}), \
+             patch.object(viper_matter, "check_samba_access", return_value={"ok": True, "message": "ok"}), \
+             patch.object(viper_matter, "_matterbridge_health", return_value={"reachable": True, "plugin_loaded": True, "device_count": 3, "restart_required": False, "alexa_fabric": True}):
+            report = viper_matter.matter_health_report(config)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["ha"]["duplicates"][0]["entity_id"], "switch.viper_office_speaker_2")
+        self.assertTrue(any("duplicate Viper Matter entities" in issue for issue in report["issues"]))
+
     def test_setup_tab_has_alexa_google_switch_setup_button(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
         self.assertIn("Set Up Alexa And Google Switches", main_text)
         self.assertIn("on_setup_matter_switches", main_text)
+
+    def test_diagnostics_tab_has_matter_health_and_repair_buttons(self):
+        text = Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
+        self.assertIn("Check Matter And Alexa", text)
+        self.assertIn("Repair Matter And Alexa", text)
+        self.assertIn("matter_health_report", text)
+        self.assertIn("repair_matter_stack", text)
 
     def test_matter_setup_report_uses_configured_ha_host_and_no_hardcoded_pairing_code(self):
         config = cfg.validate_and_normalize_config({
