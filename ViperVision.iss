@@ -1,5 +1,5 @@
 #define MyAppName "Viper Vision"
-#define MyAppVersion "1.2.3"
+#define MyAppVersion "1.2.4"
 #define MyAppPublisher "Cory Kadlec"
 #define MyAppExeName "ViperVision.exe"
 

@@ -30,7 +30,7 @@ if (Test-Path -LiteralPath .\installer) {
 
 & $isccPath .\ViperVision.iss
 
-$installer = Join-Path $PSScriptRoot "installer\ViperVision-v1.2.3-Setup.exe"
+$installer = Join-Path $PSScriptRoot "installer\ViperVision-v1.2.4-Setup.exe"
 if (-not (Test-Path -LiteralPath $installer)) {
   throw "Installer build finished but $installer was not found."
 }

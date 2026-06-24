@@ -1854,7 +1854,7 @@ class ViperReleaseTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
-        self.assertEqual(payload["app"]["version"], "1.2.3")
+        self.assertEqual(payload["app"]["version"], "1.2.4")
         self.assertIn("ffmpeg", payload)
 
     def test_ring_mqtt_installer_helpers_find_addon_slugs(self):
@@ -4981,7 +4981,7 @@ class ViperReleaseTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         iss = (root / "ViperVision.iss").read_text(encoding="utf-8")
         spec = (root / "ViperVision.spec").read_text(encoding="utf-8")
-        self.assertIn('#define MyAppVersion "1.2.3"', iss)
+        self.assertIn('#define MyAppVersion "1.2.4"', iss)
         self.assertIn('OutputBaseFilename=ViperVision-v{#MyAppVersion}-Setup', iss)
         self.assertIn('("help", "help")', spec)
         self.assertIn('("watch_ha_health.ps1", ".")', spec)
@@ -5826,7 +5826,7 @@ class ViperReleaseTests(unittest.TestCase):
     def test_smoke_installer_script_exists(self):
         root = Path(__file__).resolve().parents[1]
         text = (root / "smoke_installer.ps1").read_text(encoding="utf-8")
-        self.assertIn("ViperVision-v1.2.3-Setup.exe", text)
+        self.assertIn("ViperVision-v1.2.4-Setup.exe", text)
         self.assertIn("VIPER_CLEAN_FIRST_RUN_TEST", text)
         self.assertIn("ffmpeg.exe", text)
 

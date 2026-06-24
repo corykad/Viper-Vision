@@ -16,7 +16,7 @@ import viper_config as cfg
 import viper_health
 
 
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 2
 FRIDGE_DOOR_ENTITY = "binary_sensor.refrigerator_fridge_door"

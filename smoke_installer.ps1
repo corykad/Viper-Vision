@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 Set-Location $PSScriptRoot
 
-$installer = Join-Path $PSScriptRoot "installer\ViperVision-v1.2.3-Setup.exe"
+$installer = Join-Path $PSScriptRoot "installer\ViperVision-v1.2.4-Setup.exe"
 $distExe = Join-Path $PSScriptRoot "dist\ViperVision\ViperVision.exe"
 $distFfmpeg = Join-Path $PSScriptRoot "dist\ViperVision\_internal\ffmpeg.exe"
 $distHelp = Join-Path $PSScriptRoot "dist\ViperVision\_internal\help\index.html"

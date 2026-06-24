@@ -1,4 +1,4 @@
-# Viper Vision v1.2.3 Release Checklist
+# Viper Vision v1.2.4 Release Checklist
 
 Use this checklist before committing, tagging, or showing Viper Vision to anyone.
 
@@ -26,11 +26,11 @@ Build the installer:
 
 Confirm:
 
-- `installer\ViperVision-v1.2.3-Setup.exe` exists.
+- `installer\ViperVision-v1.2.4-Setup.exe` exists.
 - `dist\ViperVision\ViperVision.exe` exists.
 - `dist\ViperVision\_internal\ffmpeg.exe` exists.
 - `dist\ViperVision\_internal\help\index.html` exists.
-- `ViperVision.iss` still reports version `1.2.3`.
+- `ViperVision.iss` still reports version `1.2.4`.
 
 ## Installer Smoke Test
 
@@ -42,7 +42,7 @@ Run the repeatable smoke script after building the installer:
 .\smoke_installer.ps1
 ```
 
-1. Run `installer\ViperVision-v1.2.3-Setup.exe`.
+1. Run `installer\ViperVision-v1.2.4-Setup.exe`.
 2. Launch Viper Vision.
 3. Confirm the New User Setup Assistant opens if no config exists.
 4. Press F1 and confirm local help opens.

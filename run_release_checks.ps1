@@ -11,7 +11,7 @@ Default mode is non-destructive:
 - writes a timestamped report under release_check_reports
 
 Optional switches:
--BuildInstaller       Rebuilds dist\ViperVision and installer\ViperVision-v1.2.3-Setup.exe
+-BuildInstaller       Rebuilds dist\ViperVision and installer\ViperVision-v1.2.4-Setup.exe
 -SmokeInstaller      Runs the silent installer smoke test. Requires the installer to exist.
 -LiveHomeAssistant   Runs read-only HA diagnostics if HA settings are available.
 -All                 Runs BuildInstaller, SmokeInstaller, and LiveHomeAssistant.
@@ -230,8 +230,8 @@ foreach ($item in @(
 }
 
 Write-Step "Checking release metadata."
-Assert-FileContains -Path (Join-Path $PSScriptRoot "ViperVision.iss") -Pattern '#define MyAppVersion "1\.2\.3"' -Label "Inno version is 1.2.3"
-Assert-FileContains -Path (Join-Path $PSScriptRoot "viper_diagnostics.py") -Pattern 'APP_VERSION = "1\.2\.3"' -Label "Diagnostics version is 1.2.3"
+Assert-FileContains -Path (Join-Path $PSScriptRoot "ViperVision.iss") -Pattern '#define MyAppVersion "1\.2\.4"' -Label "Inno version is 1.2.4"
+Assert-FileContains -Path (Join-Path $PSScriptRoot "viper_diagnostics.py") -Pattern 'APP_VERSION = "1\.2\.4"' -Label "Diagnostics version is 1.2.4"
 Assert-FileContains -Path (Join-Path $PSScriptRoot "ViperVision.spec") -Pattern '\("help", "help"\)' -Label "Help folder is packaged"
 Assert-FileContains -Path (Join-Path $PSScriptRoot "ViperVision.spec") -Pattern '\("chimes", "chimes"\)' -Label "Chimes folder is packaged"
 Assert-FileContains -Path (Join-Path $PSScriptRoot "build_exe.ps1") -Pattern 'ffmpeg\.exe' -Label "Build script copies FFmpeg when available"
@@ -270,7 +270,7 @@ if ($BuildInstaller) {
     -Arguments @("-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "build_installer.ps1"))
 }
 
-$installer = Join-Path $PSScriptRoot "installer\ViperVision-v1.2.3-Setup.exe"
+$installer = Join-Path $PSScriptRoot "installer\ViperVision-v1.2.4-Setup.exe"
 $distExe = Join-Path $PSScriptRoot "dist\ViperVision\ViperVision.exe"
 $distFfmpeg = Join-Path $PSScriptRoot "dist\ViperVision\_internal\ffmpeg.exe"
 $distHelp = Join-Path $PSScriptRoot "dist\ViperVision\_internal\help\index.html"

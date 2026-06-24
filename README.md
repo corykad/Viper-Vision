@@ -2,7 +2,7 @@
 
 Viper Vision is a Windows-first smart home notification and control system. It connects Home Assistant, Ring doorbell events, live RTSP camera streams, Gemini vision, configurable text-to-speech, speaker playback, refrigerator alerts, and Roborock vacuum controls into one accessible desktop app and web remote.
 
-Version `1.2.3` adds a beginner-friendly Home Assistant setup path plus focus and setup-flow fixes. Viper can now listen directly to Home Assistant state changes, so new users can get started without editing YAML automations, installing Samba, or copying Home Assistant packages.
+Version `1.2.4` adds a beginner-friendly Home Assistant setup path plus focus and setup-flow fixes. Viper can now listen directly to Home Assistant state changes, so new users can get started without editing YAML automations, installing Samba, or copying Home Assistant packages.
 
 ## What Viper Vision Does
 
@@ -93,7 +93,7 @@ You can run Viper two ways.
 
 This is easiest for most users.
 
-1. Download the latest `ViperVision-v1.2.3-Setup.exe` from the GitHub release.
+1. Download the latest `ViperVision-v1.2.4-Setup.exe` from the GitHub release.
 2. Run the installer.
 3. Choose whether to create a desktop shortcut.
 4. Launch Viper Vision from the Start menu or desktop shortcut.
@@ -1416,7 +1416,7 @@ winget install --id JRSoftware.InnoSetup -e
 Installer output:
 
 ```text
-installer\ViperVision-v1.2.3-Setup.exe
+installer\ViperVision-v1.2.4-Setup.exe
 ```
 
 Do not commit:
@@ -1463,7 +1463,7 @@ The current suite checks:
 - select, number, and child-lock setting routes,
 - Cinderella dock-specific error message routing.
 
-## GitHub Release Checklist For 1.2.3
+## GitHub Release Checklist For 1.2.4
 
 Before committing:
 
@@ -1492,16 +1492,16 @@ Suggested commit:
 
 ```powershell
 git add README.md main.pyw templates/remote.html viper_config.py viper_config.example.json
-git commit -m "Release Viper Vision 1.2.3"
-git tag -a v1.2.3 -m "Viper Vision 1.2.3"
+git commit -m "Release Viper Vision 1.2.4"
+git tag -a v1.2.4 -m "Viper Vision 1.2.4"
 ```
 
 If publishing with GitHub CLI:
 
 ```powershell
 git push origin main
-git push origin v1.2.3
-gh release create v1.2.3 installer\ViperVision-v1.2.3-Setup.exe --title "Viper Vision 1.2.3" --notes "Viper Vision 1.2.3 release."
+git push origin v1.2.4
+gh release create v1.2.4 installer\ViperVision-v1.2.4-Setup.exe --title "Viper Vision 1.2.4" --notes "Viper Vision 1.2.4 release."
 ```
 
 ## Security
