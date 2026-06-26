@@ -218,6 +218,9 @@ class HvacTabMixin:
 
         self.hvac_controls[unit["key"]] = controls
         page.SetSizer(sizer)
+        cached = getattr(self, "hvac_last_states", {}).get(unit["key"])
+        if cached:
+            self._sync_hvac_controls_from_summary(unit["key"], cached)
 
     def refresh_hvac_status(self, announce=False, focus_unit=""):
         if hasattr(self, "hvac_all_status_txt"):
@@ -249,17 +252,8 @@ class HvacTabMixin:
         self.hvac_last_states = {item["key"]: item for item in summaries}
         controls_by_unit = getattr(self, "hvac_controls", {})
         for item in summaries:
-            controls = controls_by_unit.get(item["key"]) or {}
-            if not controls:
-                continue
-            if controls.get("status"):
-                controls["status"].SetValue(hvac.format_unit_status(item))
-            if controls.get("temperature") and item.get("target_temperature") is not None:
-                controls["temperature"].SetValue(float(item["target_temperature"]))
-            self._sync_hvac_choice(controls.get("fan"), item.get("fan_modes"), item.get("fan_mode"))
-            self._sync_hvac_choice(controls.get("swing"), item.get("swing_modes"), item.get("swing_mode"))
-            raw_modes = item.get("source_hvac_modes") or hvac.RAW_ADVANCED_MODES
-            self._sync_hvac_choice(controls.get("raw_mode"), raw_modes, item.get("source_state"))
+            if controls_by_unit.get(item["key"]):
+                self._sync_hvac_controls_from_summary(item["key"], item)
         summary = hvac.format_all_status(summaries)
         if hasattr(self, "hvac_all_status_txt"):
             self.hvac_all_status_txt.SetValue(summary)
@@ -283,6 +277,17 @@ class HvacTabMixin:
         viper_runtime.record_event("hvac", message)
         if hasattr(self, "refresh_system_health_display"):
             self.refresh_system_health_display()
+
+    def _sync_hvac_controls_from_summary(self, unit_key, item):
+        controls = getattr(self, "hvac_controls", {}).get(unit_key) or {}
+        if controls.get("status"):
+            controls["status"].SetValue(hvac.format_unit_status(item))
+        if controls.get("temperature") and item.get("target_temperature") is not None:
+            controls["temperature"].SetValue(float(item["target_temperature"]))
+        self._sync_hvac_choice(controls.get("fan"), item.get("fan_modes"), item.get("fan_mode"))
+        self._sync_hvac_choice(controls.get("swing"), item.get("swing_modes"), item.get("swing_mode"))
+        raw_modes = item.get("source_hvac_modes") or hvac.RAW_ADVANCED_MODES
+        self._sync_hvac_choice(controls.get("raw_mode"), raw_modes, item.get("source_state"))
 
     def _sync_hvac_choice(self, choice, options, current):
         if choice is None:

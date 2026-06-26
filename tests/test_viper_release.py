@@ -6563,6 +6563,62 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertTrue(fake.health_refreshed)
         self.assertFalse(hasattr(fake, "hvac_controls"))
 
+    def test_cached_hvac_status_populates_swing_choices_when_tab_opens(self):
+        class FakeChoice:
+            def __init__(self):
+                self.options = []
+                self.selection = ""
+
+            def Set(self, options):
+                self.options = list(options)
+
+            def SetStringSelection(self, value):
+                self.selection = value
+
+            def SetSelection(self, index):
+                self.selection = self.options[index]
+
+        class FakeText:
+            def __init__(self):
+                self.value = ""
+
+            def SetValue(self, value):
+                self.value = value
+
+        fake = main.HvacTabMixin.__new__(main.HvacTabMixin)
+        fake.hvac_controls = {
+            "office": {
+                "status": FakeText(),
+                "temperature": FakeText(),
+                "fan": FakeChoice(),
+                "swing": FakeChoice(),
+                "raw_mode": FakeChoice(),
+            }
+        }
+        summary = {
+            "key": "office",
+            "name": "Office",
+            "state": "cool",
+            "source_state": "cool",
+            "available": True,
+            "target_temperature": 70,
+            "fan_mode": "auto",
+            "fan_modes": ["auto", "low"],
+            "swing_mode": "vertical",
+            "swing_modes": ["off", "both", "vertical", "horizontal"],
+            "source_hvac_modes": ["off", "cool", "heat"],
+            "proxy_entity": "climate.office_heat_pump_alexa",
+            "source_entity": "climate.office_heat_pump",
+        }
+
+        main.HvacTabMixin._sync_hvac_controls_from_summary(fake, "office", summary)
+
+        controls = fake.hvac_controls["office"]
+        self.assertEqual(controls["swing"].options, ["off", "both", "vertical", "horizontal"])
+        self.assertEqual(controls["swing"].selection, "vertical")
+        self.assertEqual(controls["fan"].options, ["auto", "low"])
+        self.assertIn("Swing: vertical.", controls["status"].value)
+
     def test_support_bundle_includes_runtime_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             viper_runtime.mark_startup_phase("bundle phase")
