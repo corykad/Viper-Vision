@@ -247,8 +247,11 @@ class HvacTabMixin:
 
     def _finish_hvac_refresh(self, summaries, announce=False, focus_unit=""):
         self.hvac_last_states = {item["key"]: item for item in summaries}
+        controls_by_unit = getattr(self, "hvac_controls", {})
         for item in summaries:
-            controls = self.hvac_controls.get(item["key"]) or {}
+            controls = controls_by_unit.get(item["key"]) or {}
+            if not controls:
+                continue
             if controls.get("status"):
                 controls["status"].SetValue(hvac.format_unit_status(item))
             if controls.get("temperature") and item.get("target_temperature") is not None:

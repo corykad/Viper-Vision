@@ -6320,6 +6320,29 @@ class ViperReleaseTests(unittest.TestCase):
             timeout=10,
         )
 
+    def test_startup_hvac_refresh_can_finish_before_tab_controls_exist(self):
+        fake = type("FakeDashboard", (), {})()
+        fake.notifications = []
+        fake.health_refreshed = False
+        fake.notify = lambda message, priority=10: fake.notifications.append(message)
+        fake.refresh_system_health_display = lambda: setattr(fake, "health_refreshed", True)
+        summaries = [
+            {
+                "key": "office",
+                "name": "Office",
+                "state": "cool",
+                "source_state": "cool",
+                "available": True,
+                "target_temperature": 70,
+            }
+        ]
+
+        main.HvacTabMixin._finish_hvac_refresh(fake, summaries, announce=False)
+
+        self.assertEqual(fake.hvac_last_states["office"]["state"], "cool")
+        self.assertTrue(fake.health_refreshed)
+        self.assertFalse(hasattr(fake, "hvac_controls"))
+
     def test_support_bundle_includes_runtime_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             viper_runtime.mark_startup_phase("bundle phase")
