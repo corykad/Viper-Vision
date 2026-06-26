@@ -16,10 +16,14 @@ python -m py_compile `
   .\viper_ha_listener.py `
   .\viper_ring_discovery.py `
   .\viper_ha_package.py `
+  .\viper_hvac.py `
+  .\viper_ha_client.py `
   .\viper_matter.py `
   .\viper_runtime.py `
+  .\viper_system_health.py `
   .\viper_ui_diagnostics.py `
   .\viper_ui_fridge.py `
+  .\viper_ui_hvac.py `
   .\viper_ui_setup_wizard.py `
   .\viper_ui_vacuum.py
 

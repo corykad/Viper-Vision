@@ -18,7 +18,6 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import requests
-import soco
 import wx
 import wx.adv
 try:
@@ -34,10 +33,14 @@ import viper_ha_addons as ha_addons
 import viper_ha_listener as ha_listener
 import viper_ha_package as ha_package
 import viper_ha_vm as ha_vm
-import viper_ring_discovery as ring_discovery
 import viper_speakers as speakers
 import viper_vision as vision
 from viper_runtime import safe_submit
+
+
+def _ring_discovery():
+    import viper_ring_discovery as ring_discovery
+    return ring_discovery
 
 
 OFFICIAL_LINKS = ha_vm.OFFICIAL_LINKS
@@ -2930,7 +2933,7 @@ class HomeAssistantSetupDialog(wx.Dialog):
         mqtt_result = None
         mqtt_host = settings.get("mqtt_host") or settings.get("ha_ip") or host
         if mqtt_host:
-            mqtt_result = ring_discovery.listen_for_ring_topics(
+            mqtt_result = _ring_discovery().listen_for_ring_topics(
                 mqtt_host=mqtt_host,
                 mqtt_port=settings.get("mqtt_port") or 1883,
                 mqtt_username=settings.get("mqtt_username") or "",
@@ -3370,7 +3373,7 @@ class HomeAssistantSetupDialog(wx.Dialog):
         attempts.append(log_streams.get("attempt", "Ring-MQTT log scan completed."))
         mqtt_host = settings.get("mqtt_host") or settings.get("ha_ip") or host
         if mqtt_host:
-            mqtt_result = ring_discovery.listen_for_ring_topics(
+            mqtt_result = _ring_discovery().listen_for_ring_topics(
                 mqtt_host=mqtt_host,
                 mqtt_port=settings.get("mqtt_port") or 1883,
                 mqtt_username=settings.get("mqtt_username") or "",
@@ -3991,6 +3994,7 @@ class HomeAssistantSetupDialog(wx.Dialog):
         sonos_candidates = []
         sonos_error = ""
         try:
+            import soco
             sonos_candidates = self.parent._sonos_speaker_candidates_from_soco(soco.discover())
         except Exception as e:
             sonos_error = f"Network Sonos discovery failed: {e}"
@@ -4153,7 +4157,7 @@ class HomeAssistantSetupDialog(wx.Dialog):
         safe_submit(self._run_mqtt_test, settings)
 
     def _run_mqtt_test(self, settings):
-        result = ring_discovery.test_mqtt_connection(
+        result = _ring_discovery().test_mqtt_connection(
             mqtt_host=settings["mqtt_host"] or settings["ha_ip"],
             mqtt_port=settings["mqtt_port"],
             mqtt_username=settings["mqtt_username"],
@@ -4203,7 +4207,7 @@ class HomeAssistantSetupDialog(wx.Dialog):
         safe_submit(self._run_ring_topic_discovery, settings, self.ring_listen_cancel)
 
     def _run_ring_topic_discovery(self, settings, stop_event):
-        result = ring_discovery.listen_for_ring_topics(
+        result = _ring_discovery().listen_for_ring_topics(
             mqtt_host=settings["mqtt_host"] or settings["ha_ip"],
             mqtt_port=settings["mqtt_port"],
             mqtt_username=settings["mqtt_username"],
@@ -6015,7 +6019,7 @@ class ViperSetupWizardDialog(wx.Dialog):
             mqtt_host = settings.get("mqtt_host") or settings.get("ha_ip") or host
             if mqtt_host:
                 self._replace_setup_progress(["Finding Ring-MQTT live streams", "", *attempts, "Listening briefly for Ring MQTT topics."], announce=False)
-                mqtt_result = ring_discovery.listen_for_ring_topics(
+                mqtt_result = _ring_discovery().listen_for_ring_topics(
                     mqtt_host=mqtt_host,
                     mqtt_port=settings.get("mqtt_port") or 1883,
                     mqtt_username=settings.get("mqtt_username") or "",
@@ -6408,6 +6412,7 @@ class ViperSetupWizardDialog(wx.Dialog):
         sonos_candidates = []
         sonos_error = ""
         try:
+            import soco
             sonos_candidates = self.parent._sonos_speaker_candidates_from_soco(soco.discover())
         except Exception as e:
             sonos_error = f"Network Sonos discovery failed: {e}"

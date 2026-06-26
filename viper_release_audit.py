@@ -21,6 +21,16 @@ import viper_ha_listener as ha_listener
 
 
 REPORT_DIR = Path("release_check_reports")
+REQUIRED_PACKAGE_FILES = [
+    "main.pyw",
+    "viper_ha_client.py",
+    "viper_hvac.py",
+    "viper_runtime.py",
+    "viper_system_health.py",
+    "viper_ui_hvac.py",
+    "templates/remote.html",
+    "help/index.html",
+]
 
 
 class Audit:
@@ -242,6 +252,22 @@ def _check_cinderella(audit: Audit, config: dict, live_entities: set[str] | None
             audit.fail(f"{entity_id} {old_state}->{new_state} did not route to Cinderella {expected_event}.")
 
 
+def _check_packaging(audit: Audit):
+    audit.line("")
+    audit.line("Package Readiness")
+    audit.line("-----------------")
+    root = Path(__file__).resolve().parent
+    missing = []
+    for name in REQUIRED_PACKAGE_FILES:
+        path = root / name
+        if path.exists():
+            audit.pass_(f"Required package file exists: {name}")
+        else:
+            missing.append(name)
+            audit.fail(f"Required package file is missing: {name}")
+    audit.data["checks"]["package_files"] = {"required": REQUIRED_PACKAGE_FILES, "missing": missing}
+
+
 def _check_live_ha(audit: Audit, config: dict) -> set[str] | None:
     if not audit.live_ha:
         audit.warn("Live Home Assistant checks skipped. Add --live-ha to validate entities against Home Assistant.")
@@ -286,6 +312,7 @@ def run_audit(*, live_ha: bool = False, rtsp: bool = False) -> int:
     _check_doorbells(audit, config, live_entities)
     _check_fridge(audit, config, live_entities)
     _check_cinderella(audit, config, live_entities)
+    _check_packaging(audit)
 
     if rtsp:
         audit.warn("RTSP frame checks are not implemented in this safe audit yet. Use Viper's Test Camera buttons or Test Everything for frame capture.")

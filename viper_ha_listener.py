@@ -149,6 +149,7 @@ def default_doorbell_trigger(side, config):
         "enabled": False,
         "source": "ha_state",
         "trigger_entity_id": "",
+        "trigger_entity_ids": [],
         "active_states": list(DEFAULT_ACTIVE_STATES),
         "rtsp_url": "",
         "camera_id": "",
@@ -167,10 +168,22 @@ def normalize_doorbell_trigger(raw, side, config):
     if not isinstance(states, list):
         states = fallback["active_states"]
     active_states = [str(item).strip().lower() for item in states if str(item).strip()]
+    primary_entity_id = str(merged.get("trigger_entity_id") or "").strip()
+    raw_entity_ids = merged.get("trigger_entity_ids")
+    if isinstance(raw_entity_ids, str):
+        raw_entity_ids = [raw_entity_ids]
+    elif not isinstance(raw_entity_ids, list):
+        raw_entity_ids = []
+    trigger_entity_ids = []
+    for candidate in [primary_entity_id, *raw_entity_ids]:
+        candidate = str(candidate or "").strip()
+        if candidate and candidate not in trigger_entity_ids:
+            trigger_entity_ids.append(candidate)
     return {
         "enabled": bool(merged.get("enabled")),
         "source": source,
-        "trigger_entity_id": str(merged.get("trigger_entity_id") or "").strip(),
+        "trigger_entity_id": primary_entity_id,
+        "trigger_entity_ids": trigger_entity_ids,
         "active_states": active_states or list(DEFAULT_ACTIVE_STATES),
         "rtsp_url": str(merged.get("rtsp_url") or "").strip(),
         "camera_id": str(merged.get("camera_id") or "").strip(),
@@ -234,7 +247,8 @@ def route_state_change(config, entity_id, old_state, new_state):
     for side, trigger in normalize_doorbell_triggers(config).items():
         if not trigger.get("enabled") or trigger.get("source") != "ha_state":
             continue
-        if entity_id != trigger.get("trigger_entity_id"):
+        trigger_entity_ids = trigger.get("trigger_entity_ids") or [trigger.get("trigger_entity_id")]
+        if entity_id not in trigger_entity_ids:
             continue
         active_states = trigger.get("active_states")
         if doorbell_state_is_active(new_value, active_states) and not doorbell_state_is_active(old_value, active_states):

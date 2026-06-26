@@ -421,6 +421,7 @@ CONFIG_SCHEMA = {
                 "enabled": False,
                 "source": "ha_state",
                 "trigger_entity_id": "",
+                "trigger_entity_ids": [],
                 "active_states": ["on", "true", "detected", "motion", "ding", "pressed", "open"],
                 "rtsp_url": "",
                 "camera_id": "",
@@ -430,6 +431,7 @@ CONFIG_SCHEMA = {
                 "enabled": False,
                 "source": "ha_state",
                 "trigger_entity_id": "",
+                "trigger_entity_ids": [],
                 "active_states": ["on", "true", "detected", "motion", "ding", "pressed", "open"],
                 "rtsp_url": "",
                 "camera_id": "",
@@ -919,12 +921,24 @@ def _normalize_doorbell_trigger(value, default, side, config_data):
     camera_id = _as_str(normalized.get("camera_id"), "").strip()
     rtsp_url = _as_str(normalized.get("rtsp_url"), "").strip()
     mqtt_topic = _as_str(normalized.get("mqtt_topic"), "").strip()
+    primary_entity_id = _as_str(normalized.get("trigger_entity_id"), "").strip()
+    raw_entity_ids = normalized.get("trigger_entity_ids")
+    if isinstance(raw_entity_ids, str):
+        raw_entity_ids = [raw_entity_ids]
+    elif not isinstance(raw_entity_ids, list):
+        raw_entity_ids = []
+    trigger_entity_ids = []
+    for entity_id in [primary_entity_id, *raw_entity_ids]:
+        entity_id = _as_str(entity_id, "").strip()
+        if entity_id and entity_id not in trigger_entity_ids:
+            trigger_entity_ids.append(entity_id)
 
     return {
         **normalized,
         "enabled": _as_bool(normalized.get("enabled"), bool(rtsp_url)),
         "source": source,
-        "trigger_entity_id": _as_str(normalized.get("trigger_entity_id"), "").strip(),
+        "trigger_entity_id": primary_entity_id,
+        "trigger_entity_ids": trigger_entity_ids,
         "active_states": _normalize_active_states(normalized.get("active_states"), default["active_states"]),
         "rtsp_url": rtsp_url,
         "camera_id": camera_id,
@@ -1376,6 +1390,8 @@ def get_resolved_doorbell_settings(config_data=None, *, include_env=True):
         "raw_rtsp_back": data.get("rtsp_back") or "",
         "front_trigger_entity_id": front_trigger.get("trigger_entity_id", ""),
         "back_trigger_entity_id": back_trigger.get("trigger_entity_id", ""),
+        "front_trigger_entity_ids": list(front_trigger.get("trigger_entity_ids") or []),
+        "back_trigger_entity_ids": list(back_trigger.get("trigger_entity_ids") or []),
         "front_trigger_source": front_trigger.get("source", "ha_state"),
         "back_trigger_source": back_trigger.get("source", "ha_state"),
         "raw_front_doorbell_mqtt_topic": data.get("front_doorbell_mqtt_topic") or "",

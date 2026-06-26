@@ -14,6 +14,7 @@ from pathlib import Path
 
 import viper_config as cfg
 import viper_health
+import viper_runtime
 
 
 APP_VERSION = "1.2.4"
@@ -708,6 +709,8 @@ def collect_diagnostics(config_data=None, *, ha_listener_status=None, ha_connect
         "fridge_sensor_health": fridge_sensor_health,
         "critical_workflows": critical_workflows,
         "recent_health_events": viper_health.recent_health_events(limit=8),
+        "startup_timing": viper_runtime.startup_summary_lines(limit=12),
+        "recent_viper_events": viper_runtime.recent_events(limit=12),
         "beginner_health": viper_health.beginner_health_lines(diag_base),
         "health": health,
         "recent_errors": recent_errors,
@@ -765,6 +768,15 @@ def health_summary_text(diag):
         lines.extend(["", "Recent health recovery journal:"])
         for item in events[-6:]:
             lines.append(f"{item.get('timestamp')}: {item.get('event_type')} {item.get('status')}: {item.get('message')}")
+    startup = diag.get("startup_timing") or []
+    if startup:
+        lines.extend(["", "Startup timing:"])
+        lines.extend(startup[:12])
+    viper_events = diag.get("recent_viper_events") or []
+    if viper_events:
+        lines.extend(["", "Recent Viper events:"])
+        for item in viper_events[:8]:
+            lines.append(f"{item.get('time')}: {item.get('kind')}: {item.get('message')}")
     return "\n".join(lines)
 
 
@@ -882,6 +894,8 @@ def create_support_bundle(
         "diagnostics.json",
         "config_redacted.json",
         "config_shape.json",
+        "runtime/startup_timing.txt",
+        "runtime/recent_viper_events.json",
         "setup/setup_summary.txt",
         "setup/setup_events.json",
         "setup/last_setup_status.txt",
@@ -892,6 +906,8 @@ def create_support_bundle(
         _write_zip_text(zf, "diagnostics.json", json.dumps(diag, indent=2))
         _write_zip_text(zf, "config_redacted.json", json.dumps(redact_config(config_data), indent=2))
         _write_zip_text(zf, "config_shape.json", json.dumps(config_shape(config_data), indent=2))
+        _write_zip_text(zf, "runtime/startup_timing.txt", "\n".join(diag.get("startup_timing") or []))
+        zf.writestr("runtime/recent_viper_events.json", json.dumps(redact_config(diag.get("recent_viper_events") or []), indent=2))
         _write_zip_text(zf, "setup/setup_summary.txt", setup_summary or "")
         zf.writestr("setup/setup_events.json", json.dumps(redacted_setup_events, indent=2))
         _write_zip_text(zf, "setup/last_setup_status.txt", last_setup_status or "")

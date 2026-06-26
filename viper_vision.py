@@ -12,8 +12,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
-from google import genai
-from google.genai import types
 
 import viper_audio as audio
 import viper_config as cfg
@@ -23,6 +21,19 @@ _pushover_session = requests.Session()
 _gemini_client = None
 _gemini_client_key = None
 _gemini_client_lock = threading.Lock()
+_google_genai_modules = None
+_google_genai_lock = threading.Lock()
+
+
+def _google_genai():
+    """Import Gemini SDK only when an AI request actually runs."""
+    global _google_genai_modules
+    with _google_genai_lock:
+        if _google_genai_modules is None:
+            from google import genai
+            from google.genai import types
+            _google_genai_modules = (genai, types)
+        return _google_genai_modules
 
 
 def get_gemini_client():
@@ -32,6 +43,7 @@ def get_gemini_client():
         raise RuntimeError("Gemini API key is not configured.")
     with _gemini_client_lock:
         if _gemini_client is None or _gemini_client_key != api_key:
+            genai, types = _google_genai()
             _gemini_client = genai.Client(
                 api_key=api_key,
                 http_options=types.HttpOptions(api_version="v1beta")
@@ -243,6 +255,7 @@ def warmup_gemini():
         buf.seek(0)
         warm_img = Image.open(buf)
         warm_img.load()
+        _, types = _google_genai()
         get_gemini_client().models.generate_content(
             model=GEMINI_VISION_MODEL,
             contents=[warm_img],
@@ -484,6 +497,7 @@ def capture_video_clip(
 def analyze_video_clip(video_path: str, prompt: str, model_name: str = VIDEO_ANALYSIS_MODEL, fps: int = 2) -> str:
     started = time.time()
     try:
+        _, types = _google_genai()
         with open(video_path, "rb") as f:
             video_bytes = f.read()
         prompt = _enrich_video_analysis_prompt(prompt)
@@ -537,6 +551,7 @@ def _enrich_video_analysis_prompt(prompt: str) -> str:
 
 def _generate_video_description(contents, model_name: str, byte_count: int, max_output_tokens: int = 256):
     started = time.time()
+    _, types = _google_genai()
     res = get_gemini_client().models.generate_content(
             model=model_name,
             contents=contents,
@@ -707,6 +722,7 @@ def get_gemini_description(image_path, prompt, model_name=GEMINI_VISION_MODEL):
     started = time.time()
     try:
         img = _load_image_for_gemini(image_path)
+        _, types = _google_genai()
 
         res = get_gemini_client().models.generate_content(
             model=model_name,
@@ -734,6 +750,7 @@ def get_gemini_multi_image_description(image_paths, prompt, model_name=GEMINI_VI
         images = _load_images_for_gemini(image_paths)
         if not images:
             return "The video feed is unavailable."
+        _, types = _google_genai()
 
         res = get_gemini_client().models.generate_content(
             model=model_name,
@@ -1031,6 +1048,7 @@ def generate_cinderella_message(event: str, source: str, error: str) -> str:
             error=error or "none",
         )
 
+        _, types = _google_genai()
         res = get_gemini_client().models.generate_content(
             model=GEMINI_VISION_MODEL,
             contents=[prompt],

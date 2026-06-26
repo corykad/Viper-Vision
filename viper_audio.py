@@ -10,14 +10,8 @@ import http.server
 import socketserver
 import threading
 import shutil
-import soco
-import win32com.client
 import queue
 from concurrent.futures import ThreadPoolExecutor
-from gtts import gTTS
-import edge_tts
-from google import genai
-from google.genai import types
 
 from urllib.parse import quote as _url_quote
 import viper_config as cfg
@@ -92,7 +86,7 @@ def _warmup_and_precache():
 def _warmup_gtts():
     try:
         logging.info("[SYSTEM] Warming up gTTS connection...")
-        tts = gTTS(text="Viper Vision Ready", lang="en")
+        tts = _gtts()(text="Viper Vision Ready", lang="en")
         temp = cfg.SONOS_AUDIO_DIR / "warmup.mp3"
         tts.save(str(temp))
         temp.unlink(missing_ok=True)
@@ -117,6 +111,75 @@ _generated_tts_cache_lock = threading.Lock()
 _gemini_tts_client = None
 _gemini_tts_client_key = None
 _gemini_tts_client_lock = threading.Lock()
+_google_genai_modules = None
+_google_genai_lock = threading.Lock()
+_edge_tts_module = None
+_edge_tts_lock = threading.Lock()
+_gtts_class = None
+_gtts_lock = threading.Lock()
+_soco_module = None
+_soco_lock = threading.Lock()
+_win32com_client_module = None
+_win32com_client_lock = threading.Lock()
+
+
+class _LazySoCoModule:
+    def __getattr__(self, name):
+        return getattr(_soco(), name)
+
+
+soco = _LazySoCoModule()
+
+
+def _win32com_client():
+    """Import pywin32 COM support only for Windows offline speech."""
+    global _win32com_client_module
+    with _win32com_client_lock:
+        if _win32com_client_module is None:
+            import win32com.client
+            _win32com_client_module = win32com.client
+        return _win32com_client_module
+
+
+def _google_genai():
+    """Import Gemini SDK only when Gemini TTS is actually used."""
+    global _google_genai_modules
+    with _google_genai_lock:
+        if _google_genai_modules is None:
+            from google import genai
+            from google.genai import types
+            _google_genai_modules = (genai, types)
+        return _google_genai_modules
+
+
+def _edge_tts():
+    """Import Edge TTS only when Edge speech is generated."""
+    global _edge_tts_module
+    with _edge_tts_lock:
+        if _edge_tts_module is None:
+            import edge_tts
+            _edge_tts_module = edge_tts
+        return _edge_tts_module
+
+
+def _gtts():
+    """Import gTTS only when regular Google speech is generated or warmed."""
+    global _gtts_class
+    with _gtts_lock:
+        if _gtts_class is None:
+            from gtts import gTTS
+            _gtts_class = gTTS
+        return _gtts_class
+
+
+def _soco():
+    """Import SoCo only when a Sonos speaker is actually addressed."""
+    global _soco_module
+    with _soco_lock:
+        if _soco_module is None:
+            import soco
+            _soco_module = soco
+        return _soco_module
 _gemini_tts_generation_lock = threading.Lock()
 _gemini_tts_last_call = 0.0
 _gemini_tts_unavailable_until = 0.0
@@ -176,6 +239,7 @@ class GeminiTTSConnectionManager:
             model = profile.get("model") or config.get("gemini_tts_model") or GEMINI_TTS_MODEL
             voice = profile.get("voice") or config.get("gemini_tts_voice", "Sulafat")
             client = self.get_client()
+            _, types = _google_genai()
             response = client.models.generate_content(
                 model=model,
                 contents=(
@@ -509,7 +573,7 @@ def prep_sonos_speakers(force_prep: bool = False, target_ips: list[str] | None =
 def get_available_windows_voices():
     """Returns a list of installed PC voice names for the UI."""
     try:
-        speaker = win32com.client.Dispatch("SAPI.SPVoice")
+        speaker = _win32com_client().Dispatch("SAPI.SPVoice")
         voices = speaker.GetVoices()
         return [v.GetDescription() for v in voices]
     except Exception:
@@ -530,7 +594,7 @@ def speak_hd_pc(message):
             if config.get("mute_local_pc", False):
                 return
             voice_idx = config.get("local_voice_index", 1)
-            speaker = win32com.client.Dispatch("SAPI.SPVoice")
+            speaker = _win32com_client().Dispatch("SAPI.SPVoice")
             voices = speaker.GetVoices()
             if voice_idx < voices.Count:
                 speaker.Voice = voices.Item(voice_idx)
@@ -556,12 +620,13 @@ def generate_hd_wav(message, file_path, speed="normal", voice_idx=None):
     try:
         config = cfg.load_config()
         voice_idx = config.get("local_voice_index", 1) if voice_idx is None else voice_idx
-        speaker = win32com.client.Dispatch("SAPI.SPVoice")
+        com = _win32com_client()
+        speaker = com.Dispatch("SAPI.SPVoice")
         voices = speaker.GetVoices()
         if voice_idx < voices.Count:
             speaker.Voice = voices.Item(voice_idx)
         speaker.Rate = _sapi_rate_for_speed(speed)
-        stream = win32com.client.Dispatch("SAPI.SpFileStream")
+        stream = com.Dispatch("SAPI.SpFileStream")
         stream.Open(str(file_path), 3, False)
         speaker.AudioOutputStream = stream
         speaker.Speak(message)
@@ -586,7 +651,7 @@ def generate_edge_tts_mp3(message, file_path, voice="en-US-AriaNeural", speed="n
     """Uses the edge-tts library in-process (no subprocess) for lower latency."""
     try:
         async def _run():
-            communicate = edge_tts.Communicate(message, voice, rate=_edge_rate_for_speed(speed))
+            communicate = _edge_tts().Communicate(message, voice, rate=_edge_rate_for_speed(speed))
             await communicate.save(str(file_path))
         asyncio.run(_run())
         return True
@@ -602,6 +667,7 @@ def _get_gemini_tts_client():
         raise RuntimeError("Gemini API key is not configured.")
     with _gemini_tts_client_lock:
         if _gemini_tts_client is None or _gemini_tts_client_key != api_key:
+            genai, types = _google_genai()
             _gemini_tts_client = genai.Client(
                 api_key=api_key,
                 http_options=types.HttpOptions(api_version="v1beta"),
@@ -736,6 +802,7 @@ def generate_gemini_tts_wav(message, file_path, voice="Sulafat", model=None, sty
                 time.sleep(wait_for)
 
             client = _get_gemini_tts_client()
+            _, types = _google_genai()
             model = model or GEMINI_TTS_MODEL
             request_started = time.time()
             response = client.models.generate_content(
@@ -791,7 +858,7 @@ def _generate_tts_to_path(message, file_path, config):
     else:
         try:
             tld = config.get("google_tts_tld", "com")
-            tts = gTTS(text=message, lang="en", tld=tld)
+            tts = _gtts()(text=message, lang="en", tld=tld)
             tts.save(str(file_path))
             success = True
         except Exception as e:

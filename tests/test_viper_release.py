@@ -18,7 +18,11 @@ import viper_ha_package as ha_package
 import viper_health
 import viper_ha_recovery as ha_recovery
 import viper_ha_listener as ha_listener
+import viper_hvac as hvac
+import viper_ha_client as ha_client
 import viper_matter
+import viper_runtime
+import viper_system_health
 import viper_vacuum as vacuum
 import viper_ui_vacuum as ui_vacuum
 import viper_vision as vision
@@ -230,6 +234,81 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertTrue(vision._description_is_service_unavailable(text))
         self.assertFalse(vision._description_is_service_unavailable("A delivery driver is at the front door."))
 
+    def test_hvac_all_status_summarizes_current_state_for_every_heat_pump(self):
+        summaries = [
+            {
+                "name": "Office",
+                "state": "cool",
+                "source_state": "cool",
+                "available": True,
+                "target_temperature": 68.0,
+                "fan_mode": "auto",
+                "swing_mode": "vertical",
+                "last_command": "set_temperature",
+                "last_requested_mode": "cool",
+                "last_requested_temperature": 68.0,
+                "last_command_time": "2026-06-25T10:00:00+00:00",
+            },
+            {
+                "name": "Kitchen",
+                "state": "off",
+                "source_state": "off",
+                "available": True,
+                "target_temperature": 75,
+                "fan_mode": "auto",
+                "swing_mode": "off",
+            },
+        ]
+
+        text = hvac.format_all_status(summaries)
+
+        self.assertIn("Heat pump status: 2 of 2 online. 1 off.", text)
+        self.assertIn("Office: Cool, target 68, fan auto, swing vertical, raw Cool, online.", text)
+        self.assertIn("Kitchen: Off, target 75, fan auto, swing off, raw Off, online.", text)
+        self.assertIn("Recent HVAC commands:", text)
+        self.assertIn("Office: set temperature to Cool at 68 degrees.", text)
+        self.assertNotIn("set_temperature", text)
+
+    def test_startup_avoids_eager_device_scans_and_gemini_imports(self):
+        hvac_text = Path("viper_ui_hvac.py").read_text(encoding="utf-8")
+        fridge_text = Path("viper_ui_fridge.py").read_text(encoding="utf-8")
+        vacuum_text = Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
+        main_text = Path("main.pyw").read_text(encoding="utf-8")
+        audio_text = Path("viper_audio.py").read_text(encoding="utf-8")
+        vision_text = Path("viper_vision.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("wx.CallAfter(self.refresh_hvac_status)", hvac_text)
+        self.assertNotIn("wx.CallAfter(self.refresh_ice_maker_status)", fridge_text)
+        self.assertNotIn("wx.CallAfter(self.refresh_refrigerator_controls_status)", fridge_text)
+        self.assertNotIn("wx.CallAfter(self.on_refresh_vacuum, None)", vacuum_text)
+        self.assertNotIn("threading.Thread(target=monitor_plumbing, daemon=True).start()", main_text)
+        self.assertNotIn("from google import genai\nfrom google.genai import types", audio_text)
+        self.assertNotIn("from google import genai\nfrom google.genai import types", vision_text)
+        self.assertNotIn("import edge_tts", "\n".join(audio_text.splitlines()[:40]))
+        self.assertNotIn("from gtts import gTTS", "\n".join(audio_text.splitlines()[:40]))
+        self.assertNotIn("import soco", "\n".join(audio_text.splitlines()[:40]))
+        self.assertNotIn("import soco", "\n".join(main_text.splitlines()[:40]))
+        self.assertNotIn("import win32com.client", "\n".join(audio_text.splitlines()[:40]))
+        self.assertNotIn("import viper_ring_discovery as ring_discovery", main_text)
+        self.assertNotIn("from waitress import serve", "\n".join(main_text.splitlines()[:80]))
+        self.assertIn("from waitress import serve", main_text.split("def run_flask_server", 1)[1])
+        self.assertIn('self._setup_tab_once("dash", self.setup_dash_tab, self.tab_dash)', main_text)
+        startup_setup_block = main_text.split("def setup_notebook(self):", 1)[1].split("def setup_hidden_ai_voice_compat_controls", 1)[0]
+        for eager_call in [
+            "self.setup_doorbell_tab()",
+            "self.setup_prompt_editor_tab()",
+            "self.setup_setup_tab()",
+            "self.setup_tts_config_tab()",
+            "self.setup_devices_tab()",
+            "self.setup_diagnostics_tab()",
+            "self.setup_fridge_tab()",
+            "self.setup_hvac_tab()",
+            "self.setup_vacuum_tab()",
+            "self.setup_speed_tab()",
+            "self.setup_ha_status_tab()",
+        ]:
+            self.assertNotIn(eager_call, startup_setup_block)
+
     def test_video_analysis_defaults_are_bounded(self):
         settings = vision.normalize_video_analysis_settings(
             {"doorbell_video_analysis": {"mode": "smart", "manual_clip_seconds": 99, "max_manual_clip_seconds": 12}}
@@ -348,6 +427,49 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn(("doorbell", "The image is unclear."), spoken)
         self.assertFalse(any(args[1].startswith("Update:") for args in spoken))
         self.assertEqual(pushes[-1][1], "The porch is empty and no packages are present.")
+
+    def test_doorbell_cooldown_suppresses_motion_duplicate_after_ding(self):
+        class ImmediateExecutor:
+            def submit(self, func, *args, **kwargs):
+                func(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            frame = tmp_path / "fast_front_1_0002.jpg"
+            Image.new("RGB", (320, 180), color=(80, 80, 80)).save(frame, format="JPEG")
+            dashboard = FakeDashboard()
+            dashboard.config = cfg.validate_and_normalize_config({"is_armed": True})
+            dashboard.notify = lambda *args, **kwargs: None
+            spoken = []
+            vision.last_trigger["front"] = 0
+
+            with patch.object(vision.cfg, "DATA_DIR", tmp_path), \
+                 patch.object(vision.audio, "sonos_instant_chime"), \
+                 patch.object(vision.audio, "play_notification", side_effect=lambda *args, **kwargs: spoken.append(args)), \
+                 patch.object(vision, "grab_frame", return_value=str(frame)) as grab_frame, \
+                 patch.object(vision, "get_gemini_description", return_value="A visitor is standing at the front door."), \
+                 patch.object(vision, "_send_pushover", return_value=True):
+                vision.process_doorbell(
+                    "front door",
+                    "rtsp://camera/front",
+                    "front",
+                    dashboard,
+                    ImmediateExecutor(),
+                    trace_id="test-ding-first",
+                    received_ts=vision.time.time(),
+                )
+                vision.process_doorbell(
+                    "front door",
+                    "rtsp://camera/front",
+                    "front",
+                    dashboard,
+                    ImmediateExecutor(),
+                    trace_id="test-motion-duplicate",
+                    received_ts=vision.time.time(),
+                )
+
+        self.assertEqual(grab_frame.call_count, 1)
+        self.assertEqual(spoken, [("doorbell", "A visitor is standing at the front door.")])
 
     def test_rtsp_frame_sanity_rejects_green_artifact_corruption(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3940,6 +4062,59 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(actions[0]["side"], "front")
         self.assertEqual(actions[0]["rtsp_url"], "rtsp://camera/front")
 
+    def test_ha_listener_routes_doorbell_secondary_ding_trigger_to_same_rtsp_action(self):
+        config = cfg.validate_and_normalize_config(
+            {
+                "doorbell_triggers": {
+                    "front": {
+                        "enabled": True,
+                        "source": "ha_state",
+                        "trigger_entity_id": "binary_sensor.front_doorbell_motion",
+                        "trigger_entity_ids": [
+                            "binary_sensor.front_doorbell_motion",
+                            "binary_sensor.front_doorbell_ding",
+                        ],
+                        "rtsp_url": "rtsp://camera/front",
+                    }
+                }
+            }
+        )
+
+        actions = ha_listener.route_state_change(
+            config,
+            "binary_sensor.front_doorbell_ding",
+            {"state": "off"},
+            {"state": "on"},
+        )
+
+        self.assertEqual(actions, [
+            {
+                "type": "doorbell",
+                "side": "front",
+                "location": "front door",
+                "rtsp_url": "rtsp://camera/front",
+            }
+        ])
+
+    def test_doorbell_trigger_normalization_keeps_legacy_primary_in_trigger_list(self):
+        config = cfg.validate_and_normalize_config(
+            {
+                "doorbell_triggers": {
+                    "back": {
+                        "trigger_entity_id": "binary_sensor.back_doorbell_motion",
+                        "trigger_entity_ids": ["binary_sensor.back_doorbell_ding"],
+                    }
+                }
+            }
+        )
+
+        trigger = config["doorbell_triggers"]["back"]
+        self.assertEqual(trigger["trigger_entity_id"], "binary_sensor.back_doorbell_motion")
+        self.assertEqual(
+            trigger["trigger_entity_ids"],
+            ["binary_sensor.back_doorbell_motion", "binary_sensor.back_doorbell_ding"],
+        )
+
     def test_ha_listener_recovers_open_fridge_state_on_connect(self):
         actions = []
         listener = ha_listener.HomeAssistantEventListener(
@@ -6067,6 +6242,103 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("Silent runner: yes", text)
         self.assertIn("Last result: 0", text)
         self.assertIn("Recent watchdog log:", text)
+
+    def test_system_health_summary_is_plain_and_actionable(self):
+        config = cfg.validate_and_normalize_config(
+            {
+                "ha_ip": "192.168.4.49",
+                "ha_token": "token",
+                "speakers": {"Office": {"enabled": True, "type": "ha", "id": "media_player.office"}},
+                "doorbell_triggers": {
+                    "front": {"enabled": True, "trigger_entity_ids": ["binary_sensor.front_motion", "binary_sensor.front_ding"], "rtsp_url": "rtsp://front"},
+                    "back": {"enabled": True, "trigger_entity_id": "binary_sensor.back_motion", "rtsp_url": ""},
+                },
+            }
+        )
+        text = viper_system_health.build_system_health_summary(
+            config,
+            listener_status={"running": True, "connected": False, "last_error": "connection refused"},
+            hvac_last_states={"office": {"available": True}, "kitchen": {"available": False}},
+            startup_lines=["Startup timing:", "0.100s: dashboard controls ready"],
+            recent_events=["Recent Viper events:", "2026-06-26T09:00:00: test: ok"],
+        )
+
+        self.assertIn("System Health", text)
+        self.assertIn("Home Assistant host: 192.168.4.49:8123.", text)
+        self.assertIn("HA listener connected: no.", text)
+        self.assertIn("Front door: enabled. Triggers: 2. Camera stream: set.", text)
+        self.assertIn("Back door: enabled. Triggers: 1. Camera stream: missing.", text)
+        self.assertIn("Heat pumps: 1 of 2 online.", text)
+
+    def test_runtime_records_startup_and_recent_events(self):
+        phase = viper_runtime.mark_startup_phase("test phase", "unit test")
+        event = viper_runtime.record_event("test", "runtime event recorded", secret_token="redacted elsewhere")
+
+        self.assertEqual(phase["name"], "test phase")
+        self.assertTrue(any("test phase" in line for line in viper_runtime.startup_summary_lines(limit=20)))
+        self.assertEqual(event["kind"], "test")
+        self.assertTrue(any(item["message"] == "runtime event recorded" for item in viper_runtime.recent_events(limit=20)))
+
+    def test_shared_ha_client_builds_requests_and_returns_states(self):
+        fake_response = type(
+            "Response",
+            (),
+            {
+                "content": b"[]",
+                "raise_for_status": lambda _self: None,
+                "json": lambda _self: [{"entity_id": "sensor.test", "state": "ok"}],
+            },
+        )()
+        config = cfg.validate_and_normalize_config({"ha_ip": "homeassistant", "ha_port": "8123", "ha_token": "token"})
+
+        with patch.object(ha_client.requests, "request", return_value=fake_response) as request_mock:
+            states = ha_client.get_states(config, timeout=3)
+
+        self.assertIn("sensor.test", states)
+        args, kwargs = request_mock.call_args
+        self.assertEqual(args[0], "GET")
+        self.assertEqual(args[1], "http://homeassistant:8123/api/states")
+        self.assertTrue(kwargs["headers"]["Authorization"].startswith("Bearer "))
+        self.assertEqual(kwargs["timeout"], 3)
+
+    def test_hvac_uses_shared_home_assistant_client(self):
+        with patch.object(ha_client, "get_states", return_value={"climate.office": {"state": "off"}}) as get_states:
+            result = hvac.get_states({"ha_ip": "homeassistant", "ha_token": "token"}, timeout=4)
+        self.assertEqual(result["climate.office"]["state"], "off")
+        get_states.assert_called_once()
+
+        unit = hvac.HEAT_PUMPS[0]
+        with patch.object(ha_client, "call_service", return_value={"ok": True}) as call_service:
+            hvac.set_mode({"ha_ip": "homeassistant", "ha_token": "token"}, unit, "cool")
+        call_service.assert_called_once_with(
+            {"ha_ip": "homeassistant", "ha_token": "token"},
+            "climate/set_hvac_mode",
+            {"entity_id": unit["proxy"], "hvac_mode": "cool"},
+            timeout=10,
+        )
+
+    def test_support_bundle_includes_runtime_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            viper_runtime.mark_startup_phase("bundle phase")
+            viper_runtime.record_event("bundle", "support bundle event")
+            result = diagnostics.create_support_bundle({}, output_dir=tmp)
+            with zipfile.ZipFile(result["path"], "r") as zf:
+                names = zf.namelist()
+                startup = zf.read("runtime/startup_timing.txt").decode("utf-8")
+                events = zf.read("runtime/recent_viper_events.json").decode("utf-8")
+
+        self.assertIn("runtime/startup_timing.txt", names)
+        self.assertIn("runtime/recent_viper_events.json", names)
+        self.assertIn("bundle phase", startup)
+        self.assertIn("support bundle event", events)
+
+    def test_release_audit_checks_new_package_files(self):
+        audit = release_audit.Audit(emit=False)
+        release_audit._check_packaging(audit)
+
+        self.assertFalse(audit.failures)
+        self.assertIn("viper_ha_client.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_system_health.py", release_audit.REQUIRED_PACKAGE_FILES)
 
 
 if __name__ == "__main__":

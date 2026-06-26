@@ -71,7 +71,7 @@ class FridgeTabMixin:
         ice_sizer = wx.StaticBoxSizer(ice_box, wx.VERTICAL)
         self.ice_maker_status_txt = self._make_accessible_status_text(
             self.tab_fridge,
-            value="Checking ice maker status...",
+            value="Press Refresh Ice Maker Status to read the current ice maker state.",
             size=(-1, 105),
         )
         self._describe_control(
@@ -86,14 +86,20 @@ class FridgeTabMixin:
             "Ice maker toggle button. The label changes to Turn Ice Maker Off when Home Assistant reports the ice maker is on.",
         )
         ice_sizer.Add(self.btn_ice_toggle, 0, wx.ALL | wx.EXPAND, 5)
+        self.btn_refresh_ice_maker = wx.Button(self.tab_fridge, label="Refresh Ice Maker Status", size=(-1, 40))
+        self.btn_refresh_ice_maker.Bind(wx.EVT_BUTTON, lambda event: self.refresh_ice_maker_status(announce=True))
+        self._describe_control(
+            self.btn_refresh_ice_maker,
+            "Refresh ice maker status button. Reads the ice maker switch, keep-on helper, and ice usage counter from Home Assistant.",
+        )
+        ice_sizer.Add(self.btn_refresh_ice_maker, 0, wx.ALL | wx.EXPAND, 5)
         outer.Add(ice_sizer, 0, wx.ALL | wx.EXPAND, 10)
-        wx.CallAfter(self.refresh_ice_maker_status)
 
         controls_box = wx.StaticBox(self.tab_fridge, label="Refrigerator Controls")
         controls_sizer = wx.StaticBoxSizer(controls_box, wx.VERTICAL)
         self.refrigerator_status_txt = self._make_accessible_status_text(
             self.tab_fridge,
-            value="Checking refrigerator controls...",
+            value="Press Refresh Refrigerator Controls to read current refrigerator controls.",
             size=(-1, 165),
         )
         self._describe_control(
@@ -156,7 +162,6 @@ class FridgeTabMixin:
         reset_refresh_row.Add(self.btn_refresh_refrigerator_controls, 1, wx.ALL | wx.EXPAND, 5)
         controls_sizer.Add(reset_refresh_row, 0, wx.EXPAND)
         outer.Add(controls_sizer, 0, wx.ALL | wx.EXPAND, 10)
-        wx.CallAfter(self.refresh_refrigerator_controls_status)
 
         btn_save = wx.Button(self.tab_fridge, label="Save All Fridge Settings", size=(-1, 40))
         btn_save.Bind(wx.EVT_BUTTON, self.on_save_fridge_settings)

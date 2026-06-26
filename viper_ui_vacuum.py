@@ -230,7 +230,6 @@ class VacuumTabMixin:
         sizer.Add(command, 0, wx.ALL | wx.EXPAND, 10)
 
         self.tab_vacuum.SetSizer(sizer)
-        wx.CallAfter(self.on_refresh_vacuum, None)
 
     def on_refresh_vacuum(self, event):
         self.vacuum_status_txt.SetValue("Scanning Home Assistant for Roborock vacuum controls...")

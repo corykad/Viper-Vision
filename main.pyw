@@ -20,16 +20,13 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import requests
-import soco
 import wx
 import wx.adv
 try:
     import wx.html2 as wxhtml2
 except Exception:
     wxhtml2 = None
-from accessible_output2.outputs import auto
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
-from waitress import serve
 
 import viper_audio as audio
 import viper_broadcast as broadcast
@@ -44,7 +41,9 @@ import viper_health
 import viper_ha_vm as ha_vm
 import viper_ha_recovery as ha_recovery
 import viper_matter
+import viper_system_health
 from viper_ui_fridge import FridgeTabMixin
+from viper_ui_hvac import HvacTabMixin
 from viper_ui_vacuum import VacuumTabMixin
 from viper_ui_diagnostics import DiagnosticsTabMixin
 from viper_ui_setup_wizard import (
@@ -55,11 +54,12 @@ from viper_ui_setup_wizard import (
     RingMqttLoginDialog,
     ViperSetupWizardDialog,
 )
-import viper_ring_discovery as ring_discovery
 import viper_speakers as speakers
 import viper_vacuum as vacuum
 import viper_vision as vision
-from viper_runtime import executor, is_shutting_down, safe_submit
+from viper_runtime import executor, format_recent_events, is_shutting_down, mark_startup_phase, record_event, safe_submit, startup_summary_lines
+
+mark_startup_phase("main imports complete")
 
 AI_DESCRIPTION_STYLE_LABELS = {
     "balanced": "Balanced",
@@ -660,7 +660,9 @@ def monitor_plumbing():
         except Exception as e:
             logging.error(f"Health Monitor Error: {e}")
 
-threading.Thread(target=monitor_plumbing, daemon=True).start()
+
+def start_plumbing_monitor():
+    threading.Thread(target=monitor_plumbing, name="ViperPlumbingMonitor", daemon=True).start()
 
 # --- WEB HELPERS ---
 
@@ -801,14 +803,17 @@ def _handle_ha_listener_action(action: dict):
     if action_type == "doorbell":
         side = action.get("side") or "front"
         location = action.get("location") or ("back door" if side == "back" else "front door")
+        record_event("doorbell", f"{side.title()} doorbell event routed from Home Assistant.", location=location)
         status, code = _handle_doorbell(location, action.get("rtsp_url") or "", side)
         logging.info("[HA LISTENER] doorbell action side=%s code=%s status=%s", side, code, status)
     elif action_type == "cinderella":
+        record_event("vacuum", f"Vacuum event routed: {action.get('event', '') or 'unknown'}.")
         _dispatch_cinderella_event(action.get("event", ""), action.get("error", ""), action.get("source", "vacuum"))
     elif action_type == "broadcast":
         message = (action.get("message") or "").strip()
         channel = (action.get("channel") or "default").strip()
         if message:
+            record_event("broadcast", f"Home Assistant broadcast routed to {channel}.")
             logging.info("[HA LISTENER] broadcast channel=%s message=%r", channel, message)
             result = _dispatch_broadcast_message(message, channel=channel)
             logging.info(
@@ -1968,6 +1973,7 @@ def web_test_fridge_chime(channel):
 
 
 def run_flask_server():
+    from waitress import serve
     serve(app, host="0.0.0.0", port=cfg.FLASK_PORT, threads=8)
 
 class ViperTaskBarIcon(wx.adv.TaskBarIcon):
@@ -2023,8 +2029,9 @@ class ViperTaskBarIcon(wx.adv.TaskBarIcon):
             logging.debug("Could not force Viper window to foreground from tray.", exc_info=True)
 
 
-class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Frame):
+class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Frame):
     def __init__(self):
+        mark_startup_phase("dashboard init started")
         super().__init__(None, title="Viper Vision Control Panel", size=(800, 750))
         global dash_app
         dash_app = self
@@ -2042,14 +2049,11 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         self._last_focus_snapshot_log = {}
         self._last_smartthings_reload_notice_at = 0.0
         self._startup_health_checked = False
+        record_event("startup", "Viper dashboard is opening.")
         cfg.sync_globals_from_config()
 
-        try:
-            self.sr = auto.Auto()
-            logging.info("Screen Reader Bridge established.")
-        except Exception as e:
-            self.sr = None
-            logging.error(f"Screen Reader Bridge failed: {e}")
+        self.sr = None
+        threading.Thread(target=self._init_screen_reader_bridge, name="ViperScreenReaderBridge", daemon=True).start()
 
         self.speech_queue = PriorityQueue()
         self.speech_lock = threading.Lock()
@@ -2077,6 +2081,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         self.main_sizer.Add(self.status_display, 0, wx.ALL | wx.EXPAND, 10)
 
         self.setup_notebook()
+        mark_startup_phase("dashboard controls ready")
 
         bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_min = wx.Button(self.panel, label="Minimize to Tray", size=(-1, 40))
@@ -2093,6 +2098,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         self.Bind(wx.EVT_ACTIVATE, self.on_dashboard_activate)
         self.Center()
         self.Show()
+        mark_startup_phase("main window shown")
         if self.should_auto_open_setup_wizard():
             wx.CallLater(650, self.show_initial_setup_wizard)
         if previous_run_unclean:
@@ -2104,9 +2110,21 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
 
         threading.Thread(target=self.speech_worker, daemon=True).start()
         self.ha_listener.start()
+        record_event("home assistant", "HA listener start requested.")
+        mark_startup_phase("background workers started")
         wx.CallLater(20000, self.run_startup_health_self_test)
         self._ha_address_recovery_stop = threading.Event()
         threading.Thread(target=self._ha_address_recovery_worker, name="ViperHAAddressRecovery", daemon=True).start()
+
+    def _init_screen_reader_bridge(self):
+        try:
+            from accessible_output2.outputs import auto
+            bridge = auto.Auto()
+            self.sr = bridge
+            logging.info("Screen Reader Bridge established.")
+        except Exception as e:
+            self.sr = None
+            logging.error(f"Screen Reader Bridge failed: {e}")
 
     def should_auto_open_setup_wizard(self):
         if self.first_run or self.clean_first_run_test:
@@ -2294,7 +2312,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
             logging.debug("Could not log setup focus snapshot.", exc_info=True)
 
     def _ha_listener_config(self):
-        config = cfg.load_config()
+        config = dict(getattr(self, "config", {}) or cfg.load_config())
         ha_settings = cfg.get_ha_settings(config, include_env=True)
         config["ha_ip"] = ha_settings.get("ha_ip") or config.get("ha_ip") or ""
         config["ha_port"] = ha_settings.get("ha_port") or config.get("ha_port") or "8123"
@@ -2372,8 +2390,6 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
 
     def _on_ha_listener_status(self, status):
         self._maybe_notify_health_recovery(status)
-        if not hasattr(self, "ha_listener_status_txt"):
-            return
         if not status.get("running"):
             label = "HA listener: stopped"
         elif status.get("connected"):
@@ -2381,7 +2397,15 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         else:
             err = status.get("last_error") or "connecting"
             label = f"HA listener: not connected. {err}"
-        wx.CallAfter(self.ha_listener_status_txt.SetLabel, label)
+        if label != getattr(self, "_last_ha_listener_label", ""):
+            self._last_ha_listener_label = label
+            record_event("home assistant", label)
+        if hasattr(self, "ha_listener_status_txt"):
+            wx.CallAfter(self.ha_listener_status_txt.SetLabel, label)
+        if hasattr(self, "ha_connection_status_txt"):
+            wx.CallAfter(self.ha_connection_status_txt.SetValue, viper_system_health.short_ha_status(status))
+        if hasattr(self, "system_health_txt"):
+            wx.CallAfter(self.refresh_system_health_display)
 
     def _maybe_notify_health_recovery(self, status):
         try:
@@ -2397,6 +2421,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         if repeats >= 3:
             message += f" Warning: this has happened {repeats} times in the last 24 hours."
         wx.CallAfter(self.notify, message, priority=1, interrupt=False, speak=False)
+        record_event("health repair", message)
         logging.warning("[HEALTH] %s", message)
 
     def run_startup_health_self_test(self):
@@ -2415,9 +2440,14 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
                 ]
                 first = issues[0] if issues else "Open Diagnostics for details."
                 self.notify(f"Startup health check needs attention: {overall}. {first}", priority=10, speak=False)
+                record_event("startup health", f"Startup health check needs attention: {overall}.")
+            else:
+                record_event("startup health", "Startup health check passed.")
             logging.info("[HEALTH] Startup self-test overall=%s items=%s", overall, critical.get("items", []))
+            wx.CallAfter(self.refresh_system_health_display)
         except Exception:
             logging.debug("Startup health self-test failed.", exc_info=True)
+            record_event("startup health", "Startup health check failed to complete.")
 
     def restore_startup_focus(self):
         try:
@@ -2540,8 +2570,76 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         return getattr(self, "notebook", None) or self
 
     def on_notebook_page_changed(self, event):
+        try:
+            notebook = event.GetEventObject() if hasattr(event, "GetEventObject") else None
+            if notebook is not None:
+                wx.CallAfter(self._ensure_selected_notebook_page, notebook)
+        except Exception:
+            logging.debug("Could not schedule lazy tab setup.", exc_info=True)
         if hasattr(event, "Skip"):
             event.Skip()
+
+    def _setup_tab_once(self, key, setup_func, page=None):
+        if key in getattr(self, "_lazy_setup_done", set()):
+            return
+        self._lazy_setup_done.add(key)
+        started = time.perf_counter()
+        setup_func()
+        if page is not None:
+            try:
+                page.Layout()
+                if hasattr(page, "FitInside"):
+                    page.FitInside()
+            except Exception:
+                logging.debug("Could not layout lazy tab %s.", key, exc_info=True)
+        logging.info("[STARTUP] Built lazy tab %s in %.3fs", key, time.perf_counter() - started)
+
+    def _ensure_selected_notebook_page(self, notebook=None):
+        try:
+            notebook = notebook or getattr(self, "notebook", None)
+            if notebook is None:
+                return
+            selection = notebook.GetSelection()
+            if selection == wx.NOT_FOUND:
+                return
+            page = notebook.GetPage(selection)
+            self._ensure_tab_page(page)
+        except Exception:
+            logging.debug("Could not build selected tab lazily.", exc_info=True)
+
+    def _ensure_tab_page(self, page):
+        if page is getattr(self, "tab_dash", None):
+            self._setup_tab_once("dash", self.setup_dash_tab, page)
+        elif page is getattr(self, "tab_doorbell", None):
+            self._setup_tab_once("doorbell", self.setup_doorbell_tab, page)
+        elif page is getattr(self, "tab_prompts", None):
+            self._setup_tab_once("prompts", self.setup_prompt_editor_tab, page)
+        elif page is getattr(self, "tab_audio_shell", None):
+            self._ensure_selected_notebook_page(self.audio_notebook)
+        elif page is getattr(self, "tab_tts", None):
+            self._setup_tab_once("tts", self.setup_tts_config_tab, page)
+        elif page is getattr(self, "tab_dev", None):
+            self._setup_tab_once("devices", self.setup_devices_tab, page)
+        elif page is getattr(self, "tab_devices_shell", None):
+            self._ensure_selected_notebook_page(self.devices_notebook)
+        elif page is getattr(self, "tab_fridge", None):
+            self._setup_tab_once("fridge", self.setup_fridge_tab, page)
+        elif page is getattr(self, "tab_hvac", None):
+            self._setup_tab_once("hvac", self.setup_hvac_tab, page)
+        elif page is getattr(self, "tab_vacuum", None):
+            self._setup_tab_once("vacuum", self.setup_vacuum_tab, page)
+        elif page is getattr(self, "tab_setup", None):
+            self._setup_tab_once("setup", self.setup_setup_tab, page)
+        elif page is getattr(self, "tab_diagnostics_shell", None):
+            self._ensure_selected_notebook_page(self.diagnostics_notebook)
+        elif page is getattr(self, "tab_diagnostics_overview", None):
+            self._setup_tab_once("diagnostics", self.setup_diagnostics_tab, page)
+        elif page is getattr(self, "tab_speed", None):
+            self._setup_tab_once("speed", self.setup_speed_tab, page)
+        elif page is getattr(self, "tab_ha_status", None):
+            self._setup_tab_once("ha_status", self.setup_ha_status_tab, page)
+        elif page is getattr(self, "tab_util", None):
+            self._setup_tab_once("utils", self.setup_utils_tab, page)
 
     def _focus_notebook_tab_for_screen_reader(self, notebook):
         try:
@@ -2644,6 +2742,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
             audio.invalidate_phrase_cache()
 
     def setup_notebook(self):
+        self._lazy_setup_done = set()
         self.notebook = wx.Notebook(self.panel)
         self.tab_dash = wx.Panel(self.notebook)
         self.tab_doorbell = wx.Panel(self.notebook)
@@ -2658,6 +2757,8 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         self.devices_notebook = wx.Notebook(self.tab_devices_shell)
         self.tab_fridge = wx.ScrolledWindow(self.devices_notebook)
         self.tab_fridge.SetScrollRate(0, 20)
+        self.tab_hvac = wx.ScrolledWindow(self.devices_notebook)
+        self.tab_hvac.SetScrollRate(0, 20)
         self.tab_vacuum = wx.ScrolledWindow(self.devices_notebook)
         self.tab_vacuum.SetScrollRate(0, 20)
         self.tab_setup = wx.Panel(self.notebook)
@@ -2678,16 +2779,20 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         self.notebook.AddPage(self.tab_setup, "Home Assistant")
         self.notebook.AddPage(self.tab_diagnostics_shell, "Diagnostics")
         self.notebook.AddPage(self.tab_util, "Advanced")
+        self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self.on_notebook_page_changed)
 
         audio_sizer = wx.BoxSizer(wx.VERTICAL)
         self.audio_notebook.AddPage(self.tab_tts, "Voice Behavior")
         self.audio_notebook.AddPage(self.tab_dev, "Speakers & Chimes")
+        self.audio_notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self.on_notebook_page_changed)
         audio_sizer.Add(self.audio_notebook, 1, wx.EXPAND)
         self.tab_audio_shell.SetSizer(audio_sizer)
 
         devices_sizer = wx.BoxSizer(wx.VERTICAL)
         self.devices_notebook.AddPage(self.tab_fridge, "Refrigerator & Ice")
+        self.devices_notebook.AddPage(self.tab_hvac, "HVAC")
         self.devices_notebook.AddPage(self.tab_vacuum, "Robot Vacuum")
+        self.devices_notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self.on_notebook_page_changed)
         devices_sizer.Add(self.devices_notebook, 1, wx.EXPAND)
         self.tab_devices_shell.SetSizer(devices_sizer)
 
@@ -2695,22 +2800,12 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         self.diagnostics_notebook.AddPage(self.tab_diagnostics_overview, "Tests & Support")
         self.diagnostics_notebook.AddPage(self.tab_speed, "Speed")
         self.diagnostics_notebook.AddPage(self.tab_ha_status, "Home Assistant Status")
+        self.diagnostics_notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self.on_notebook_page_changed)
         diagnostics_sizer.Add(self.diagnostics_notebook, 1, wx.EXPAND)
         self.tab_diagnostics_shell.SetSizer(diagnostics_sizer)
 
         self.setup_hidden_ai_voice_compat_controls()
-        self.setup_dash_tab()
-        self.setup_doorbell_tab()
-        self.setup_prompt_editor_tab()
-        self.setup_setup_tab()
-        self.setup_tts_config_tab()
-        self.setup_devices_tab()
-        self.setup_diagnostics_tab()
-        self.setup_utils_tab()
-        self.setup_fridge_tab()
-        self.setup_vacuum_tab()
-        self.setup_speed_tab()
-        self.setup_ha_status_tab()
+        self._setup_tab_once("dash", self.setup_dash_tab, self.tab_dash)
 
         self.main_sizer.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 5)
 
@@ -2719,7 +2814,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
             control.Hide()
             control.Enable(False)
 
-        self.voice_list = audio.get_available_windows_voices()
+        self.voice_list = []
         self.engine_choice = wx.Choice(self.panel, choices=["Gemini (Cloud)", "Ollama (Local)", "Dual (Comparison)"])
         self.engine_choice.SetStringSelection(self.config.get("vision_engine", "Gemini (Cloud)"))
         hide_disabled(self.engine_choice)
@@ -2753,6 +2848,52 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
 
     def setup_dash_tab(self):
         sizer = wx.BoxSizer(wx.VERTICAL)
+
+        health_box = wx.StaticBox(self.tab_dash, label="System Health")
+        health_sizer = wx.StaticBoxSizer(health_box, wx.VERTICAL)
+        self.ha_connection_status_txt = wx.TextCtrl(
+            self.tab_dash,
+            value="Home Assistant listener is starting.",
+            style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
+            size=(-1, 55),
+        )
+        self._describe_control(
+            self.ha_connection_status_txt,
+            "Home Assistant connection status. This read-only box tells whether Viper is connected to Home Assistant events.",
+        )
+        health_sizer.Add(self.ha_connection_status_txt, 0, wx.ALL | wx.EXPAND, 5)
+
+        self.system_health_txt = wx.TextCtrl(
+            self.tab_dash,
+            value=self._build_system_health_text(),
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_WORDWRAP,
+            size=(-1, 250),
+        )
+        self._describe_control(
+            self.system_health_txt,
+            "System Health dashboard. Read-only summary of Home Assistant, doorbells, speakers, HVAC, startup timing, and recent Viper events.",
+        )
+        health_sizer.Add(self.system_health_txt, 0, wx.ALL | wx.EXPAND, 5)
+
+        health_buttons = wx.GridSizer(rows=0, cols=2, vgap=6, hgap=6)
+        self.btn_refresh_system_health = wx.Button(self.tab_dash, label="Refresh System Health", size=(-1, 40))
+        self.btn_test_home_assistant_dash = wx.Button(self.tab_dash, label="Test Home Assistant", size=(-1, 40))
+        self.btn_test_doorbell_system_dash = wx.Button(self.tab_dash, label="Test Doorbell System", size=(-1, 40))
+        self.btn_test_speakers_dash = wx.Button(self.tab_dash, label="Test Speakers", size=(-1, 40))
+        self.btn_refresh_system_health.Bind(wx.EVT_BUTTON, self.on_refresh_system_health)
+        self.btn_test_home_assistant_dash.Bind(wx.EVT_BUTTON, self.on_refresh_ha_from_dashboard)
+        self.btn_test_doorbell_system_dash.Bind(wx.EVT_BUTTON, self.on_test_doorbell_system_from_dashboard)
+        self.btn_test_speakers_dash.Bind(wx.EVT_BUTTON, self.on_test_speakers_from_dashboard)
+        for button, description in {
+            self.btn_refresh_system_health: "Refresh System Health button. Updates the dashboard health summary without changing settings.",
+            self.btn_test_home_assistant_dash: "Test Home Assistant button. Opens Diagnostics and checks the Home Assistant connection.",
+            self.btn_test_doorbell_system_dash: "Test Doorbell System button. Opens Doorbell Vision so you can run the full front or back doorbell flow.",
+            self.btn_test_speakers_dash: "Test Speakers button. Opens Speakers and Audio so you can test or adjust speaker targets.",
+        }.items():
+            self._describe_control(button, description)
+            health_buttons.Add(button, 0, wx.EXPAND)
+        health_sizer.Add(health_buttons, 0, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(health_sizer, 0, wx.ALL | wx.EXPAND, 15)
 
         self.btn_arm = wx.Button(self.tab_dash, label="Disarm System" if self.is_armed else "Arm System", size=(-1, 60))
         font = self.btn_arm.GetFont()
@@ -2790,6 +2931,60 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         sizer.Add(csizer, 0, wx.ALL | wx.EXPAND, 15)
 
         self.tab_dash.SetSizer(sizer)
+
+    def _build_system_health_text(self):
+        listener_status = self.ha_listener.status() if hasattr(self, "ha_listener") else {}
+        return viper_system_health.build_system_health_summary(
+            self.config,
+            listener_status=listener_status,
+            hvac_last_states=getattr(self, "hvac_last_states", {}),
+            startup_lines=startup_summary_lines(limit=8),
+            recent_events=format_recent_events(limit=8),
+        )
+
+    def refresh_system_health_display(self):
+        if hasattr(self, "system_health_txt"):
+            self.system_health_txt.SetValue(self._build_system_health_text())
+        if hasattr(self, "ha_connection_status_txt"):
+            status = self.ha_listener.status() if hasattr(self, "ha_listener") else {}
+            self.ha_connection_status_txt.SetValue(viper_system_health.short_ha_status(status))
+
+    def on_refresh_system_health(self, event):
+        record_event("diagnostics", "System Health refreshed from the dashboard.")
+        self.refresh_system_health_display()
+        self.notify("System Health refreshed.", priority=10, speak=False)
+
+    def _select_main_tab(self, page):
+        if not hasattr(self, "notebook"):
+            return
+        self._select_notebook_page(self.notebook, page)
+
+    def _select_notebook_page(self, notebook, page):
+        if notebook is None or page is None:
+            return
+        for idx in range(notebook.GetPageCount()):
+            if notebook.GetPage(idx) is page:
+                notebook.SetSelection(idx)
+                self._ensure_tab_page(page)
+                return
+
+    def on_refresh_ha_from_dashboard(self, event):
+        record_event("diagnostics", "Home Assistant status check opened from the dashboard.")
+        self._select_main_tab(self.tab_diagnostics_shell)
+        self._select_notebook_page(self.diagnostics_notebook, self.tab_ha_status)
+        if hasattr(self, "ha_status_txt"):
+            self.on_refresh_ha_status(event)
+
+    def on_test_doorbell_system_from_dashboard(self, event):
+        record_event("diagnostics", "Doorbell system test opened from the dashboard.")
+        self._select_main_tab(self.tab_doorbell)
+        self.notify("Doorbell Vision opened. Use the full-flow buttons to test front or back door.", priority=10, speak=False)
+
+    def on_test_speakers_from_dashboard(self, event):
+        record_event("diagnostics", "Speaker test area opened from the dashboard.")
+        self._select_main_tab(self.tab_audio_shell)
+        self._select_notebook_page(self.audio_notebook, self.tab_dev)
+        self.notify("Speakers and Audio opened. Use speaker tests or discovery from here.", priority=10, speak=False)
 
     def setup_doorbell_tab(self):
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -4319,6 +4514,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
 
     def setup_tts_config_tab(self):
         sizer = wx.BoxSizer(wx.VERTICAL)
+        self._sapi_voice_choices = []
 
         self.default_tts_controls = self._add_tts_settings_box(
             sizer,
@@ -4399,6 +4595,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         self._describe_control(google_tld, f"{title} regular Google TTS accent. Used when this alert type uses regular Google TTS.")
 
         sapi_voice = wx.Choice(self.tab_tts, choices=self.voice_list)
+        self._sapi_voice_choices.append(sapi_voice)
         sapi_idx = int(settings.get("sapi_voice_index", self.config.get("local_voice_index", 1)))
         if self.voice_list:
             sapi_voice.SetSelection(sapi_idx if sapi_idx < len(self.voice_list) else 0)
@@ -4478,10 +4675,26 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         engine = self._engine_value_from_choice(controls["engine"])
         if "use_defaults" in controls and controls["use_defaults"].GetValue():
             parent_enabled = False
+        if parent_enabled and engine == "sapi":
+            self._ensure_windows_voice_list()
         controls["gemini_voice"].Enable(parent_enabled and engine == "gemini")
         controls["edge_voice"].Enable(parent_enabled and engine == "edge")
         controls["google_tld"].Enable(parent_enabled and engine == "google")
         controls["sapi_voice"].Enable(parent_enabled and engine == "sapi")
+
+    def _ensure_windows_voice_list(self):
+        if self.voice_list:
+            return self.voice_list
+        self.voice_list = audio.get_available_windows_voices()
+        for choice in getattr(self, "_sapi_voice_choices", []):
+            try:
+                current = choice.GetSelection()
+                choice.Set(self.voice_list)
+                if self.voice_list:
+                    choice.SetSelection(current if 0 <= current < len(self.voice_list) else 0)
+            except Exception:
+                logging.debug("Could not populate Windows offline voices.", exc_info=True)
+        return self.voice_list
 
     def _make_speed_choice(self, speed_key):
         choice = wx.Choice(self.tab_tts, choices=list(VOICE_SPEEDS.keys()))
@@ -4911,6 +5124,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
 
     def on_refresh_ha_status(self, event):
         self.ha_status_txt.SetValue("Checking Home Assistant...")
+        record_event("diagnostics", "Home Assistant status check started.")
         safe_submit(self._run_ha_status_check)
 
     def _run_ha_status_check(self):
@@ -4918,7 +5132,11 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
             summary = self._build_ha_status_summary()
         except Exception as e:
             summary = f"Home Assistant status check failed: {e}"
+            record_event("diagnostics", summary)
+        else:
+            record_event("diagnostics", "Home Assistant status check finished.")
         wx.CallAfter(self.ha_status_txt.SetValue, summary)
+        wx.CallAfter(self.refresh_system_health_display)
 
     def _format_ha_status_timestamp(self, value):
         try:
@@ -5603,6 +5821,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         sonos_candidates = []
         sonos_error = ""
         try:
+            import soco
             sonos_candidates = self._sonos_speaker_candidates_from_soco(soco.discover())
         except Exception as e:
             sonos_error = f"Network Sonos discovery failed: {e}"
@@ -5679,6 +5898,8 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         self.save_config()
         self.btn_arm.SetLabel("Disarm System" if self.is_armed else "Arm System")
         msg = f"Viper Vision {'Armed' if self.is_armed else 'Disarmed'}"
+        record_event("security", msg)
+        self.refresh_system_health_display()
         self.notify(msg, priority=1, interrupt=True)
         safe_submit(audio.play_notification, "utilities", msg)
 
@@ -5687,6 +5908,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
         if msg:
             self.broadcast_input.Clear()
             self.notify(f"Broadcasting: {msg}", priority=3, interrupt=True)
+            record_event("broadcast", "Manual intercom broadcast sent.")
             safe_submit(audio.play_notification, "manual", msg)
 
     def on_api(self, event): safe_submit(self._run_api)
@@ -5884,6 +6106,7 @@ class ViperDashboard(FridgeTabMixin, VacuumTabMixin, DiagnosticsTabMixin, wx.Fra
 
     def _run_scan_sonos(self):
         try:
+            import soco
             speakers = soco.discover()
             if not speakers:
                 self.notify("No Sonos found.", priority=10)
@@ -6122,9 +6345,10 @@ if __name__ == "__main__":
     logging.info("===== VIPER VISION STARTING =====")
     gui_app = wx.App(False)
     cfg.ensure_default_assets()
-    audio.startup_cleanup()
+    threading.Thread(target=audio.startup_cleanup, name="ViperStartupCleanup", daemon=True).start()
     threading.Thread(target=audio.start_local_server, daemon=True).start()
     threading.Thread(target=run_flask_server, daemon=True).start()
     # Flask routes all guard on 'dash_app is None', so no fixed sleep is needed.
     dash_app = ViperDashboard()
+    start_plumbing_monitor()
     gui_app.MainLoop()
