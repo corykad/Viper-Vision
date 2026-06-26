@@ -4784,10 +4784,11 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
     def _describe_control(self, control, description):
         control.SetName(description)
         control.SetToolTip(description)
-        try:
-            control.Bind(wx.EVT_SET_FOCUS, self._on_control_focus_for_diagnostics)
-        except Exception:
-            pass
+        if os.getenv("VIPER_FOCUS_LOG", "").strip().lower() in {"1", "true", "yes", "on"}:
+            try:
+                control.Bind(wx.EVT_SET_FOCUS, self._on_control_focus_for_diagnostics)
+            except Exception:
+                pass
 
     def _make_accessible_status_text(self, parent, **kwargs):
         return AccessibleStatusText(parent, **kwargs)
@@ -4820,11 +4821,12 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         control = event.GetEventObject()
         try:
             label = control.GetLabel() if hasattr(control, "GetLabel") else ""
+            name = control.GetName() if hasattr(control, "GetName") else ""
             logging.info(
                 "[FOCUS] Dashboard focus class=%s name=%r label=%r shown=%s enabled=%s can_focus=%s",
                 control.__class__.__name__,
-                control.GetName() if hasattr(control, "GetName") else "",
-                label,
+                self._truncate_focus_log_text(name),
+                self._truncate_focus_log_text(label),
                 control.IsShownOnScreen() if hasattr(control, "IsShownOnScreen") else None,
                 control.IsEnabled() if hasattr(control, "IsEnabled") else None,
                 control.CanAcceptFocusFromKeyboard() if hasattr(control, "CanAcceptFocusFromKeyboard") else None,
@@ -4832,6 +4834,12 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         except Exception:
             logging.debug("Could not log dashboard focus target.", exc_info=True)
         event.Skip()
+
+    def _truncate_focus_log_text(self, value, limit=180):
+        text = str(value or "").replace("\r", "\\r").replace("\n", "\\n")
+        if len(text) <= limit:
+            return text
+        return text[:limit] + "...[truncated]"
 
     def _announce_focus_help(self, event, text):
         wx.CallAfter(self._safe_speak, text)

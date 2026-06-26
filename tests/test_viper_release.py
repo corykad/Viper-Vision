@@ -3435,6 +3435,38 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertNotIn(("kbd", "new setup button"), calls)
         self.assertNotIn(("kbd", "old doorbell button"), calls)
 
+    def test_focus_logging_is_opt_in_and_truncated(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+
+        class Control:
+            def __init__(self):
+                self.bound = False
+                self.name = ""
+                self.tooltip = ""
+
+            def SetName(self, value):
+                self.name = value
+
+            def SetToolTip(self, value):
+                self.tooltip = value
+
+            def Bind(self, *_args):
+                self.bound = True
+
+        control = Control()
+        with patch.object(main.os, "getenv", return_value=""):
+            main.ViperDashboard._describe_control(fake, control, "Accessible description")
+        self.assertFalse(control.bound)
+
+        control = Control()
+        with patch.object(main.os, "getenv", return_value="1"):
+            main.ViperDashboard._describe_control(fake, control, "Accessible description")
+        self.assertTrue(control.bound)
+
+        long_text = "x" * 300
+        shortened = main.ViperDashboard._truncate_focus_log_text(fake, long_text, limit=20)
+        self.assertEqual(shortened, "x" * 20 + "...[truncated]")
+
     def test_desktop_keeps_real_tabs_without_startup_focus_spam(self):
         root = Path(__file__).resolve().parents[1]
         main_text = (root / "main.pyw").read_text(encoding="utf-8")
