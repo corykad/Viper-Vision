@@ -2440,8 +2440,9 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
                     if item.get("status") in {"BROKEN", "SUSPICIOUS"}
                 ]
                 first = issues[0] if issues else "Open Diagnostics for details."
-                self.notify(f"Startup health check needs attention: {overall}. {first}", priority=10, speak=False)
-                record_event("startup health", f"Startup health check needs attention: {overall}.")
+                message = f"Startup health check needs attention: {overall}. {first}"
+                self.notify(message, priority=10, speak=False)
+                record_event("startup health", message)
             else:
                 record_event("startup health", "Startup health check passed.")
             logging.info("[HEALTH] Startup self-test overall=%s items=%s", overall, critical.get("items", []))

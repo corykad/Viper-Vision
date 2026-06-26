@@ -269,6 +269,19 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("Office: set temperature to Cool at 68 degrees.", text)
         self.assertNotIn("set_temperature", text)
 
+    def test_hvac_bulk_result_summary_reports_partial_failures(self):
+        message = hvac.summarize_service_results(
+            [
+                {"name": "Office", "ok": True},
+                {"name": "Kitchen", "ok": False, "message": "bad mode"},
+                {"name": "Living Room", "ok": True},
+            ],
+            "All heat pumps set to Cool at 68.",
+        )
+
+        self.assertIn("2 of 3 heat pump commands succeeded", message)
+        self.assertIn("Kitchen", message)
+
     def test_startup_avoids_eager_device_scans_and_gemini_imports(self):
         hvac_text = Path("viper_ui_hvac.py").read_text(encoding="utf-8")
         fridge_text = Path("viper_ui_fridge.py").read_text(encoding="utf-8")
@@ -3502,6 +3515,30 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("Last broadcast: 2026-06-26T10:00:00: Manual intercom broadcast sent.", text)
         self.assertIn("SmartThings reloads in 24 hours: 1.", text)
         self.assertIn("Last SmartThings recovery journal: 2026-06-26T09:55:00+00:00: smartthings_reload ok: Reloaded.", text)
+
+    def test_startup_health_event_includes_first_issue(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+        fake._startup_health_checked = False
+        fake.notified = []
+        fake.notify = lambda message, priority=10, speak=False: fake.notified.append(message)
+        fake.refresh_system_health_display = lambda: None
+        fake._current_diagnostics = lambda check_ha=False: {
+            "critical_workflows": {
+                "overall": "SUSPICIOUS",
+                "items": [
+                    {"name": "HA API", "status": "SUSPICIOUS", "message": "Not checked in this quick summary."}
+                ],
+            }
+        }
+        recorded = []
+
+        with patch.object(main, "record_event", side_effect=lambda kind, message, **details: recorded.append((kind, message))), \
+             patch.object(main.wx, "CallAfter", lambda func, *args, **kwargs: func(*args, **kwargs)):
+            main.ViperDashboard.run_startup_health_self_test(fake)
+
+        self.assertIn("HA API: Not checked in this quick summary.", fake.notified[0])
+        self.assertEqual(recorded[-1][0], "startup health")
+        self.assertIn("HA API: Not checked in this quick summary.", recorded[-1][1])
 
     def test_remote_flask_secret_does_not_use_hardcoded_default(self):
         root = Path(__file__).resolve().parents[1]

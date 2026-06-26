@@ -376,9 +376,10 @@ class HvacTabMixin:
     def _run_hvac_command_async(self, worker, success_message):
         def run():
             try:
-                worker()
-                viper_runtime.record_event("hvac", success_message)
-                wx.CallAfter(self.notify, success_message, 10)
+                result = worker()
+                message = hvac.summarize_service_results(result, success_message) if isinstance(result, list) else success_message
+                viper_runtime.record_event("hvac", message)
+                wx.CallAfter(self.notify, message, 10)
                 wx.CallAfter(lambda: wx.CallLater(1200, self.refresh_hvac_status))
             except Exception as exc:
                 logging.exception("HVAC command failed")

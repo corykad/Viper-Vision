@@ -264,6 +264,20 @@ def set_swing_mode(config, unit, swing_mode):
     )
 
 
+def summarize_service_results(results, success_message):
+    results = list(results or [])
+    if not results:
+        return success_message
+    failures = [item for item in results if not item.get("ok")]
+    if not failures:
+        return success_message
+    ok_count = len(results) - len(failures)
+    failed_names = ", ".join(str(item.get("name") or "Unknown") for item in failures[:3])
+    if len(failures) > 3:
+        failed_names += f", plus {len(failures) - 3} more"
+    return f"{ok_count} of {len(results)} heat pump commands succeeded. Failed: {failed_names}."
+
+
 def apply_all(config, mode=None, temperature=None):
     results = []
     for unit in HEAT_PUMPS:
