@@ -57,7 +57,7 @@ from viper_ui_setup_wizard import (
 import viper_speakers as speakers
 import viper_vacuum as vacuum
 import viper_vision as vision
-from viper_runtime import executor, format_recent_events, is_shutting_down, mark_startup_phase, record_event, safe_submit, startup_summary_lines
+from viper_runtime import executor, format_recent_events, is_shutting_down, mark_startup_phase, recent_events, record_event, safe_submit, startup_summary_lines
 
 mark_startup_phase("main imports complete")
 
@@ -4985,7 +4985,9 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         self.tab_recent_events.SetSizer(sizer)
 
     def _build_recent_events_text(self):
-        lines = ["Recent Events", ""]
+        lines = ["Health History", ""]
+        lines.extend(self._build_health_history_lines())
+        lines.extend(["", "Recent Events", ""])
         lines.extend(format_recent_events(limit=20))
         health_events = viper_health.recent_health_events(limit=12)
         lines.extend(["", "Recent Home Assistant recovery events:"])
@@ -4995,6 +4997,62 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
             for item in reversed(health_events):
                 lines.append(f"{item.get('timestamp')}: {item.get('event_type')} {item.get('status')}: {item.get('message')}")
         return "\n".join(lines)
+
+    def _format_history_timestamp(self, value):
+        try:
+            number = float(value or 0)
+        except (TypeError, ValueError):
+            number = 0
+        if number <= 0:
+            return "never"
+        try:
+            return datetime.fromtimestamp(number).strftime("%Y-%m-%d %I:%M:%S %p")
+        except Exception:
+            return "unknown"
+
+    def _last_runtime_event(self, kinds):
+        wanted = {str(item).lower() for item in (kinds if isinstance(kinds, (list, tuple, set)) else [kinds])}
+        for event in recent_events(limit=40):
+            if str(event.get("kind") or "").lower() in wanted:
+                return event
+        return {}
+
+    def _last_health_recovery_event(self):
+        events = viper_health.recent_health_events(limit=20)
+        for item in reversed(events):
+            if str(item.get("event_type") or "").startswith("smartthings_reload"):
+                return item
+        return {}
+
+    def _build_health_history_lines(self):
+        listener = self.ha_listener.status() if hasattr(self, "ha_listener") else {}
+        last_doorbell = self._last_runtime_event("doorbell")
+        last_hvac = self._last_runtime_event("hvac")
+        last_broadcast = self._last_runtime_event("broadcast")
+        last_recovery = self._last_health_recovery_event()
+        last_routed = listener.get("last_routed_action") or {}
+        lines = [
+            f"HA listener: {'connected' if listener.get('connected') else 'not connected'}.",
+            f"Last connected: {self._format_history_timestamp(listener.get('last_connected_at'))}.",
+            f"Last reconnect attempt: {self._format_history_timestamp(listener.get('last_reconnect_at'))}.",
+            f"Reconnect count: {listener.get('reconnect_count', 0)}.",
+            f"Last successful HA poll: {self._format_history_timestamp(listener.get('last_successful_poll_at'))}.",
+            f"Last HA event: {listener.get('last_event_entity') or 'none'}; {listener.get('last_event_old_state') or ''} -> {listener.get('last_event_new_state') or ''}.",
+            f"Last routed action: {last_routed.get('type') if isinstance(last_routed, dict) else last_routed or 'none'}.",
+            f"Last doorbell action: {last_doorbell.get('time', 'none')}: {last_doorbell.get('message', 'none')}.",
+            f"Last HVAC action: {last_hvac.get('time', 'none')}: {last_hvac.get('message', 'none')}.",
+            f"Last broadcast: {last_broadcast.get('time', 'none')}: {last_broadcast.get('message', 'none')}.",
+            f"Last SmartThings reload: {self._format_history_timestamp(listener.get('last_smartthings_reload_at'))}; result: {listener.get('last_smartthings_reload_result') or 'none'}.",
+            f"SmartThings reloads in 24 hours: {listener.get('repeated_smartthings_reloads_24h', 0)}.",
+        ]
+        if last_recovery:
+            lines.append(
+                f"Last SmartThings recovery journal: {last_recovery.get('timestamp')}: "
+                f"{last_recovery.get('event_type')} {last_recovery.get('status')}: {last_recovery.get('message')}"
+            )
+        else:
+            lines.append("Last SmartThings recovery journal: none.")
+        return lines
 
     def on_refresh_recent_events(self, event):
         if hasattr(self, "recent_events_txt"):
