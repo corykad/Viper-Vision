@@ -278,6 +278,9 @@ class ViperReleaseTests(unittest.TestCase):
         vision_text = Path("viper_vision.py").read_text(encoding="utf-8")
 
         self.assertNotIn("wx.CallAfter(self.refresh_hvac_status)", hvac_text)
+        self.assertIn("wx.CallLater(3500, self.refresh_hvac_status)", main_text)
+        self.assertIn('self.hvac_last_states = getattr(self, "hvac_last_states", {})', hvac_text)
+        self.assertIn("Viper also refreshes this once shortly after startup", hvac_text)
         self.assertNotIn("wx.CallAfter(self.refresh_ice_maker_status)", fridge_text)
         self.assertNotIn("wx.CallAfter(self.refresh_refrigerator_controls_status)", fridge_text)
         self.assertNotIn("wx.CallAfter(self.on_refresh_vacuum, None)", vacuum_text)

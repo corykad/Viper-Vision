@@ -2112,6 +2112,7 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         self.ha_listener.start()
         record_event("home assistant", "HA listener start requested.")
         mark_startup_phase("background workers started")
+        wx.CallLater(3500, self.refresh_hvac_status)
         wx.CallLater(20000, self.run_startup_health_self_test)
         self._ha_address_recovery_stop = threading.Event()
         threading.Thread(target=self._ha_address_recovery_worker, name="ViperHAAddressRecovery", daemon=True).start()

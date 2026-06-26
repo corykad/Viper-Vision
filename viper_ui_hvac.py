@@ -18,7 +18,7 @@ class HvacTabMixin:
 
     def setup_hvac_tab(self):
         self.hvac_controls = {}
-        self.hvac_last_states = {}
+        self.hvac_last_states = getattr(self, "hvac_last_states", {})
 
         outer = wx.BoxSizer(wx.VERTICAL)
         self.hvac_notebook = wx.Notebook(self.tab_hvac)
@@ -44,7 +44,7 @@ class HvacTabMixin:
 
         self.hvac_all_status_txt = self._make_hvac_status_text(
             self.tab_hvac_all,
-            value="Current heat pump status will appear here. Press Refresh Current Status to read all heat pumps.",
+            value=self._cached_hvac_all_status_text(),
             size=(-1, 260),
         )
         self._describe_control(
@@ -118,7 +118,7 @@ class HvacTabMixin:
         status_sizer = wx.StaticBoxSizer(status_box, wx.VERTICAL)
         status = self._make_hvac_status_text(
             page,
-            value=f"Current status for {unit['name']} will appear here. Press Refresh Current Status.",
+            value=self._cached_hvac_unit_status_text(unit),
             size=(-1, 165),
         )
         self._describe_control(status, f"{unit['name']} HVAC status and last command details.")
@@ -223,6 +223,18 @@ class HvacTabMixin:
         if hasattr(self, "hvac_all_status_txt"):
             self.hvac_all_status_txt.SetValue("Reading heat pump status from Home Assistant...")
         self._safe_submit(self._run_hvac_refresh, announce, focus_unit)
+
+    def _cached_hvac_all_status_text(self):
+        states = list(getattr(self, "hvac_last_states", {}).values())
+        if states:
+            return hvac.format_all_status(states)
+        return "Current heat pump status will appear here. Viper also refreshes this once shortly after startup."
+
+    def _cached_hvac_unit_status_text(self, unit):
+        item = getattr(self, "hvac_last_states", {}).get(unit["key"])
+        if item:
+            return hvac.format_unit_status(item)
+        return f"Current status for {unit['name']} will appear here. Press Refresh Current Status."
 
     def _run_hvac_refresh(self, announce=False, focus_unit=""):
         try:
