@@ -2049,6 +2049,7 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         self._last_focus_snapshot_log = {}
         self._last_smartthings_reload_notice_at = 0.0
         self._startup_health_checked = False
+        self.startup_api_status = {"checked": False, "running": False, "message": "Startup API checks have not run yet."}
         record_event("startup", "Viper dashboard is opening.")
         cfg.sync_globals_from_config()
 
@@ -2113,6 +2114,7 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         record_event("home assistant", "HA listener start requested.")
         mark_startup_phase("background workers started")
         wx.CallLater(3500, self.refresh_hvac_status)
+        wx.CallLater(6000, self.run_startup_api_checks)
         wx.CallLater(20000, self.run_startup_health_self_test)
         self._ha_address_recovery_stop = threading.Event()
         threading.Thread(target=self._ha_address_recovery_worker, name="ViperHAAddressRecovery", daemon=True).start()
@@ -2945,6 +2947,7 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
             self.config,
             listener_status=listener_status,
             hvac_last_states=getattr(self, "hvac_last_states", {}),
+            startup_api_status=getattr(self, "startup_api_status", {}),
             startup_lines=startup_summary_lines(limit=8),
             recent_events=format_recent_events(limit=8),
         )
@@ -2960,6 +2963,75 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         record_event("diagnostics", "System Health refreshed from the dashboard.")
         self.refresh_system_health_display()
         self.notify("System Health refreshed.", priority=10, speak=False)
+
+    def run_startup_api_checks(self):
+        if is_shutting_down.is_set() or getattr(self, "_startup_api_checks_started", False):
+            return
+        self._startup_api_checks_started = True
+        self.startup_api_status = {"checked": False, "running": True, "message": "Startup API checks are running in the background."}
+        self.refresh_system_health_display()
+        safe_submit(self._run_startup_api_checks_worker)
+
+    def _run_startup_api_checks_worker(self):
+        lines = []
+        ok = True
+        ha_settings = cfg.get_ha_settings(self.config, include_env=True)
+        if ha_settings.get("ha_ip") and ha_settings.get("ha_token"):
+            result = discovery.test_ha_connection(
+                token=ha_settings.get("ha_token"),
+                ha_ip=ha_settings.get("ha_ip"),
+                ha_port=ha_settings.get("ha_port"),
+                timeout=4,
+            )
+            if result.get("ok"):
+                lines.append(f"HA REST API: ok. Entities visible: {result.get('entity_count', 'unknown')}.")
+            else:
+                ok = False
+                lines.append(f"HA REST API: failed. {result.get('message') or result.get('error') or 'No detail.'}")
+        else:
+            ok = False
+            lines.append("HA REST API: skipped because host or token is missing.")
+
+        speaker_settings = cfg.get_speaker_settings(self.config, include_env=True)
+        routes = speaker_settings.get("routes") or {}
+        lines.append(
+            "Speaker routes: "
+            f"{speaker_settings.get('enabled_count', 0)} enabled; "
+            f"doorbell {len(routes.get('doorbell') or [])}, "
+            f"utilities {len(routes.get('utilities') or [])}, "
+            f"fridge {len(routes.get('fridge') or [])}."
+        )
+
+        api = cfg.get_api_settings(self.config, include_env=True)
+        if api.get("pushover_enabled"):
+            if api.get("pushover_user_key") and api.get("pushover_api_token"):
+                lines.append("Pushover: configured. No startup test push sent.")
+            else:
+                ok = False
+                lines.append("Pushover: enabled but user key or API token is missing.")
+        else:
+            lines.append("Pushover: disabled. No startup test push sent.")
+        lines.append("Gemini: skipped to avoid billable startup checks.")
+
+        listener = self.ha_listener.status() if hasattr(self, "ha_listener") else {}
+        critical = listener.get("critical_health_status") or "not checked yet"
+        critical_msg = listener.get("critical_health_message") or "No SmartThings watchdog result yet."
+        lines.append(f"SmartThings fridge stream: {critical}. {critical_msg}")
+
+        status = {
+            "checked": True,
+            "running": False,
+            "ok": ok,
+            "lines": lines,
+            "message": "Startup API checks finished." if ok else "Startup API checks found something to review.",
+        }
+        wx.CallAfter(self._finish_startup_api_checks, status)
+
+    def _finish_startup_api_checks(self, status):
+        self.startup_api_status = status
+        state = "ok" if status.get("ok") else "needs review"
+        record_event("startup api", f"Startup API checks finished: {state}.")
+        self.refresh_system_health_display()
 
     def _select_main_tab(self, page):
         if not hasattr(self, "notebook"):

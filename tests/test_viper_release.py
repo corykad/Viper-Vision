@@ -3540,6 +3540,37 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(recorded[-1][0], "startup health")
         self.assertIn("HA API: Not checked in this quick summary.", recorded[-1][1])
 
+    def test_startup_api_checks_skip_gemini_and_do_not_send_pushes(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+        fake.config = cfg.validate_and_normalize_config({
+            "ha_ip": "homeassistant",
+            "ha_port": "8123",
+            "ha_token": "token",
+            "pushover_enabled": True,
+            "pushover_user_key": "user",
+            "pushover_api_token": "push-token",
+            "speakers": {"Office": {"enabled": True, "doorbell": True, "utilities": True, "fridge": False}},
+        })
+        fake.ha_listener = type("Listener", (), {"status": lambda _self: {"critical_health_status": "ok", "critical_health_message": "Door stream healthy."}})()
+        fake.refresh_system_health_display = lambda: None
+        recorded = []
+
+        with patch.object(main.discovery, "test_ha_connection", return_value={"ok": True, "entity_count": 123}) as ha_test, \
+             patch.object(main.audio, "_send_text_pushover", side_effect=AssertionError("startup must not send pushover")), \
+             patch.object(main.vision, "get_gemini_client", side_effect=AssertionError("startup must not call Gemini")), \
+             patch.object(main, "record_event", side_effect=lambda kind, message, **details: recorded.append((kind, message))), \
+             patch.object(main.wx, "CallAfter", lambda func, *args, **kwargs: func(*args, **kwargs)):
+            main.ViperDashboard._run_startup_api_checks_worker(fake)
+
+        ha_test.assert_called_once()
+        status = fake.startup_api_status
+        self.assertTrue(status["ok"])
+        text = "\n".join(status["lines"])
+        self.assertIn("HA REST API: ok. Entities visible: 123.", text)
+        self.assertIn("Pushover: configured. No startup test push sent.", text)
+        self.assertIn("Gemini: skipped to avoid billable startup checks.", text)
+        self.assertEqual(recorded[-1], ("startup api", "Startup API checks finished: ok."))
+
     def test_remote_flask_secret_does_not_use_hardcoded_default(self):
         root = Path(__file__).resolve().parents[1]
         main_text = (root / "main.pyw").read_text(encoding="utf-8")
@@ -6416,6 +6447,7 @@ class ViperReleaseTests(unittest.TestCase):
             config,
             listener_status={"running": True, "connected": False, "last_error": "connection refused"},
             hvac_last_states={"office": {"available": True}, "kitchen": {"available": False}},
+            startup_api_status={"checked": True, "ok": True, "lines": ["HA REST API: ok.", "Gemini: skipped to avoid billable startup checks."]},
             startup_lines=["Startup timing:", "0.100s: dashboard controls ready"],
             recent_events=["Recent Viper events:", "2026-06-26T09:00:00: test: ok"],
         )
@@ -6426,6 +6458,8 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("Front door: enabled. Triggers: 2. Camera stream: set.", text)
         self.assertIn("Back door: enabled. Triggers: 1. Camera stream: missing.", text)
         self.assertIn("Heat pumps: 1 of 2 online.", text)
+        self.assertIn("Startup API checks: ok.", text)
+        self.assertIn("Gemini: skipped to avoid billable startup checks.", text)
 
     def test_runtime_records_startup_and_recent_events(self):
         phase = viper_runtime.mark_startup_phase("test phase", "unit test")

@@ -33,7 +33,18 @@ def _hvac_line(hvac_last_states):
     return f"Heat pumps: {online} of {len(states)} online."
 
 
-def build_system_health_summary(config, *, listener_status=None, hvac_last_states=None, startup_lines=None, recent_events=None):
+def _startup_api_lines(status):
+    status = status or {}
+    if status.get("running"):
+        return ["Startup API checks: running in the background."]
+    if not status.get("checked"):
+        return [f"Startup API checks: {status.get('message') or 'not checked yet.'}"]
+    lines = [f"Startup API checks: {'ok' if status.get('ok') else 'needs review'}."]
+    lines.extend(status.get("lines") or [])
+    return lines
+
+
+def build_system_health_summary(config, *, listener_status=None, hvac_last_states=None, startup_api_status=None, startup_lines=None, recent_events=None):
     config = config or {}
     listener_status = listener_status or {}
     ha = cfg.get_ha_settings(config, include_env=True)
@@ -55,6 +66,9 @@ def build_system_health_summary(config, *, listener_status=None, hvac_last_state
         _doorbell_line("back", triggers.get("back", {})),
         f"Speaker routes: {speakers_enabled} enabled speaker target(s).",
         _hvac_line(hvac_last_states),
+        "",
+        "Startup background checks:",
+        *_startup_api_lines(startup_api_status),
     ]
 
     if startup_lines is None:
