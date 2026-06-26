@@ -57,6 +57,9 @@ ha_packages/viper_vision_package.yaml
 exe_smoke_appdata/
 exe_smoke_appdata_final/
 
+# Local ESPHome flashing work directories
+.esphome_flash*/
+
 # OS/editor
 .DS_Store
 Thumbs.db

@@ -394,7 +394,8 @@ CONFIG_SCHEMA = {
         "ha_listener_enabled": True,
         "ha_smartthings_recovery_enabled": True,
         "ha_smartthings_stale_minutes": 20,
-        "ha_smartthings_reload_cooldown_minutes": 15,
+        "ha_smartthings_reload_cooldown_minutes": 360,
+        "ha_smartthings_max_reloads_per_day": 3,
         "ice_maker_switch_entity": ICE_MAKER_SWITCH_ENTITY,
         "ice_maker_keep_on_entity": ICE_MAKER_KEEP_ON_ENTITY,
         "ice_maker_counter_entity": ICE_MAKER_COUNTER_ENTITY,
@@ -1091,7 +1092,7 @@ def validate_and_normalize_config(config_data):
         min(_as_int(normalized.get("ha_smartthings_stale_minutes"), defaults["ha_smartthings_stale_minutes"]), 1440),
     )
     normalized["ha_smartthings_reload_cooldown_minutes"] = max(
-        15,
+        60,
         min(
             _as_int(
                 normalized.get("ha_smartthings_reload_cooldown_minutes"),
@@ -1099,6 +1100,10 @@ def validate_and_normalize_config(config_data):
             ),
             1440,
         ),
+    )
+    normalized["ha_smartthings_max_reloads_per_day"] = max(
+        1,
+        min(_as_int(normalized.get("ha_smartthings_max_reloads_per_day"), defaults["ha_smartthings_max_reloads_per_day"]), 12),
     )
     normalized["ice_maker_switch_entity"] = _as_str(normalized.get("ice_maker_switch_entity"), defaults["ice_maker_switch_entity"]).strip() or defaults["ice_maker_switch_entity"]
     normalized["ice_maker_keep_on_entity"] = _as_str(normalized.get("ice_maker_keep_on_entity"), defaults["ice_maker_keep_on_entity"]).strip() or defaults["ice_maker_keep_on_entity"]

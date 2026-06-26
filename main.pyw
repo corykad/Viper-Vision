@@ -2635,6 +2635,8 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
             self._ensure_selected_notebook_page(self.diagnostics_notebook)
         elif page is getattr(self, "tab_diagnostics_overview", None):
             self._setup_tab_once("diagnostics", self.setup_diagnostics_tab, page)
+        elif page is getattr(self, "tab_recent_events", None):
+            self._setup_tab_once("recent_events", self.setup_recent_events_tab, page)
         elif page is getattr(self, "tab_speed", None):
             self._setup_tab_once("speed", self.setup_speed_tab, page)
         elif page is getattr(self, "tab_ha_status", None):
@@ -2766,6 +2768,8 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         self.tab_diagnostics_shell = wx.Panel(self.notebook)
         self.diagnostics_notebook = wx.Notebook(self.tab_diagnostics_shell)
         self.tab_diagnostics_overview = wx.Panel(self.diagnostics_notebook)
+        self.tab_recent_events = wx.ScrolledWindow(self.diagnostics_notebook)
+        self.tab_recent_events.SetScrollRate(0, 20)
         self.tab_speed = wx.ScrolledWindow(self.diagnostics_notebook)
         self.tab_speed.SetScrollRate(0, 20)
         self.tab_ha_status = wx.ScrolledWindow(self.diagnostics_notebook)
@@ -2799,6 +2803,7 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
 
         diagnostics_sizer = wx.BoxSizer(wx.VERTICAL)
         self.diagnostics_notebook.AddPage(self.tab_diagnostics_overview, "Tests & Support")
+        self.diagnostics_notebook.AddPage(self.tab_recent_events, "Recent Events")
         self.diagnostics_notebook.AddPage(self.tab_speed, "Speed")
         self.diagnostics_notebook.AddPage(self.tab_ha_status, "Home Assistant Status")
         self.diagnostics_notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self.on_notebook_page_changed)
@@ -4951,6 +4956,51 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         usizer.Add(self.btn_scan_ha, 0, wx.ALL | wx.EXPAND, 5)
         sizer.Add(usizer, 1, wx.ALL | wx.EXPAND, 10)
         self.tab_util.SetSizer(sizer)
+
+    def setup_recent_events_tab(self):
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        box = wx.StaticBox(self.tab_recent_events, label="Recent Events")
+        bsizer = wx.StaticBoxSizer(box, wx.VERTICAL)
+
+        self.btn_refresh_recent_events = wx.Button(self.tab_recent_events, label="Refresh Recent Events", size=(-1, 40))
+        self.btn_refresh_recent_events.Bind(wx.EVT_BUTTON, self.on_refresh_recent_events)
+        self._describe_control(
+            self.btn_refresh_recent_events,
+            "Refresh Recent Events button. Updates the recent Viper event and Home Assistant recovery journal.",
+        )
+        bsizer.Add(self.btn_refresh_recent_events, 0, wx.ALL | wx.EXPAND, 5)
+
+        self.recent_events_txt = wx.TextCtrl(
+            self.tab_recent_events,
+            value=self._build_recent_events_text(),
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_WORDWRAP,
+            size=(-1, 520),
+        )
+        self._describe_control(
+            self.recent_events_txt,
+            "Recent Events. Read-only timeline of Viper actions, Home Assistant listener status, HVAC refreshes, broadcasts, and SmartThings recovery events.",
+        )
+        bsizer.Add(self.recent_events_txt, 1, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(bsizer, 1, wx.ALL | wx.EXPAND, 10)
+        self.tab_recent_events.SetSizer(sizer)
+
+    def _build_recent_events_text(self):
+        lines = ["Recent Events", ""]
+        lines.extend(format_recent_events(limit=20))
+        health_events = viper_health.recent_health_events(limit=12)
+        lines.extend(["", "Recent Home Assistant recovery events:"])
+        if not health_events:
+            lines.append("No recent recovery events recorded.")
+        else:
+            for item in reversed(health_events):
+                lines.append(f"{item.get('timestamp')}: {item.get('event_type')} {item.get('status')}: {item.get('message')}")
+        return "\n".join(lines)
+
+    def on_refresh_recent_events(self, event):
+        if hasattr(self, "recent_events_txt"):
+            self.recent_events_txt.SetValue(self._build_recent_events_text())
+        record_event("diagnostics", "Recent Events refreshed.")
+        self.notify("Recent Events refreshed.", priority=10, speak=False)
 
     def setup_speed_tab(self):
         sizer = wx.BoxSizer(wx.VERTICAL)

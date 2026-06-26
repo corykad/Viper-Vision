@@ -641,9 +641,10 @@ class ViperReleaseTests(unittest.TestCase):
     def test_config_defaults_smartthings_recovery_to_quicker_watchdog(self):
         normalized = cfg.validate_and_normalize_config({})
         self.assertEqual(normalized["ha_smartthings_stale_minutes"], 20)
-        self.assertEqual(normalized["ha_smartthings_reload_cooldown_minutes"], 15)
+        self.assertEqual(normalized["ha_smartthings_reload_cooldown_minutes"], 360)
+        self.assertEqual(normalized["ha_smartthings_max_reloads_per_day"], 3)
         self.assertEqual(viper_health.DEFAULT_SMARTTHINGS_STALE_SECONDS, 20 * 60)
-        self.assertEqual(viper_health.DEFAULT_SMARTTHINGS_RELOAD_COOLDOWN_SECONDS, 15 * 60)
+        self.assertEqual(viper_health.DEFAULT_SMARTTHINGS_RELOAD_COOLDOWN_SECONDS, 6 * 60 * 60)
 
     def test_vacuum_ui_module_exports_cleaning_mode_helpers(self):
         self.assertIs(ui_vacuum._normalize_vacuum_cleaning_mode, vacuum.normalize_vacuum_cleaning_mode)
@@ -3428,6 +3429,8 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("self.audio_notebook = wx.Notebook(self.tab_audio_shell)", main_text)
         self.assertIn("self.devices_notebook = wx.Notebook(self.tab_devices_shell)", main_text)
         self.assertIn("self.diagnostics_notebook = wx.Notebook(self.tab_diagnostics_shell)", main_text)
+        self.assertIn('self.diagnostics_notebook.AddPage(self.tab_recent_events, "Recent Events")', main_text)
+        self.assertIn('self._setup_tab_once("recent_events", self.setup_recent_events_tab, page)', main_text)
         self.assertNotIn("self.notebook = wx.Simplebook(self.panel)", main_text)
         self.assertNotIn("wx.CallAfter(self.restore_startup_focus)", main_text)
         self.assertNotIn("wx.CallLater(150, self.restore_startup_focus)", main_text)
@@ -3437,6 +3440,19 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertNotIn("startup_frame.Show", startup_block)
         self.assertNotIn("dash_app.Raise()", startup_block)
         self.assertIn("dash_app = ViperDashboard()", startup_block)
+
+    def test_recent_events_text_combines_runtime_and_recovery_events(self):
+        fake = main.ViperDashboard.__new__(main.ViperDashboard)
+        with patch.object(main, "format_recent_events", return_value=["Recent Viper events:", "now: hvac: refreshed"]), \
+             patch.object(main.viper_health, "recent_health_events", return_value=[
+                 {"timestamp": "2026-06-26T10:00:00+00:00", "event_type": "smartthings_reload_skipped", "status": "cooldown", "message": "Skipped reload."}
+             ]):
+            text = main.ViperDashboard._build_recent_events_text(fake)
+
+        self.assertIn("Recent Events", text)
+        self.assertIn("now: hvac: refreshed", text)
+        self.assertIn("Recent Home Assistant recovery events:", text)
+        self.assertIn("Skipped reload.", text)
 
     def test_remote_flask_secret_does_not_use_hardcoded_default(self):
         root = Path(__file__).resolve().parents[1]
@@ -4825,7 +4841,8 @@ class ViperReleaseTests(unittest.TestCase):
             lambda: {
                 "ha_smartthings_recovery_enabled": True,
                 "ha_smartthings_stale_minutes": 20,
-                "ha_smartthings_reload_cooldown_minutes": 15,
+                "ha_smartthings_reload_cooldown_minutes": 60,
+                "ha_smartthings_max_reloads_per_day": 3,
             },
             lambda action: None,
         )
@@ -4855,6 +4872,7 @@ class ViperReleaseTests(unittest.TestCase):
 
         with patch.object(listener, "_fetch_refrigerator_health_states", side_effect=fake_states), \
              patch.object(viper_health, "find_config_entry_for_entity", side_effect=fake_entry), \
+             patch.object(viper_health, "count_recent_health_events", return_value=0), \
              patch.object(viper_health, "reload_config_entry", return_value={"ok": True, "message": "reloaded"}):
             result = asyncio.run(listener._run_critical_health_watchdog("ha", "8123", "token"))
 
@@ -4863,6 +4881,37 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertTrue(result["reloaded"])
         self.assertEqual(status["smartthings_reload_count"], 1)
         self.assertEqual(status["last_smartthings_reload_result"], "reloaded")
+
+    def test_ha_listener_watchdog_stops_after_daily_reload_limit(self):
+        listener = ha_listener.HomeAssistantEventListener(
+            lambda: {
+                "ha_smartthings_recovery_enabled": True,
+                "ha_smartthings_stale_minutes": 20,
+                "ha_smartthings_reload_cooldown_minutes": 60,
+                "ha_smartthings_max_reloads_per_day": 3,
+            },
+            lambda action: None,
+        )
+        states = [
+            {"entity_id": "binary_sensor.refrigerator_fridge_door", "state": "off", "last_updated": "2026-06-18T19:04:12+00:00"},
+            {"entity_id": "binary_sensor.refrigerator_freezer_door", "state": "off", "last_updated": "2026-06-18T18:22:47+00:00"},
+            {"entity_id": "sensor.refrigerator_power", "state": "133", "last_updated": "2026-06-19T01:12:47+00:00"},
+        ]
+
+        async def fake_states(*_args):
+            return states, []
+
+        with patch.object(listener, "_fetch_refrigerator_health_states", side_effect=fake_states), \
+             patch.object(viper_health, "count_recent_health_events", return_value=3), \
+             patch.object(viper_health, "find_config_entry_for_entity") as find_entry, \
+             patch.object(viper_health, "reload_config_entry") as reload_entry:
+            result = asyncio.run(listener._run_critical_health_watchdog("ha", "8123", "token"))
+
+        self.assertFalse(result["reloaded"])
+        self.assertTrue(result["daily_limit"])
+        self.assertIn("already tried 3 automatic SmartThings reloads", listener.status()["critical_health_message"])
+        find_entry.assert_not_called()
+        reload_entry.assert_not_called()
 
     def test_beginner_health_lines_explain_watchdog_status(self):
         diag = diagnostics.collect_diagnostics(
@@ -4929,6 +4978,25 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(summary["overall"], "BROKEN")
         self.assertEqual(route["status"], "BROKEN")
         self.assertIn("No enabled speaker", route["message"])
+
+    def test_critical_workflow_summary_treats_all_disabled_speakers_as_intentionally_quiet(self):
+        config = cfg.validate_and_normalize_config({
+            "speakers": {"Kitchen": {"enabled": False, "doorbell": True, "utilities": True, "fridge": True}},
+        })
+        summary = viper_health.critical_workflow_status(
+            config,
+            diag={
+                "ha_listener": {"connected": True, "critical_health_status": "ok", "last_host": "ha:8123"},
+                "ha_connection": {"checked": True, "ok": True, "message": "ok"},
+                "fridge_sensor_health": {"checked": True, "ok": True, "message": "ok"},
+                "ffmpeg": {"available": True},
+            },
+        )
+
+        route = next(item for item in summary["items"] if item["name"] == "Fridge chime route")
+        self.assertEqual(summary["overall"], "SUSPICIOUS")
+        self.assertEqual(route["status"], "SUSPICIOUS")
+        self.assertIn("intentionally quiet", route["message"])
 
     def test_diagnostics_text_includes_critical_workflows_and_recovery_journal(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -6365,6 +6433,11 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertFalse(audit.failures)
         self.assertIn("viper_ha_client.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_system_health.py", release_audit.REQUIRED_PACKAGE_FILES)
+
+    def test_gitignore_excludes_local_esphome_flash_workdirs(self):
+        root = Path(__file__).resolve().parents[1]
+        gitignore = (root / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn(".esphome_flash*/", gitignore)
 
 
 if __name__ == "__main__":

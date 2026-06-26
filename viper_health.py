@@ -12,7 +12,7 @@ import viper_config as cfg
 
 
 DEFAULT_SMARTTHINGS_STALE_SECONDS = 20 * 60
-DEFAULT_SMARTTHINGS_RELOAD_COOLDOWN_SECONDS = 15 * 60
+DEFAULT_SMARTTHINGS_RELOAD_COOLDOWN_SECONDS = 6 * 60 * 60
 HEALTH_JOURNAL_FILE = "viper_health_events.jsonl"
 FRIDGE_DOOR_ENTITY = "binary_sensor.refrigerator_fridge_door"
 FREEZER_DOOR_ENTITY = "binary_sensor.refrigerator_freezer_door"
@@ -270,6 +270,13 @@ def _speaker_route_count(config_data, route):
     return count
 
 
+def _enabled_speaker_count(config_data):
+    speakers = config_data.get("speakers") if isinstance(config_data, dict) else {}
+    if not isinstance(speakers, dict):
+        return 0
+    return sum(1 for data in speakers.values() if isinstance(data, dict) and data.get("enabled"))
+
+
 def critical_workflow_status(config_data=None, *, diag=None):
     config_data = config_data if isinstance(config_data, dict) else {}
     diag = diag if isinstance(diag, dict) else {}
@@ -282,6 +289,7 @@ def critical_workflow_status(config_data=None, *, diag=None):
         "utilities": _speaker_route_count(config_data, "utilities"),
         "fridge": _speaker_route_count(config_data, "fridge"),
     }
+    enabled_speakers = _enabled_speaker_count(config_data)
     items = []
 
     def add(name, status, message):
@@ -311,6 +319,8 @@ def critical_workflow_status(config_data=None, *, diag=None):
 
     if routes["fridge"]:
         add("Fridge chime route", "OK", f"{routes['fridge']} enabled speaker route(s).")
+    elif enabled_speakers == 0:
+        add("Fridge chime route", "SUSPICIOUS", "All speakers are disabled, so fridge/freezer chimes are intentionally quiet until a speaker is enabled.")
     else:
         add("Fridge chime route", "BROKEN", "No enabled speaker is routed for fridge/freezer alerts.")
 
@@ -335,7 +345,7 @@ def critical_workflow_status(config_data=None, *, diag=None):
     priority = {"BROKEN": 2, "SUSPICIOUS": 1, "OK": 0}
     worst = max((priority.get(item["status"], 1) for item in items), default=1)
     overall = "BROKEN" if worst >= 2 else ("SUSPICIOUS" if worst == 1 else "OK")
-    return {"overall": overall, "items": items, "routes": routes}
+    return {"overall": overall, "items": items, "routes": routes, "enabled_speakers": enabled_speakers}
 
 
 def critical_workflow_lines(summary):

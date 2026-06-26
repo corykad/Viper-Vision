@@ -369,10 +369,17 @@ class HomeAssistantEventListener:
     def _smartthings_reload_cooldown_seconds(self):
         try:
             config = self.config_provider() or {}
-            minutes = int(config.get("ha_smartthings_reload_cooldown_minutes", 60))
-            return max(15 * 60, min(minutes * 60, 24 * 60 * 60))
+            minutes = int(config.get("ha_smartthings_reload_cooldown_minutes", 360))
+            return max(60 * 60, min(minutes * 60, 24 * 60 * 60))
         except Exception:
             return viper_health.DEFAULT_SMARTTHINGS_RELOAD_COOLDOWN_SECONDS
+
+    def _smartthings_max_reloads_per_day(self):
+        try:
+            config = self.config_provider() or {}
+            return max(1, min(int(config.get("ha_smartthings_max_reloads_per_day", 3)), 12))
+        except Exception:
+            return 3
 
     def _smartthings_recovery_enabled(self):
         try:
@@ -548,6 +555,23 @@ class HomeAssistantEventListener:
             return health
 
         now = time.time()
+        repeat_count = viper_health.count_recent_health_events("smartthings_reload")
+        max_reloads = self._smartthings_max_reloads_per_day()
+        if repeat_count >= max_reloads:
+            message = f"{health.get('message')} Reload skipped because Viper already tried {repeat_count} automatic SmartThings reloads in the last 24 hours."
+            event = viper_health.record_health_event(
+                "smartthings_reload_skipped",
+                "daily_limit",
+                message,
+                details={"max_reloads_per_day": max_reloads, "reloads_24h": repeat_count, "health": health},
+            )
+            self._set_status(
+                critical_health_message=message,
+                last_health_journal_event=event,
+                repeated_smartthings_reloads_24h=repeat_count,
+            )
+            return {**health, "reloaded": False, "daily_limit": True}
+
         cooldown = self._smartthings_reload_cooldown_seconds()
         last_reload = float(self.status().get("last_smartthings_reload_at") or 0)
         if last_reload and now - last_reload < cooldown:
@@ -559,8 +583,7 @@ class HomeAssistantEventListener:
                 message,
                 details={"remaining_minutes": remaining, "health": health},
             )
-            self._set_status(critical_health_message=message)
-            self._set_status(last_health_journal_event=event)
+            self._set_status(critical_health_message=message, last_health_journal_event=event, repeated_smartthings_reloads_24h=repeat_count)
             return {**health, "reloaded": False, "cooldown": True}
 
         registry = await viper_health.find_config_entry_for_entity(
