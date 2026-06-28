@@ -13,6 +13,7 @@ import websockets
 import viper_config as cfg
 import viper_discovery as discovery
 import viper_ha_addons as ha_addons
+import viper_hvac as hvac
 
 
 MATTER_PACKAGE_FILENAME = "viper_matter_controls.yaml"
@@ -104,8 +105,16 @@ def matter_fan_entities(config_data=None):
     return entities
 
 
+def matter_hvac_entities(config_data=None):
+    return [unit["proxy"] for unit in hvac.HEAT_PUMPS if unit.get("proxy")]
+
+
 def matter_entity_ids(config_data=None):
-    return [control["entity_id"] for control in matter_switches(config_data)] + matter_fan_entities(config_data)
+    return (
+        [control["entity_id"] for control in matter_switches(config_data)]
+        + matter_fan_entities(config_data)
+        + matter_hvac_entities(config_data)
+    )
 
 
 def matter_entity_domains(config_data=None):
@@ -503,6 +512,7 @@ def setup_status_report(config_data=None):
         "ha": ha_result,
         "matterbridge": matterbridge_result,
         "entity_ids": matter_entity_ids(data),
+        "entity_domains": matter_entity_domains(data),
         "matterbridge_url": _matterbridge_url(data),
     }
 
@@ -534,8 +544,8 @@ def format_setup_report(report):
             f"- Open: {report.get('matterbridge_url') or 'http://HOME_ASSISTANT_IP:8283'}",
             "- Plugin: matterbridge-hass",
             f"- Host: {_ha_ws_url_from_report_url(report.get('matterbridge_url')) or 'ws://HOME_ASSISTANT_IP:8123'}",
-            "- Main whitelist: the switch entity IDs above",
-            "- Entity whitelist/domain: switch",
+            "- Main whitelist: the entity IDs above",
+            f"- Entity whitelist/domain: {', '.join(report.get('entity_domains') or ['switch'])}",
             "",
             "Pairing:",
             "- The Matter pairing code is unique to this Matterbridge install.",
@@ -655,6 +665,10 @@ def configure_matterbridge_hass(config_data=None, timeout=12, install_plugin=Fal
         return {"ok": False, "reason": "missing_plugin", "message": "matterbridge-hass did not appear after install. Open Matterbridge, install it, then run this setup again."}
 
     config_json = plugin.get("configJson") if isinstance(plugin.get("configJson"), dict) else {}
+    existing_whitelist = list(config_json.get("whiteList") or [])
+    existing_domains = list(config_json.get("entityWhiteList") or [])
+    merged_whitelist = _merge_unique(existing_whitelist + entities)
+    merged_domains = _merge_unique(existing_domains + matter_entity_domains(data))
     form_data = dict(config_json)
     form_data.update(
         {
@@ -669,9 +683,9 @@ def configure_matterbridge_hass(config_data=None, timeout=12, install_plugin=Fal
             "reconnectRetries": int(form_data.get("reconnectRetries") or 10),
             "filterByArea": "",
             "filterByLabel": "",
-            "whiteList": entities,
+            "whiteList": merged_whitelist,
             "blackList": [],
-            "entityWhiteList": matter_entity_domains(data),
+            "entityWhiteList": merged_domains,
             "entityBlackList": [],
             "deviceEntityBlackList": {},
             "splitEntities": [],
@@ -784,6 +798,15 @@ def _jinja_single_quote(value):
 
 def _q(value):
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _merge_unique(values):
+    merged = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if text and text not in merged:
+            merged.append(text)
+    return merged
 
 
 def _line(label, ok, detail):

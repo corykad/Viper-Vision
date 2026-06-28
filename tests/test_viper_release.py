@@ -3899,15 +3899,14 @@ class ViperReleaseTests(unittest.TestCase):
 
         entity_ids = viper_matter.matter_entity_ids(config)
 
-        self.assertEqual(
-            entity_ids,
-            [
-                "switch.viper_armed",
-                "switch.viper_global_mute",
-                "switch.viper_ice_maker",
-                "switch.viper_entryway_speaker",
-            ],
-        )
+        self.assertEqual(entity_ids[:4], [
+            "switch.viper_armed",
+            "switch.viper_global_mute",
+            "switch.viper_ice_maker",
+            "switch.viper_entryway_speaker",
+        ])
+        self.assertIn("climate.office_heat_pump_alexa", entity_ids)
+        self.assertIn("climate.master_bedroom_heat_pump_alexa", entity_ids)
 
     def test_matter_entity_ids_include_configured_fans(self):
         config = cfg.validate_and_normalize_config({
@@ -3916,7 +3915,7 @@ class ViperReleaseTests(unittest.TestCase):
 
         self.assertIn("fan.living_room_ceiling_fan", viper_matter.matter_entity_ids(config))
         self.assertNotIn("light.not_a_fan", viper_matter.matter_entity_ids(config))
-        self.assertEqual(viper_matter.matter_entity_domains(config), ["fan", "switch"])
+        self.assertEqual(viper_matter.matter_entity_domains(config), ["climate", "fan", "switch"])
 
     def test_matter_package_keeps_stable_home_assistant_unique_ids(self):
         config = cfg.validate_and_normalize_config({
@@ -4148,10 +4147,11 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn(("/api/install", {"packageName": "matterbridge-hass", "restart": False}), calls)
         save_calls = [params for method, params in calls if method == "/api/savepluginconfig"]
-        self.assertEqual(save_calls[0]["formData"]["entityWhiteList"], ["switch"])
+        self.assertEqual(save_calls[0]["formData"]["entityWhiteList"], ["climate", "switch"])
         self.assertIn("switch.viper_armed", save_calls[0]["formData"]["whiteList"])
+        self.assertIn("climate.office_heat_pump_alexa", save_calls[0]["formData"]["whiteList"])
 
-    def test_matterbridge_hass_plugin_whitelists_configured_fans(self):
+    def test_matterbridge_hass_plugin_preserves_heat_pumps_and_existing_whitelist(self):
         calls = []
         config = cfg.validate_and_normalize_config({
             "ha_ip": "10.0.0.25",
@@ -4161,7 +4161,10 @@ class ViperReleaseTests(unittest.TestCase):
         plugin = {
             "name": "matterbridge-hass",
             "version": "1.3.1",
-            "configJson": {},
+            "configJson": {
+                "whiteList": ["light.keep_this_existing_light"],
+                "entityWhiteList": ["light"],
+            },
             "registeredDevices": 0,
         }
 
@@ -4177,7 +4180,9 @@ class ViperReleaseTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         save_calls = [params for method, params in calls if method == "/api/savepluginconfig"]
-        self.assertEqual(save_calls[0]["formData"]["entityWhiteList"], ["fan", "switch"])
+        self.assertEqual(save_calls[0]["formData"]["entityWhiteList"], ["light", "climate", "fan", "switch"])
+        self.assertIn("light.keep_this_existing_light", save_calls[0]["formData"]["whiteList"])
+        self.assertIn("climate.master_bedroom_heat_pump_alexa", save_calls[0]["formData"]["whiteList"])
         self.assertIn("fan.living_room_ceiling_fan", save_calls[0]["formData"]["whiteList"])
 
     def test_ha_listener_broadcast_uses_channel_routing_not_utility_tts(self):
