@@ -47,6 +47,17 @@ def base_viper_switches():
             "on_payload": {"state": True},
             "off_payload": {"state": False},
         },
+        {
+            "entity_id": "switch.viper_ice_maker",
+            "unique_id": "viper_ice_maker",
+            "friendly_name": "Viper Ice Maker",
+            "rest_command": "viper_set_ice_maker",
+            "state_template": "{{ (state_attr('sensor.viper_control_state', 'ice_maker') or {}).get('enabled', false) | bool(false) }}",
+            "on_action": "rest_command.viper_set_ice_maker",
+            "off_action": "rest_command.viper_set_ice_maker",
+            "on_payload": {"state": True},
+            "off_payload": {"state": False},
+        },
     ]
 
 
@@ -54,7 +65,7 @@ def speaker_switches(config_data=None):
     data = cfg.validate_and_normalize_config(config_data) if config_data is not None else cfg.load_config()
     speakers = data.get("speakers") or {}
     controls = []
-    used_ids = {"viper_armed", "viper_global_mute"}
+    used_ids = {"viper_armed", "viper_global_mute", "viper_ice_maker"}
     for name in sorted(speakers.keys(), key=lambda value: str(value).lower()):
         slug = _unique_slug(f"viper_{_speaker_slug_base(name)}_speaker", used_ids)
         quoted_name = quote(str(name), safe="")
@@ -120,6 +131,7 @@ def generate_matter_controls_package(config_data=None):
         "rest_command:",
         _rest_bool_command("viper_set_armed", f"{base_url}/api/control/armed"),
         _rest_bool_command("viper_set_global_mute", f"{base_url}/api/control/global_mute"),
+        _rest_bool_command("viper_set_ice_maker", f"{base_url}/api/control/ice_maker/enabled"),
     ]
     for control in speaker_controls:
         lines.append(_rest_bool_command(control["rest_command"], f"{base_url}{control['endpoint_path']}"))
@@ -139,6 +151,7 @@ def generate_matter_controls_package(config_data=None):
             "    json_attributes:",
             "      - armed",
             "      - global_mute",
+            "      - ice_maker",
             "      - ready",
             "      - speakers",
             "",

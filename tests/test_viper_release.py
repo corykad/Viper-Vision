@@ -3835,6 +3835,30 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertFalse(fake.config["speakers"]["entry way speaker"]["enabled"])
         fake.refresh_speaker_list.assert_called_once()
 
+    def test_viper_control_api_sets_ice_maker_through_viper_handlers(self):
+        fake = FakeDashboard()
+        calls = []
+        fake.on_ice_maker_on = lambda event: calls.append("on") or "Ice maker turned on."
+        fake.on_ice_maker_off = lambda event: calls.append("off") or "Ice maker turned off."
+        fake.get_ice_maker_status = lambda timeout=2: {
+            "is_on": calls[-1] == "on" if calls else False,
+            "switch_state": "on" if calls and calls[-1] == "on" else "off",
+            "switch_entity": "switch.refrigerator_cubed_ice",
+            "keep_on_state": "on" if calls and calls[-1] == "on" else "off",
+            "counter_text": "0",
+        }
+        main.dash_app = fake
+
+        with main.app.test_client() as client:
+            on_response = client.post("/api/control/ice_maker/enabled", json={"state": True})
+            off_response = client.post("/api/control/ice_maker/enabled", json={"state": False})
+
+        self.assertEqual(on_response.status_code, 200)
+        self.assertEqual(off_response.status_code, 200)
+        self.assertEqual(calls, ["on", "off"])
+        self.assertTrue(on_response.get_json()["state"]["ice_maker"]["enabled"])
+        self.assertFalse(off_response.get_json()["state"]["ice_maker"]["enabled"])
+
     def test_matter_package_generates_exact_state_switches_for_voice_assistants(self):
         config = cfg.validate_and_normalize_config({
             "viper_host": "192.168.4.56",
@@ -3851,14 +3875,18 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("viper_set_armed:", package_text)
         self.assertIn("http://192.168.4.56:5050/api/control/armed", package_text)
         self.assertIn("viper_set_global_mute:", package_text)
+        self.assertIn("viper_set_ice_maker:", package_text)
         self.assertIn("viper_entryway_speaker_enabled:", package_text)
         self.assertIn("viper_office_sonos_speaker_enabled:", package_text)
+        self.assertIn("/api/control/ice_maker/enabled", package_text)
         self.assertIn("/api/control/speakers/Entry%20way%20speaker/enabled", package_text)
         self.assertIn('name: "Viper Armed"', package_text)
         self.assertIn('name: "Viper Global Mute"', package_text)
+        self.assertIn('name: "Viper Ice Maker"', package_text)
         self.assertIn('name: "Viper Entryway Speaker"', package_text)
         self.assertIn('name: "Viper Office Sonos"', package_text)
         self.assertIn("state_attr('sensor.viper_control_state', 'armed')", package_text)
+        self.assertIn("state_attr('sensor.viper_control_state', 'ice_maker')", package_text)
         self.assertIn("state_attr('sensor.viper_control_state', 'speakers')", package_text)
         self.assertIn('{"state": {{ state | tojson }}}', package_text)
 
@@ -3876,6 +3904,7 @@ class ViperReleaseTests(unittest.TestCase):
             [
                 "switch.viper_armed",
                 "switch.viper_global_mute",
+                "switch.viper_ice_maker",
                 "switch.viper_entryway_speaker",
             ],
         )
@@ -3901,6 +3930,7 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("unique_id: viper_control_state", package_text)
         self.assertIn('unique_id: "viper_armed"', package_text)
         self.assertIn('unique_id: "viper_global_mute"', package_text)
+        self.assertIn('unique_id: "viper_ice_maker"', package_text)
         self.assertIn('unique_id: "viper_entryway_speaker_enabled"', package_text)
         self.assertNotIn('unique_id: "switch_viper_entryway_speaker"', package_text)
 

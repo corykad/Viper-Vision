@@ -150,6 +150,7 @@ Viper creates Home Assistant switches for:
 
 - Viper Armed.
 - Viper Global Mute.
+- Viper Ice Maker, using the same refrigerator on/off logic as the Viper fridge tab.
 - Each saved Viper speaker, based on the speaker names in your Viper config.
 
 Viper can also expose real Home Assistant fan entities through Matterbridge. Press **Add Alexa Ceiling Fan** and enter a `fan.*` entity ID after the ceiling fan exists in Home Assistant.

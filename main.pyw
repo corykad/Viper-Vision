@@ -841,6 +841,19 @@ def _api_bool_value():
 def _viper_control_state():
     if dash_app is None:
         return {"ready": False}
+    ice_maker_state = {}
+    if hasattr(dash_app, "get_ice_maker_status"):
+        try:
+            status = dash_app.get_ice_maker_status(timeout=2)
+            ice_maker_state = {
+                "enabled": bool(status.get("is_on")),
+                "switch_state": status.get("switch_state") or "unknown",
+                "switch_entity": status.get("switch_entity") or "",
+                "keep_on_state": status.get("keep_on_state") or "unknown",
+                "counter_text": status.get("counter_text") or "",
+            }
+        except Exception as e:
+            ice_maker_state = {"enabled": False, "switch_state": "unknown", "error": str(e)}
     speakers_state = {}
     for name, speaker in (dash_app.config.get("speakers") or {}).items():
         speakers_state[name] = {
@@ -852,6 +865,7 @@ def _viper_control_state():
         "ready": True,
         "armed": bool(getattr(dash_app, "is_armed", dash_app.config.get("is_armed", True))),
         "global_mute": bool(dash_app.config.get("global_mute", False)),
+        "ice_maker": ice_maker_state,
         "speakers": speakers_state,
     }
 
@@ -908,6 +922,20 @@ def api_control_speaker_enabled(name):
     status_msg = f"{name} {'enabled' if enabled else 'disabled'} from API"
     wx.CallAfter(dash_app.notify, status_msg, 10, False, False)
     return jsonify({"ok": True, "speaker": name, "enabled": bool(enabled), "state": _viper_control_state()})
+
+
+@app.route("/api/control/ice_maker/enabled", methods=["POST"])
+def api_control_ice_maker_enabled():
+    if dash_app is None:
+        return jsonify({"ok": False, "message": "System initializing."}), 503
+    enabled = _api_bool_value()
+    if enabled is None:
+        return jsonify({"ok": False, "message": "Send JSON {'state': true} or {'state': false}."}), 400
+    if not hasattr(dash_app, "on_ice_maker_on") or not hasattr(dash_app, "on_ice_maker_off"):
+        return jsonify({"ok": False, "message": "Ice maker controls are not available."}), 503
+    handler = dash_app.on_ice_maker_on if enabled else dash_app.on_ice_maker_off
+    message = handler(None)
+    return jsonify({"ok": True, "ice_maker": bool(enabled), "message": message, "state": _viper_control_state()})
 
 # ==========================================
 # FLASK ROUTES & WEBHOOKS
