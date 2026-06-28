@@ -19,6 +19,7 @@ DEFAULT_PACKAGE_OPTIONS = {
     "filter_sensor_entity": "",
     "ice_maker_switch_entity": "switch.refrigerator_cubed_ice",
     "ice_maker_keep_on_entity": "input_boolean.keep_ice_maker_on",
+    "ice_maker_auto_refill_entity": "input_boolean.ice_maker_auto_refill_running",
     "ice_usage_counter_entity": "counter.ice_usage_counter",
     "ice_auto_off_seconds": 5,
     "ice_empty_threshold": 15,
@@ -183,6 +184,7 @@ def _normalize_options(options=None):
         "filter_sensor_entity",
         "ice_maker_switch_entity",
         "ice_maker_keep_on_entity",
+        "ice_maker_auto_refill_entity",
         "ice_usage_counter_entity",
         "vacuum_status_entity",
         "vacuum_error_entity",
@@ -244,14 +246,21 @@ def _cinderella_command_block(url):
 def _helper_blocks(opts):
     blocks = []
     keep_on = opts["ice_maker_keep_on_entity"]
+    auto_refill = opts["ice_maker_auto_refill_entity"]
     counter = opts["ice_usage_counter_entity"]
+    input_booleans = []
     if keep_on.startswith("input_boolean."):
-        blocks.extend([
-            "input_boolean:",
-            f"  {keep_on.split('.', 1)[1]}:",
-            '    name: "Keep Ice Maker On"',
-            "",
-        ])
+        input_booleans.append((keep_on.split(".", 1)[1], "Keep Ice Maker On"))
+    if auto_refill.startswith("input_boolean.") and auto_refill != keep_on:
+        input_booleans.append((auto_refill.split(".", 1)[1], "Ice Maker Auto Refill Running"))
+    if input_booleans:
+        blocks.append("input_boolean:")
+        for entity_slug, name in input_booleans:
+            blocks.extend([
+                f"  {entity_slug}:",
+                f"    name: {_q(name)}",
+            ])
+        blocks.append("")
     if counter.startswith("counter."):
         blocks.extend([
             "counter:",
@@ -300,8 +309,9 @@ def _doorbell_automations(opts):
 def _ice_maker_automations(opts):
     switch = opts["ice_maker_switch_entity"]
     keep_on = opts["ice_maker_keep_on_entity"]
+    auto_refill = opts["ice_maker_auto_refill_entity"]
     counter = opts["ice_usage_counter_entity"]
-    if not switch or not keep_on or not counter:
+    if not switch or not keep_on or not auto_refill or not counter:
         return []
     return [
         "- id: viper_ice_maker_auto_off",
@@ -316,6 +326,9 @@ def _ice_maker_automations(opts):
         "  conditions:",
         "    - condition: state",
         f"      entity_id: {keep_on}",
+        "      state: 'off'",
+        "    - condition: state",
+        f"      entity_id: {auto_refill}",
         "      state: 'off'",
         "  variables:",
         f"    next_ice_count: \"{{{{ states('{counter}') | int(0) + 1 }}}}\"",
@@ -342,10 +355,13 @@ def _ice_maker_automations(opts):
         "    - condition: state",
         f"      entity_id: {keep_on}",
         "      state: 'off'",
+        "    - condition: state",
+        f"      entity_id: {auto_refill}",
+        "      state: 'off'",
         "  actions:",
         "    - action: input_boolean.turn_on",
         "      target:",
-        f"        entity_id: {keep_on}",
+        f"        entity_id: {auto_refill}",
         "    - action: switch.turn_on",
         "      target:",
         f"        entity_id: {switch}",
@@ -358,11 +374,14 @@ def _ice_maker_automations(opts):
         "  mode: restart",
         "  triggers:",
         "    - trigger: state",
-        f"      entity_id: {keep_on}",
+        f"      entity_id: {auto_refill}",
         "      to: 'on'",
         "  actions:",
         "    - delay:",
         f"        hours: {opts['ice_refill_hours']}",
+        "    - condition: state",
+        f"      entity_id: {auto_refill}",
+        "      state: 'on'",
         "    - action: switch.turn_off",
         "      target:",
         f"        entity_id: {switch}",
@@ -372,7 +391,7 @@ def _ice_maker_automations(opts):
         f"        entity_id: {switch}",
         "    - action: input_boolean.turn_off",
         "      target:",
-        f"        entity_id: {keep_on}",
+        f"        entity_id: {auto_refill}",
         "    - action: counter.reset",
         "      target:",
         f"        entity_id: {counter}",

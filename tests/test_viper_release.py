@@ -932,11 +932,13 @@ class ViperReleaseTests(unittest.TestCase):
         fake = FakeDashboard()
         fake.config["ice_maker_switch_entity"] = "switch.refrigerator_cubed_ice"
         fake.config["ice_maker_keep_on_entity"] = "input_boolean.keep_ice_maker_on"
+        fake.config["ice_maker_auto_refill_entity"] = "input_boolean.ice_maker_auto_refill_running"
         fake.config["ice_maker_counter_entity"] = "counter.ice_usage_counter"
 
         states = {
             "switch.refrigerator_cubed_ice": {"state": "on"},
             "input_boolean.keep_ice_maker_on": {"state": "on"},
+            "input_boolean.ice_maker_auto_refill_running": {"state": "off"},
             "counter.ice_usage_counter": {"state": "4"},
         }
 
@@ -965,6 +967,7 @@ class ViperReleaseTests(unittest.TestCase):
         fake._call_ha_service_data = lambda domain_service, data, **kwargs: fake.service_calls.append((domain_service, data)) or True
         fake.config["ice_maker_switch_entity"] = "switch.refrigerator_cubed_ice"
         fake.config["ice_maker_keep_on_entity"] = "input_boolean.keep_ice_maker_on"
+        fake.config["ice_maker_auto_refill_entity"] = "input_boolean.ice_maker_auto_refill_running"
         fake.config["ice_maker_counter_entity"] = "counter.ice_usage_counter"
         fake.notify = lambda *args, **kwargs: None
         fake._safe_submit = lambda func, *args, **kwargs: None
@@ -983,6 +986,7 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(
             fake.service_calls,
             [
+                ("input_boolean/turn_off", {"entity_id": "input_boolean.ice_maker_auto_refill_running"}),
                 ("input_boolean/turn_on", {"entity_id": "input_boolean.keep_ice_maker_on"}),
                 ("switch/turn_on", {"entity_id": "switch.refrigerator_cubed_ice"}),
                 ("counter/reset", {"entity_id": "counter.ice_usage_counter"}),
@@ -996,6 +1000,7 @@ class ViperReleaseTests(unittest.TestCase):
         fake._call_ha_service_data = lambda domain_service, data, **kwargs: fake.service_calls.append((domain_service, data)) or True
         fake.config["ice_maker_switch_entity"] = "switch.refrigerator_cubed_ice"
         fake.config["ice_maker_keep_on_entity"] = "input_boolean.keep_ice_maker_on"
+        fake.config["ice_maker_auto_refill_entity"] = "input_boolean.ice_maker_auto_refill_running"
         fake.config["ice_maker_counter_entity"] = "counter.ice_usage_counter"
         fake.notify = lambda *args, **kwargs: None
         fake._safe_submit = lambda func, *args, **kwargs: None
@@ -1022,6 +1027,7 @@ class ViperReleaseTests(unittest.TestCase):
                 ("switch/turn_off", {"entity_id": "switch.refrigerator_cubed_ice"}),
                 ("switch/turn_off", {"entity_id": "switch.refrigerator_cubed_ice"}),
                 ("input_boolean/turn_off", {"entity_id": "input_boolean.keep_ice_maker_on"}),
+                ("input_boolean/turn_off", {"entity_id": "input_boolean.ice_maker_auto_refill_running"}),
                 ("counter/reset", {"entity_id": "counter.ice_usage_counter"}),
             ],
         )
@@ -1031,11 +1037,16 @@ class ViperReleaseTests(unittest.TestCase):
             {
                 "ice_maker_switch_entity": "switch.refrigerator_cubed_ice",
                 "ice_maker_keep_on_entity": "input_boolean.keep_ice_maker_on",
+                "ice_maker_auto_refill_entity": "input_boolean.ice_maker_auto_refill_running",
                 "ice_usage_counter_entity": "counter.ice_usage_counter",
             }
         )
         fill_section = package_text.split("- id: viper_ice_maker_fill_and_reset", 1)[1]
+        empty_section = package_text.split("- id: viper_ice_maker_turn_on_when_empty", 1)[1].split("- id: viper_ice_maker_fill_and_reset", 1)[0]
 
+        self.assertIn("entity_id: input_boolean.ice_maker_auto_refill_running", empty_section)
+        self.assertNotIn("entity_id: input_boolean.keep_ice_maker_on", fill_section.split("actions:", 1)[0])
+        self.assertIn("entity_id: input_boolean.ice_maker_auto_refill_running", fill_section)
         self.assertGreaterEqual(fill_section.count("action: switch.turn_off"), 2)
         self.assertIn("- delay: '00:00:05'", fill_section)
         self.assertIn("action: counter.reset", fill_section)
@@ -3841,6 +3852,7 @@ class ViperReleaseTests(unittest.TestCase):
         fake._configured_ice_maker_entities = lambda: {
             "switch": "switch.refrigerator_cubed_ice",
             "keep_on": "input_boolean.keep_ice_maker_on",
+            "auto_refill": "input_boolean.ice_maker_auto_refill_running",
             "counter": "counter.ice_usage_counter",
         }
         fake._call_ha_service = lambda service, entity_id: calls.append((service, entity_id)) or True
@@ -3882,6 +3894,7 @@ class ViperReleaseTests(unittest.TestCase):
         fake._configured_ice_maker_entities = lambda: {
             "switch": "switch.refrigerator_cubed_ice",
             "keep_on": "input_boolean.keep_ice_maker_on",
+            "auto_refill": "input_boolean.ice_maker_auto_refill_running",
             "counter": "counter.ice_usage_counter",
         }
         fake._call_ha_service = lambda service, entity_id: True

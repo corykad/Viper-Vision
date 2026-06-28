@@ -191,6 +191,7 @@ SECRET_ENV_VARS = {
 # Refrigerator / ice maker entities
 ICE_MAKER_SWITCH_ENTITY = os.getenv("ICE_MAKER_SWITCH_ENTITY", "switch.refrigerator_cubed_ice")
 ICE_MAKER_KEEP_ON_ENTITY = os.getenv("ICE_MAKER_KEEP_ON_ENTITY", "input_boolean.keep_ice_maker_on")
+ICE_MAKER_AUTO_REFILL_ENTITY = os.getenv("ICE_MAKER_AUTO_REFILL_ENTITY", "input_boolean.ice_maker_auto_refill_running")
 ICE_MAKER_COUNTER_ENTITY = os.getenv("ICE_MAKER_COUNTER_ENTITY", "counter.ice_usage_counter")
 
 # Dynamic Battery Discovery Keywords
@@ -398,6 +399,7 @@ CONFIG_SCHEMA = {
         "ha_smartthings_max_reloads_per_day": 3,
         "ice_maker_switch_entity": ICE_MAKER_SWITCH_ENTITY,
         "ice_maker_keep_on_entity": ICE_MAKER_KEEP_ON_ENTITY,
+        "ice_maker_auto_refill_entity": ICE_MAKER_AUTO_REFILL_ENTITY,
         "ice_maker_counter_entity": ICE_MAKER_COUNTER_ENTITY,
         "setup_progress": {
             "active": False,
@@ -1124,6 +1126,7 @@ def validate_and_normalize_config(config_data):
     )
     normalized["ice_maker_switch_entity"] = _as_str(normalized.get("ice_maker_switch_entity"), defaults["ice_maker_switch_entity"]).strip() or defaults["ice_maker_switch_entity"]
     normalized["ice_maker_keep_on_entity"] = _as_str(normalized.get("ice_maker_keep_on_entity"), defaults["ice_maker_keep_on_entity"]).strip() or defaults["ice_maker_keep_on_entity"]
+    normalized["ice_maker_auto_refill_entity"] = _as_str(normalized.get("ice_maker_auto_refill_entity"), defaults["ice_maker_auto_refill_entity"]).strip() or defaults["ice_maker_auto_refill_entity"]
     normalized["ice_maker_counter_entity"] = _as_str(normalized.get("ice_maker_counter_entity"), defaults["ice_maker_counter_entity"]).strip() or defaults["ice_maker_counter_entity"]
     normalized["doorbell_triggers"] = _normalize_doorbell_triggers(
         normalized.get("doorbell_triggers"),
@@ -1565,6 +1568,7 @@ def get_fridge_settings(config_data=None, *, include_env=True):
         "default_channel": deepcopy(channels.get("default", {})),
         "ice_maker_switch_entity": data.get("ice_maker_switch_entity") or ICE_MAKER_SWITCH_ENTITY,
         "ice_maker_keep_on_entity": data.get("ice_maker_keep_on_entity") or ICE_MAKER_KEEP_ON_ENTITY,
+        "ice_maker_auto_refill_entity": data.get("ice_maker_auto_refill_entity") or ICE_MAKER_AUTO_REFILL_ENTITY,
         "ice_maker_counter_entity": data.get("ice_maker_counter_entity") or ICE_MAKER_COUNTER_ENTITY,
     }
 

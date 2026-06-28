@@ -941,6 +941,7 @@ def api_control_ice_maker_enabled():
         return jsonify({"ok": False, "message": "Ice maker controls are not available."}), 503
     entities = dash_app._configured_ice_maker_entities()
     if enabled:
+        dash_app._call_ha_service("input_boolean/turn_off", entities["auto_refill"])
         ok_helper = dash_app._call_ha_service("input_boolean/turn_on", entities["keep_on"])
         switch_ok = dash_app._set_ice_maker_switch_with_confirmation(entities, "on")
         counter_ok = dash_app._reset_ice_maker_counter(entities)
@@ -949,6 +950,7 @@ def api_control_ice_maker_enabled():
     else:
         switch_ok = dash_app._set_ice_maker_switch_with_confirmation(entities, "off")
         ok_helper = dash_app._call_ha_service("input_boolean/turn_off", entities["keep_on"])
+        dash_app._call_ha_service("input_boolean/turn_off", entities["auto_refill"])
         counter_ok = dash_app._reset_ice_maker_counter(entities)
         ok = bool(switch_ok and ok_helper)
         message = "Ice maker turned off and refill override cleared."

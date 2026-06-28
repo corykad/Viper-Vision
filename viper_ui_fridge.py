@@ -378,6 +378,7 @@ class FridgeTabMixin:
         return {
             "switch": self.config.get("ice_maker_switch_entity") or cfg.ICE_MAKER_SWITCH_ENTITY,
             "keep_on": self.config.get("ice_maker_keep_on_entity") or cfg.ICE_MAKER_KEEP_ON_ENTITY,
+            "auto_refill": self.config.get("ice_maker_auto_refill_entity") or cfg.ICE_MAKER_AUTO_REFILL_ENTITY,
             "counter": self.config.get("ice_maker_counter_entity") or cfg.ICE_MAKER_COUNTER_ENTITY,
         }
 
@@ -408,10 +409,12 @@ class FridgeTabMixin:
         entities = self._configured_ice_maker_entities()
         switch = self._get_ha_entity_state(entities["switch"], timeout=timeout)
         keep_on = self._get_ha_entity_state(entities["keep_on"], timeout=timeout)
+        auto_refill = self._get_ha_entity_state(entities["auto_refill"], timeout=timeout)
         counter = self._get_ha_entity_state(entities["counter"], timeout=timeout)
 
         switch_state = str((switch.get("entity") or {}).get("state") or "").strip().lower() if switch.get("exists") else ""
         keep_on_state = str((keep_on.get("entity") or {}).get("state") or "").strip().lower() if keep_on.get("exists") else ""
+        auto_refill_state = str((auto_refill.get("entity") or {}).get("state") or "").strip().lower() if auto_refill.get("exists") else ""
         counter_state = str((counter.get("entity") or {}).get("state") or "").strip() if counter.get("exists") else ""
         is_on = switch_state == "on"
         is_off = switch_state == "off"
@@ -432,9 +435,11 @@ class FridgeTabMixin:
             "ok": bool(switch.get("ok") and counter.get("ok")),
             "switch_entity": entities["switch"],
             "keep_on_entity": entities["keep_on"],
+            "auto_refill_entity": entities["auto_refill"],
             "counter_entity": entities["counter"],
             "switch_state": switch_state or "unknown",
             "keep_on_state": keep_on_state or "unknown",
+            "auto_refill_state": auto_refill_state or "unknown",
             "counter_state": counter_state,
             "counter_text": counter_text,
             "is_on": is_on,
@@ -450,6 +455,7 @@ class FridgeTabMixin:
                 f"Ice usage counter: {counter_text}.",
                 f"Switch entity: {entities['switch']}",
                 f"Keep-on helper: {entities['keep_on']}",
+                f"Auto-refill helper: {entities['auto_refill']}",
                 f"Counter entity: {entities['counter']}",
             ]
         )
@@ -547,6 +553,7 @@ class FridgeTabMixin:
 
     def on_ice_maker_on(self, event):
         entities = self._configured_ice_maker_entities()
+        self._call_ha_service("input_boolean/turn_off", entities["auto_refill"])
         ok_helper = self._call_ha_service("input_boolean/turn_on", entities["keep_on"])
         switch_on = self._set_ice_maker_switch_with_confirmation(entities, "on")
         ok_counter = self._reset_ice_maker_counter(entities)
@@ -566,6 +573,7 @@ class FridgeTabMixin:
         entities = self._configured_ice_maker_entities()
         switch_off = self._set_ice_maker_switch_with_confirmation(entities, "off")
         ok_helper = self._call_ha_service("input_boolean/turn_off", entities["keep_on"])
+        self._call_ha_service("input_boolean/turn_off", entities["auto_refill"])
         ok_counter = self._reset_ice_maker_counter(entities)
         if switch_off and ok_helper:
             msg = "Ice maker turned off and refill override cleared."
