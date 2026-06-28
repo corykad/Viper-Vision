@@ -3,25 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Alexa And Google Switches</title>
+  <title>Alexa And Google Controls</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <a class="skip" href="#main">Skip to main content</a>
   <header>
-    <h1>Alexa And Google Switches</h1>
+    <h1>Alexa And Google Controls</h1>
     <p><a href="index.html">Back to help index</a></p>
   </header>
   <main id="main">
     <h2>What This Does</h2>
-    <p>Viper can expose simple on/off switches to Alexa and Google Home through Home Assistant, Matterbridge, and Matter.</p>
-    <p>The switches are based on your current Viper setup. Every user gets their own Home Assistant address, speaker names, and Matter pairing code.</p>
+    <p>Viper can expose controls to Alexa and Google Home through Home Assistant, Matterbridge, and Matter.</p>
+    <p>The controls are based on your current Viper setup. Every user gets their own Home Assistant address, speaker names, fan entities, and Matter pairing code.</p>
 
-    <h2>Switches Viper Creates</h2>
+    <h2>Controls Viper Creates</h2>
     <ul>
       <li>Viper Armed: on means armed, off means disarmed.</li>
       <li>Viper Global Mute: on means all Viper audio is muted, off means audio is allowed.</li>
       <li>One switch for each saved Viper speaker.</li>
+      <li>Optional real Home Assistant fan entities that you add with Add Alexa Ceiling Fan.</li>
     </ul>
 
     <h2>Before You Start</h2>
@@ -29,13 +30,15 @@
       <li>Home Assistant must be connected in Viper.</li>
       <li>A Home Assistant long-lived access token must be saved in Viper or available in environment variables.</li>
       <li>Run speaker setup first if you want individual speaker switches.</li>
+      <li>Create or discover the ceiling fan in Home Assistant first if you want to expose a fan. Viper needs a real fan entity ID that starts with fan.</li>
       <li>Home Assistant OS or Supervised is needed for Viper to install add-ons automatically.</li>
     </ul>
 
     <h2>Automatic Setup</h2>
     <ol>
       <li>Open the Home Assistant tab in Viper.</li>
-      <li>Press Set Up Alexa And Google Switches.</li>
+      <li>Press Set Up Alexa And Google Controls.</li>
+      <li>If you are adding a fan, press Add Alexa Ceiling Fan and enter the Home Assistant fan entity ID.</li>
       <li>Read the report.</li>
       <li>If every line says OK, open Matterbridge from the link in the report.</li>
       <li>Add Matterbridge to Alexa or Google Home using the Matter code or QR code shown by Matterbridge.</li>
@@ -44,13 +47,13 @@
     <h2>What Viper Tries To Install</h2>
     <ul>
       <li>Samba share, so Viper can copy the Home Assistant package into the config folder.</li>
-      <li>Matterbridge, so Home Assistant switches can be exposed as Matter devices.</li>
+      <li>Matterbridge, so Home Assistant controls can be exposed as Matter devices.</li>
       <li>The matterbridge-hass plugin inside Matterbridge.</li>
     </ul>
 
     <h2>If Automatic Install Is Blocked</h2>
     <p>Some Home Assistant tokens can read normal Home Assistant entities but cannot manage add-ons. Home Assistant Core and Container installs do not have Supervisor add-ons. In those cases, Viper shows manual steps.</p>
-    <p>The manual path is: install Samba share if available, install Matterbridge, install matterbridge-hass, then run Set Up Alexa And Google Switches again.</p>
+    <p>The manual path is: install Samba share if available, install Matterbridge, install matterbridge-hass, then run Set Up Alexa And Google Controls again.</p>
 
     <h2>Alexa Pairing</h2>
     <ol>
@@ -75,7 +78,8 @@
       <li>If Matterbridge is missing, install the Matterbridge add-on and start it.</li>
       <li>If matterbridge-hass is missing, install it inside Matterbridge and run the setup again.</li>
       <li>If speaker switches are missing, run speaker setup in Viper and then run this setup again.</li>
-      <li>If Alexa or Google does not show new switches, restart Matterbridge and rediscover Matter devices.</li>
+      <li>If a fan is missing, confirm it exists in Home Assistant as a fan entity, then add it again in Viper.</li>
+      <li>If Alexa or Google does not show new controls, restart Matterbridge and rediscover Matter devices.</li>
     </ul>
 
     <nav class="topic-nav" aria-label="Previous and next help topics">

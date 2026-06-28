@@ -81,8 +81,29 @@ def matter_switches(config_data=None):
     return base_viper_switches() + speaker_switches(config_data)
 
 
+def matter_fan_entities(config_data=None):
+    data = cfg.validate_and_normalize_config(config_data) if config_data is not None else cfg.load_config()
+    seen = set()
+    entities = []
+    for entity_id in data.get("matter_fan_entities") or []:
+        entity_id = str(entity_id or "").strip().lower()
+        if entity_id.startswith("fan.") and entity_id not in seen:
+            seen.add(entity_id)
+            entities.append(entity_id)
+    return entities
+
+
 def matter_entity_ids(config_data=None):
-    return [control["entity_id"] for control in matter_switches(config_data)]
+    return [control["entity_id"] for control in matter_switches(config_data)] + matter_fan_entities(config_data)
+
+
+def matter_entity_domains(config_data=None):
+    domains = {
+        str(entity_id).split(".", 1)[0]
+        for entity_id in matter_entity_ids(config_data)
+        if "." in str(entity_id)
+    }
+    return sorted(domains or {"switch"})
 
 
 def generate_matter_controls_package(config_data=None):
@@ -254,7 +275,7 @@ def check_ha_matter_entities(config_data=None):
         "ok": not missing,
         "expected": expected,
         "missing": missing,
-        "message": "All Viper Matter switch entities exist in Home Assistant." if not missing else "Some Viper Matter switch entities are missing in Home Assistant.",
+        "message": "All Viper Matter entities exist in Home Assistant." if not missing else "Some Viper Matter entities are missing in Home Assistant.",
     }
 
 
@@ -368,7 +389,7 @@ def format_matter_health_report(report):
         _line("Matterbridge restart", not mb.get("restart_required"), "restart required" if mb.get("restart_required") else "no restart required"),
         _line("Alexa fabric", bool(mb.get("alexa_fabric")), mb.get("fabric_message", "")),
         "",
-        "Expected Matter switches:",
+        "Expected Matter entities:",
     ]
     lines.extend(f"- {entity_id}" for entity_id in report.get("expected") or [])
     if ha.get("duplicates"):
@@ -475,16 +496,16 @@ def setup_status_report(config_data=None):
 
 def format_setup_report(report):
     lines = [
-        "Alexa and Google switch setup",
+        "Alexa and Google control setup",
         "",
         _line("Viper control API", report.get("api", {}).get("ok"), report.get("api", {}).get("message", "")),
         _line("Samba share", report.get("samba_install", {}).get("ok"), report.get("samba_install", {}).get("message", "")),
         _line("HA package install", report.get("install", {}).get("ok"), report.get("install", {}).get("message", "")),
-        _line("HA switch entities", report.get("ha", {}).get("ok"), report.get("ha", {}).get("message", "")),
+        _line("HA Matter entities", report.get("ha", {}).get("ok"), report.get("ha", {}).get("message", "")),
         _line("Matterbridge add-on", report.get("matterbridge_install", {}).get("ok"), report.get("matterbridge_install", {}).get("message", "")),
         _line("Matterbridge plugin", report.get("matterbridge", {}).get("ok"), report.get("matterbridge", {}).get("message", "")),
         "",
-        "Switches to expose:",
+        "Entities to expose:",
     ]
     for entity_id in report.get("entity_ids") or []:
         lines.append(f"- {entity_id}")
@@ -564,7 +585,7 @@ def samba_manual_install_steps(settings=None):
         "Install the official Samba share add-on.",
         "Start Samba share and turn on Start on boot.",
         f"Confirm Windows can open \\\\{host or 'HOME_ASSISTANT_IP'}\\config.",
-        "Return to Viper and press Set Up Alexa And Google Switches again.",
+        "Return to Viper and press Set Up Alexa And Google Controls again.",
     ]
 
 
@@ -580,7 +601,7 @@ def matterbridge_manual_install_steps(settings=None):
         "Install and start the Matterbridge add-on.",
         f"Open Matterbridge at http://{host or 'HOME_ASSISTANT_IP'}:{MATTERBRIDGE_PORT}.",
         "Install the matterbridge-hass plugin if it is not already installed.",
-        "Return to Viper and press Set Up Alexa And Google Switches again.",
+        "Return to Viper and press Set Up Alexa And Google Controls again.",
     ]
 
 
@@ -637,7 +658,7 @@ def configure_matterbridge_hass(config_data=None, timeout=12, install_plugin=Fal
             "filterByLabel": "",
             "whiteList": entities,
             "blackList": [],
-            "entityWhiteList": ["switch"],
+            "entityWhiteList": matter_entity_domains(data),
             "entityBlackList": [],
             "deviceEntityBlackList": {},
             "splitEntities": [],
@@ -665,7 +686,7 @@ def configure_matterbridge_hass(config_data=None, timeout=12, install_plugin=Fal
         return {"ok": False, "reason": "save_failed", "message": f"Matterbridge plugin config could not be saved: {e}"}
     return {
         "ok": True,
-        "message": "Matterbridge matterbridge-hass plugin is installed and configured for the Viper switches. Restart Matterbridge if newly added switches do not appear.",
+        "message": "Matterbridge matterbridge-hass plugin is installed and configured for the Viper Matter entities. Restart Matterbridge if newly added entities do not appear.",
         "registered_devices": plugin.get("registeredDevices"),
     }
 

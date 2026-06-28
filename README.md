@@ -122,9 +122,9 @@ Use this path if you just installed Home Assistant and want the quickest route.
 8. Use **Confirm Doorbell Triggers** to confirm front and back ding or motion entities.
 9. Use **Speakers and Audio** to discover speakers, check the speakers Viper may use, save them, and press **Test Checked Speakers** on the same page.
 10. Use **AI and Speech**, then run **Final Test**.
-11. Use optional refrigerator alerts, robot vacuum setup, or **Set Up Alexa And Google Switches** after the core doorbell setup works.
+11. Use optional refrigerator alerts, robot vacuum setup, or **Set Up Alexa And Google Controls** after the core doorbell setup works.
 
-After this, Viper listens directly to Home Assistant state changes. You do not need to edit `automations.yaml` for the beginner path. Samba is optional for most of Viper, but Viper can install or use Samba share when it needs to copy Home Assistant packages for Matter/Alexa/Google switch setup.
+After this, Viper listens directly to Home Assistant state changes. You do not need to edit `automations.yaml` for the beginner path. Samba is optional for most of Viper, but Viper can install or use Samba share when it needs to copy Home Assistant packages for Matter/Alexa/Google control setup.
 
 ## Built-In Help
 
@@ -142,15 +142,17 @@ Viper cannot reserve a Home Assistant IP address inside every router, because ro
 
 The Home Assistant setup dialog also includes a **Ring Setup Assistant** button. It checks the current discovery results and explains whether you need Ring trigger entities, RTSP setup, Mosquitto, or ring-mqtt.
 
-## Alexa And Google Switches
+## Alexa And Google Controls
 
-Open the **Home Assistant** tab and press **Set Up Alexa And Google Switches** to expose Viper controls to voice assistants through Matter.
+Open the **Home Assistant** tab and press **Set Up Alexa And Google Controls** to expose Viper controls to voice assistants through Matter.
 
 Viper creates Home Assistant switches for:
 
 - Viper Armed.
 - Viper Global Mute.
 - Each saved Viper speaker, based on the speaker names in your Viper config.
+
+Viper can also expose real Home Assistant fan entities through Matterbridge. Press **Add Alexa Ceiling Fan** and enter a `fan.*` entity ID after the ceiling fan exists in Home Assistant.
 
 The setup checks the user's actual Home Assistant host and token. The token can be saved in Viper or provided through environment variables. If the token has Supervisor access on Home Assistant OS or Supervised, Viper can install and start the official Samba share add-on, install and start Matterbridge, install `matterbridge-hass`, copy the Viper Matter package into `/config/packages`, and configure the Matterbridge whitelist. If Supervisor access is blocked, or if the user runs Home Assistant Core or Container, Viper shows manual steps instead.
 

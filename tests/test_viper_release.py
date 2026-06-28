@@ -2732,6 +2732,20 @@ class ViperReleaseTests(unittest.TestCase):
             "wx.CheckListBox should only be used for the speaker list, which has explicit speech handlers. Use real wx.CheckBox controls elsewhere.",
         )
 
+    def test_speaker_refresh_before_lazy_tab_exists_is_deferred(self):
+        fake = type("FakeDashboard", (), {})()
+        fake.config = {
+            "speakers": {
+                "Entryway": {"id": "media_player.entryway", "type": "ha", "enabled": True},
+            }
+        }
+
+        main.ViperDashboard.refresh_speaker_list(fake)
+        main.ViperDashboard._sync_speaker_routing_controls(fake)
+
+        self.assertTrue(fake._pending_speaker_list_refresh)
+        self.assertTrue(fake._pending_speaker_route_sync)
+
     def test_remote_accessibility_contract_for_buttons_and_statuses(self):
         template = Path("templates/remote.html").read_text(encoding="utf-8")
         parser = RemoteAccessibilityParser()
@@ -3866,6 +3880,15 @@ class ViperReleaseTests(unittest.TestCase):
             ],
         )
 
+    def test_matter_entity_ids_include_configured_fans(self):
+        config = cfg.validate_and_normalize_config({
+            "matter_fan_entities": ["fan.living_room_ceiling_fan", "light.not_a_fan", "fan.living_room_ceiling_fan"],
+        })
+
+        self.assertIn("fan.living_room_ceiling_fan", viper_matter.matter_entity_ids(config))
+        self.assertNotIn("light.not_a_fan", viper_matter.matter_entity_ids(config))
+        self.assertEqual(viper_matter.matter_entity_domains(config), ["fan", "switch"])
+
     def test_matter_package_keeps_stable_home_assistant_unique_ids(self):
         config = cfg.validate_and_normalize_config({
             "speakers": {
@@ -3920,7 +3943,8 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_setup_tab_has_alexa_google_switch_setup_button(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
-        self.assertIn("Set Up Alexa And Google Switches", main_text)
+        self.assertIn("Set Up Alexa And Google Controls", main_text)
+        self.assertIn("Add Alexa Ceiling Fan", main_text)
         self.assertIn("on_setup_matter_switches", main_text)
 
     def test_diagnostics_tab_has_matter_health_and_repair_buttons(self):
@@ -4096,6 +4120,35 @@ class ViperReleaseTests(unittest.TestCase):
         save_calls = [params for method, params in calls if method == "/api/savepluginconfig"]
         self.assertEqual(save_calls[0]["formData"]["entityWhiteList"], ["switch"])
         self.assertIn("switch.viper_armed", save_calls[0]["formData"]["whiteList"])
+
+    def test_matterbridge_hass_plugin_whitelists_configured_fans(self):
+        calls = []
+        config = cfg.validate_and_normalize_config({
+            "ha_ip": "10.0.0.25",
+            "ha_token": "token",
+            "matter_fan_entities": ["fan.living_room_ceiling_fan"],
+        })
+        plugin = {
+            "name": "matterbridge-hass",
+            "version": "1.3.1",
+            "configJson": {},
+            "registeredDevices": 0,
+        }
+
+        def fake_call(ws_url, method, params=None, timeout=12, **kwargs):
+            calls.append((method, params))
+            if method == "/api/plugins":
+                return [plugin]
+            return {"ok": True}
+
+        with patch.object(viper_matter, "_matterbridge_call_with_retry", side_effect=fake_call), \
+             patch.object(viper_matter, "_matterbridge_call", side_effect=fake_call):
+            result = viper_matter.configure_matterbridge_hass(config, install_plugin=True)
+
+        self.assertTrue(result["ok"])
+        save_calls = [params for method, params in calls if method == "/api/savepluginconfig"]
+        self.assertEqual(save_calls[0]["formData"]["entityWhiteList"], ["fan", "switch"])
+        self.assertIn("fan.living_room_ceiling_fan", save_calls[0]["formData"]["whiteList"])
 
     def test_ha_listener_broadcast_uses_channel_routing_not_utility_tts(self):
         self._setup_broadcast_dashboard()

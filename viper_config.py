@@ -519,6 +519,7 @@ CONFIG_SCHEMA = {
             "detailed_video": "",
         },
         "speakers": {},
+        "matter_fan_entities": [],
         "cinderella_messages": {
             "departure": [
                 "The floor goblin has been released.",
@@ -749,6 +750,22 @@ def _normalize_string_list(value, default):
         return deepcopy(default)
     normalized = [_as_str(item) for item in value if item is not None]
     return normalized or deepcopy(default)
+
+
+def _normalize_entity_id_list(value, *, domain=None):
+    if not isinstance(value, list):
+        return []
+    normalized = []
+    prefix = f"{domain}." if domain else ""
+    for item in value:
+        entity_id = _as_str(item).strip().lower()
+        if not entity_id or "." not in entity_id:
+            continue
+        if prefix and not entity_id.startswith(prefix):
+            continue
+        if entity_id not in normalized:
+            normalized.append(entity_id)
+    return normalized
 
 
 def _normalize_cinderella_messages(value, default):
@@ -1121,6 +1138,10 @@ def validate_and_normalize_config(config_data):
     normalized["quiet_hours_start"] = _normalize_time(normalized.get("quiet_hours_start"), defaults["quiet_hours_start"])
     normalized["quiet_hours_end"] = _normalize_time(normalized.get("quiet_hours_end"), defaults["quiet_hours_end"])
     normalized["broadcast_channels"] = _normalize_broadcast_channels(normalized.get("broadcast_channels"), defaults["broadcast_channels"])
+    normalized["matter_fan_entities"] = _normalize_entity_id_list(
+        normalized.get("matter_fan_entities"),
+        domain="fan",
+    )
     normalized["vacuum_rooms"] = _normalize_vacuum_rooms(normalized.get("vacuum_rooms"))
     normalized["vacuum_cleaning_mode"] = _as_str(normalized.get("vacuum_cleaning_mode"), defaults["vacuum_cleaning_mode"]).strip() or defaults["vacuum_cleaning_mode"]
     if normalized["vacuum_cleaning_mode"] not in {"vacuum_mop", "vacuum_only", "mop_only"}:

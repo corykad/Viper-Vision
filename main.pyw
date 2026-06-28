@@ -3642,18 +3642,21 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         buttons.AddGrowableCol(1, 1)
         self.btn_setup_wizard = wx.Button(self.tab_setup, label="Open Setup Wizard", size=(-1, 44))
         self.btn_choose_setup_speakers = wx.Button(self.tab_setup, label="Choose Alert Speakers", size=(-1, 44))
-        self.btn_setup_matter = wx.Button(self.tab_setup, label="Set Up Alexa And Google Switches", size=(-1, 44))
+        self.btn_setup_matter = wx.Button(self.tab_setup, label="Set Up Alexa And Google Controls", size=(-1, 44))
+        self.btn_add_matter_fan = wx.Button(self.tab_setup, label="Add Alexa Ceiling Fan", size=(-1, 44))
         self.btn_refresh_setup_checklist = wx.Button(self.tab_setup, label="Refresh Setup Status", size=(-1, 44))
         self.btn_test_everything = wx.Button(self.tab_setup, label="Test Everything", size=(-1, 44))
         self.btn_setup_wizard.Bind(wx.EVT_BUTTON, self.on_open_setup_wizard)
         self.btn_choose_setup_speakers.Bind(wx.EVT_BUTTON, self.on_choose_setup_speakers)
         self.btn_setup_matter.Bind(wx.EVT_BUTTON, self.on_setup_matter_switches)
+        self.btn_add_matter_fan.Bind(wx.EVT_BUTTON, self.on_add_matter_fan)
         self.btn_refresh_setup_checklist.Bind(wx.EVT_BUTTON, lambda event: self.refresh_setup_checklist())
         self.btn_test_everything.Bind(wx.EVT_BUTTON, self.on_test_everything)
         for button, description in {
             self.btn_setup_wizard: "Open Setup Wizard button. Opens the beginner setup wizard for Home Assistant, Ring, live video, speakers, AI speech, and final testing.",
             self.btn_choose_setup_speakers: "Choose Alert Speakers button. Opens speaker discovery or the speaker list so you can choose which speakers Viper uses.",
-            self.btn_setup_matter: "Set Up Alexa And Google Switches button. Creates or checks Home Assistant switches for Viper arm, mute, and speaker controls so Matterbridge can expose them to voice assistants.",
+            self.btn_setup_matter: "Set Up Alexa And Google Controls button. Creates or checks Home Assistant controls for Viper arm, mute, speaker controls, and configured fan entities so Matterbridge can expose them to voice assistants.",
+            self.btn_add_matter_fan: "Add Alexa Ceiling Fan button. Adds a Home Assistant fan entity ID to the Matterbridge allow list, then reruns Alexa and Google setup.",
             self.btn_refresh_setup_checklist: "Refresh Setup Checklist button. Updates the read-only checklist above.",
             self.btn_test_everything: "Test Everything button. Runs safe setup checks and diagnostics without changing settings.",
         }.items():
@@ -3680,7 +3683,26 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         self.notify("Choose alert speakers. Use Spacebar to toggle each speaker, then choose routing for the selected speaker.", priority=10)
 
     def on_setup_matter_switches(self, event):
-        self.notify("Setting up Alexa and Google switches...", priority=10)
+        self.notify("Setting up Alexa and Google controls...", priority=10)
+        safe_submit(self._run_setup_matter_switches)
+
+    def on_add_matter_fan(self, event):
+        current = ", ".join(self.config.get("matter_fan_entities") or [])
+        prompt = "Enter the Home Assistant fan entity ID, like fan.living_room_ceiling_fan."
+        if current:
+            prompt += f"\n\nAlready added: {current}"
+        entity_id = wx.GetTextFromUser(prompt, "Add Alexa Ceiling Fan").strip().lower()
+        if not entity_id:
+            return
+        if not entity_id.startswith("fan.") or "." not in entity_id:
+            self.notify("That does not look like a Home Assistant fan entity. It should start with fan.", priority=10)
+            return
+        fan_entities = list(self.config.get("matter_fan_entities") or [])
+        if entity_id not in fan_entities:
+            fan_entities.append(entity_id)
+            self.config["matter_fan_entities"] = fan_entities
+            self.save_config()
+        self.notify(f"Added {entity_id} for Alexa and Google. Updating Matterbridge now.", priority=10)
         safe_submit(self._run_setup_matter_switches)
 
     def _run_setup_matter_switches(self):
@@ -3691,14 +3713,14 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
             install_ok = bool(report.get("install", {}).get("ok"))
             ha_ok = bool(report.get("ha", {}).get("ok"))
             if install_ok and ha_ok:
-                wx.CallAfter(self.notify, "Alexa and Google switches are ready in Home Assistant. Pair Matterbridge or refresh Alexa and Google.", priority=10)
+                wx.CallAfter(self.notify, "Alexa and Google controls are ready in Home Assistant. Pair Matterbridge or refresh Alexa and Google.", priority=10)
             elif install_ok:
-                wx.CallAfter(self.notify, "Matter switch package installed. Restart Home Assistant, then run this setup again.", priority=10)
+                wx.CallAfter(self.notify, "Matter control package installed. Restart Home Assistant, then run this setup again.", priority=10)
             else:
-                wx.CallAfter(self.notify, "Matter switch setup needs manual package install. See the setup report.", priority=10)
+                wx.CallAfter(self.notify, "Matter control setup needs manual package install. See the setup report.", priority=10)
         except Exception as e:
-            logging.exception("Matter switch setup failed")
-            wx.CallAfter(self.notify, f"Alexa and Google switch setup failed: {e}", priority=10)
+            logging.exception("Matter control setup failed")
+            wx.CallAfter(self.notify, f"Alexa and Google control setup failed: {e}", priority=10)
 
     def on_fix_tts_setup(self, event):
         for idx in range(self.notebook.GetPageCount()):
@@ -5809,12 +5831,16 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
                 self.prompt_status_txt.SetValue(f"Deleted video prompt profile {name}.")
 
     def refresh_speaker_list(self):
+        if not hasattr(self, "speaker_list"):
+            self._pending_speaker_list_refresh = True
+            return
         self.speaker_list.Clear()
         for name, data in self.config.get("speakers", {}).items():
             idx = self.speaker_list.Append(f"{name} ({data['type'].upper()})")
             self.speaker_list.Check(idx, data.get("enabled", True))
             self.speaker_list.SetClientData(idx, name)
         self._refresh_tts_target_choices()
+        self._pending_speaker_list_refresh = False
 
     def on_speaker_select(self, event):
         idx = event.GetInt()
@@ -5846,6 +5872,16 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         safe_submit(audio.announce_specific_speaker, spk_type, spk_id, status_msg)
 
     def _sync_speaker_routing_controls(self):
+        required = [
+            "speaker_list",
+            "chk_route_doorbell",
+            "chk_route_utilities",
+            "chk_route_fridge",
+            "chk_route_qhexempt",
+        ]
+        if not all(hasattr(self, name) for name in required):
+            self._pending_speaker_route_sync = True
+            return
         idx = self.speaker_list.GetSelection()
         enabled = idx != wx.NOT_FOUND
         for chk in [self.chk_route_doorbell, self.chk_route_utilities, self.chk_route_fridge, self.chk_route_qhexempt]:
@@ -5853,6 +5889,7 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         if not enabled:
             for chk in [self.chk_route_doorbell, self.chk_route_utilities, self.chk_route_fridge, self.chk_route_qhexempt]:
                 chk.SetValue(False)
+            self._pending_speaker_route_sync = False
             return
         name = self.speaker_list.GetClientData(idx)
         spk = self.config["speakers"].get(name, {})
@@ -5860,6 +5897,7 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         self.chk_route_utilities.SetValue(spk.get("utilities", True))
         self.chk_route_fridge.SetValue(spk.get("fridge", True))
         self.chk_route_qhexempt.SetValue(spk.get("quiet_hours_exempt", False))
+        self._pending_speaker_route_sync = False
 
     def on_speaker_route_change(self, event):
         idx = self.speaker_list.GetSelection()
