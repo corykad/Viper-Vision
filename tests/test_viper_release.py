@@ -3838,26 +3838,72 @@ class ViperReleaseTests(unittest.TestCase):
     def test_viper_control_api_sets_ice_maker_through_viper_handlers(self):
         fake = FakeDashboard()
         calls = []
-        fake.on_ice_maker_on = lambda event: calls.append("on") or "Ice maker turned on."
-        fake.on_ice_maker_off = lambda event: calls.append("off") or "Ice maker turned off."
+        fake._configured_ice_maker_entities = lambda: {
+            "switch": "switch.refrigerator_cubed_ice",
+            "keep_on": "input_boolean.keep_ice_maker_on",
+            "counter": "counter.ice_usage_counter",
+        }
+        fake._call_ha_service = lambda service, entity_id: calls.append((service, entity_id)) or True
+        fake._set_ice_maker_switch_with_confirmation = lambda entities, expected: calls.append(("switch", expected)) or True
+        fake._reset_ice_maker_counter = lambda entities: calls.append(("counter/reset", entities["counter"])) or True
+        fake.refresh_ice_maker_status = mock.Mock()
+        fake.notify = mock.Mock()
         fake.get_ice_maker_status = lambda timeout=2: {
-            "is_on": calls[-1] == "on" if calls else False,
-            "switch_state": "on" if calls and calls[-1] == "on" else "off",
+            "is_on": any(call == ("switch", "on") for call in calls),
+            "switch_state": "on" if any(call == ("switch", "on") for call in calls) else "off",
             "switch_entity": "switch.refrigerator_cubed_ice",
-            "keep_on_state": "on" if calls and calls[-1] == "on" else "off",
+            "keep_on_state": "on" if any(call == ("switch", "on") for call in calls) else "off",
             "counter_text": "0",
         }
         main.dash_app = fake
 
-        with main.app.test_client() as client:
-            on_response = client.post("/api/control/ice_maker/enabled", json={"state": True})
-            off_response = client.post("/api/control/ice_maker/enabled", json={"state": False})
+        with patch.object(main.wx, "CallAfter", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)):
+            with main.app.test_client() as client:
+                on_response = client.post("/api/control/ice_maker/enabled", json={"state": True})
+                calls.clear()
+                fake.get_ice_maker_status = lambda timeout=2: {
+                    "is_on": False,
+                    "switch_state": "off",
+                    "switch_entity": "switch.refrigerator_cubed_ice",
+                    "keep_on_state": "off",
+                    "counter_text": "0",
+                }
+                off_response = client.post("/api/control/ice_maker/enabled", json={"state": False})
 
         self.assertEqual(on_response.status_code, 200)
         self.assertEqual(off_response.status_code, 200)
-        self.assertEqual(calls, ["on", "off"])
+        self.assertIn(("switch", "off"), calls)
+        fake.refresh_ice_maker_status.assert_called()
         self.assertTrue(on_response.get_json()["state"]["ice_maker"]["enabled"])
         self.assertFalse(off_response.get_json()["state"]["ice_maker"]["enabled"])
+
+    def test_viper_control_api_reports_ice_maker_confirmation_failure(self):
+        fake = FakeDashboard()
+        fake._configured_ice_maker_entities = lambda: {
+            "switch": "switch.refrigerator_cubed_ice",
+            "keep_on": "input_boolean.keep_ice_maker_on",
+            "counter": "counter.ice_usage_counter",
+        }
+        fake._call_ha_service = lambda service, entity_id: True
+        fake._set_ice_maker_switch_with_confirmation = lambda entities, expected: False
+        fake._reset_ice_maker_counter = lambda entities: True
+        fake.refresh_ice_maker_status = mock.Mock()
+        fake.notify = mock.Mock()
+        fake.get_ice_maker_status = lambda timeout=2: {
+            "is_on": True,
+            "switch_state": "on",
+            "switch_entity": "switch.refrigerator_cubed_ice",
+            "keep_on_state": "on",
+            "counter_text": "0",
+        }
+        main.dash_app = fake
+
+        with patch.object(main.wx, "CallAfter", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)):
+            with main.app.test_client() as client:
+                on_response = client.post("/api/control/ice_maker/enabled", json={"state": True})
+
+        self.assertEqual(on_response.status_code, 502)
+        self.assertFalse(on_response.get_json()["ok"])
 
     def test_matter_package_generates_exact_state_switches_for_voice_assistants(self):
         config = cfg.validate_and_normalize_config({
@@ -3872,12 +3918,14 @@ class ViperReleaseTests(unittest.TestCase):
         package_text = viper_matter.generate_matter_controls_package(config)
 
         self.assertIn("rest_command:", package_text)
-        self.assertIn("viper_set_armed:", package_text)
+        self.assertIn("viper_set_armed_on:", package_text)
+        self.assertIn("viper_set_armed_off:", package_text)
         self.assertIn("http://192.168.4.56:5050/api/control/armed", package_text)
-        self.assertIn("viper_set_global_mute:", package_text)
-        self.assertIn("viper_set_ice_maker:", package_text)
-        self.assertIn("viper_entryway_speaker_enabled:", package_text)
-        self.assertIn("viper_office_sonos_speaker_enabled:", package_text)
+        self.assertIn("viper_set_global_mute_on:", package_text)
+        self.assertIn("viper_set_ice_maker_on:", package_text)
+        self.assertIn("viper_set_ice_maker_off:", package_text)
+        self.assertIn("viper_entryway_speaker_enabled_on:", package_text)
+        self.assertIn("viper_office_sonos_speaker_enabled_on:", package_text)
         self.assertIn("/api/control/ice_maker/enabled", package_text)
         self.assertIn("/api/control/speakers/Entry%20way%20speaker/enabled", package_text)
         self.assertIn('name: "Viper Armed"', package_text)
@@ -3888,7 +3936,11 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("state_attr('sensor.viper_control_state', 'armed')", package_text)
         self.assertIn("state_attr('sensor.viper_control_state', 'ice_maker')", package_text)
         self.assertIn("state_attr('sensor.viper_control_state', 'speakers')", package_text)
-        self.assertIn('{"state": {{ state | tojson }}}', package_text)
+        self.assertIn('payload: \'{"state": true}\'', package_text)
+        self.assertIn('payload: \'{"state": false}\'', package_text)
+        self.assertIn("action: rest_command.viper_set_ice_maker_on", package_text)
+        self.assertIn("action: rest_command.viper_set_ice_maker_off", package_text)
+        self.assertNotIn("tojson", package_text)
 
     def test_matter_entity_ids_match_generated_template_switches(self):
         config = cfg.validate_and_normalize_config({

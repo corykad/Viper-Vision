@@ -931,11 +931,37 @@ def api_control_ice_maker_enabled():
     enabled = _api_bool_value()
     if enabled is None:
         return jsonify({"ok": False, "message": "Send JSON {'state': true} or {'state': false}."}), 400
-    if not hasattr(dash_app, "on_ice_maker_on") or not hasattr(dash_app, "on_ice_maker_off"):
+    required = [
+        "_configured_ice_maker_entities",
+        "_call_ha_service",
+        "_set_ice_maker_switch_with_confirmation",
+        "_reset_ice_maker_counter",
+    ]
+    if not all(hasattr(dash_app, name) for name in required):
         return jsonify({"ok": False, "message": "Ice maker controls are not available."}), 503
-    handler = dash_app.on_ice_maker_on if enabled else dash_app.on_ice_maker_off
-    message = handler(None)
-    return jsonify({"ok": True, "ice_maker": bool(enabled), "message": message, "state": _viper_control_state()})
+    entities = dash_app._configured_ice_maker_entities()
+    if enabled:
+        ok_helper = dash_app._call_ha_service("input_boolean/turn_on", entities["keep_on"])
+        switch_ok = dash_app._set_ice_maker_switch_with_confirmation(entities, "on")
+        counter_ok = dash_app._reset_ice_maker_counter(entities)
+        ok = bool(ok_helper and switch_ok)
+        message = "Ice maker turned on with refill override enabled."
+    else:
+        switch_ok = dash_app._set_ice_maker_switch_with_confirmation(entities, "off")
+        ok_helper = dash_app._call_ha_service("input_boolean/turn_off", entities["keep_on"])
+        counter_ok = dash_app._reset_ice_maker_counter(entities)
+        ok = bool(switch_ok and ok_helper)
+        message = "Ice maker turned off and refill override cleared."
+    if counter_ok:
+        message += " Counter reset."
+    if not ok:
+        message = f"Ice maker {'on' if enabled else 'off'} request failed. Home Assistant did not confirm the requested state."
+    if hasattr(dash_app, "refresh_ice_maker_status"):
+        wx.CallAfter(dash_app.refresh_ice_maker_status)
+    if hasattr(dash_app, "notify"):
+        wx.CallAfter(dash_app.notify, f"{message} Source: API.", 10, False, False)
+    status = 200 if ok else 502
+    return jsonify({"ok": ok, "ice_maker": bool(enabled), "message": message, "state": _viper_control_state()}), status
 
 # ==========================================
 # FLASK ROUTES & WEBHOOKS
