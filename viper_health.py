@@ -11,8 +11,8 @@ import websockets
 import viper_config as cfg
 
 
-DEFAULT_SMARTTHINGS_STALE_SECONDS = 20 * 60
-DEFAULT_SMARTTHINGS_RELOAD_COOLDOWN_SECONDS = 6 * 60 * 60
+DEFAULT_SMARTTHINGS_STALE_SECONDS = 75 * 60
+DEFAULT_SMARTTHINGS_RELOAD_COOLDOWN_SECONDS = 90 * 60
 HEALTH_JOURNAL_FILE = "viper_health_events.jsonl"
 FRIDGE_DOOR_ENTITY = "binary_sensor.refrigerator_fridge_door"
 FREEZER_DOOR_ENTITY = "binary_sensor.refrigerator_freezer_door"

@@ -651,13 +651,13 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertNotIn("vacuum_custom_suction_value", normalized)
         self.assertNotIn("vacuum_custom_suction_percent", normalized)
 
-    def test_config_defaults_smartthings_recovery_to_quicker_watchdog(self):
+    def test_config_defaults_smartthings_recovery_to_balanced_watchdog(self):
         normalized = cfg.validate_and_normalize_config({})
-        self.assertEqual(normalized["ha_smartthings_stale_minutes"], 20)
-        self.assertEqual(normalized["ha_smartthings_reload_cooldown_minutes"], 360)
-        self.assertEqual(normalized["ha_smartthings_max_reloads_per_day"], 3)
-        self.assertEqual(viper_health.DEFAULT_SMARTTHINGS_STALE_SECONDS, 20 * 60)
-        self.assertEqual(viper_health.DEFAULT_SMARTTHINGS_RELOAD_COOLDOWN_SECONDS, 6 * 60 * 60)
+        self.assertEqual(normalized["ha_smartthings_stale_minutes"], 75)
+        self.assertEqual(normalized["ha_smartthings_reload_cooldown_minutes"], 90)
+        self.assertEqual(normalized["ha_smartthings_max_reloads_per_day"], 8)
+        self.assertEqual(viper_health.DEFAULT_SMARTTHINGS_STALE_SECONDS, 75 * 60)
+        self.assertEqual(viper_health.DEFAULT_SMARTTHINGS_RELOAD_COOLDOWN_SECONDS, 90 * 60)
 
     def test_vacuum_ui_module_exports_cleaning_mode_helpers(self):
         self.assertIs(ui_vacuum._normalize_vacuum_cleaning_mode, vacuum.normalize_vacuum_cleaning_mode)
