@@ -263,11 +263,28 @@ class ViperReleaseTests(unittest.TestCase):
         text = hvac.format_all_status(summaries)
 
         self.assertIn("Heat pump status: 2 of 2 online. 1 off.", text)
-        self.assertIn("Office: Cool, target 68, fan auto, swing vertical, raw Cool, online.", text)
-        self.assertIn("Kitchen: Off, target 75, fan auto, swing off, raw Off, online.", text)
+        self.assertIn("Office: Cool, target 68, fan auto, swing vertical, raw Cool, online. Signal unknown.", text)
+        self.assertIn("Kitchen: Off, target 75, fan auto, swing off, raw Off, online. Signal unknown.", text)
         self.assertIn("Recent HVAC commands:", text)
         self.assertIn("Office: set temperature to Cool at 68 degrees.", text)
         self.assertNotIn("set_temperature", text)
+
+    def test_hvac_status_uses_plain_wifi_signal_labels(self):
+        unit = hvac.HEAT_PUMPS[0]
+        states = {
+            unit["proxy"]: {"state": "cool", "attributes": {"temperature": 70}},
+            unit["source"]: {"state": "cool", "attributes": {"fan_mode": "auto", "swing_mode": "off"}},
+            unit["wifi_signal"]: {"state": "-58", "attributes": {}},
+        }
+
+        summary = hvac.summarize_unit(unit, states)
+        text = hvac.format_unit_status(summary)
+
+        self.assertEqual(summary["wifi_signal_label"], "excellent")
+        self.assertIn("Signal: excellent.", text)
+        self.assertNotIn("-58", text)
+        self.assertEqual(hvac.wifi_signal_label("-70"), "good")
+        self.assertEqual(hvac.wifi_signal_label("-80"), "poor")
 
     def test_hvac_bulk_result_summary_reports_partial_failures(self):
         message = hvac.summarize_service_results(

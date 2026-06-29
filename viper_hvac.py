@@ -10,30 +10,35 @@ HEAT_PUMPS = [
         "name": "Office",
         "proxy": "climate.office_heat_pump_alexa",
         "source": "climate.office_heat_pump_office_heat_pump",
+        "wifi_signal": "sensor.office_heat_pump_wi_fi_signal",
     },
     {
         "key": "living_room",
         "name": "Living Room",
         "proxy": "climate.living_room_heat_pump_alexa",
         "source": "climate.living_room_heat_pump",
+        "wifi_signal": "sensor.living_room_heat_pump_wi_fi_signal",
     },
     {
         "key": "kitchen",
         "name": "Kitchen",
         "proxy": "climate.kitchen_heat_pump_alexa",
         "source": "climate.kitchen_heat_pump",
+        "wifi_signal": "sensor.kitchen_heat_pump_wi_fi_signal",
     },
     {
         "key": "jamies_room",
         "name": "Jamie's Room",
         "proxy": "climate.jamie_s_room_heat_pump_alexa",
         "source": "climate.jamie_s_room_heat_pump",
+        "wifi_signal": "sensor.jamie_s_room_heat_pump_wi_fi_signal",
     },
     {
         "key": "master_bedroom",
         "name": "Master Bedroom",
         "proxy": "climate.master_bedroom_heat_pump_alexa",
         "source": "climate.master_bedroom_heat_pump",
+        "wifi_signal": "sensor.master_bedroom_heat_pump_wi_fi_signal",
     },
 ]
 
@@ -96,6 +101,20 @@ def _temperature_text(value):
     return f"{number:.1f}".rstrip("0").rstrip(".")
 
 
+def wifi_signal_label(value):
+    if value in (None, ""):
+        return "unknown"
+    try:
+        signal = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if signal >= -60:
+        return "excellent"
+    if signal >= -75:
+        return "good"
+    return "poor"
+
+
 def _command_label(command):
     labels = {
         "set_temperature": "set temperature",
@@ -142,6 +161,7 @@ def _last_command_sentence(summary, *, include_name=True):
 def summarize_unit(unit, states):
     proxy = states.get(unit["proxy"]) or {}
     source = states.get(unit["source"]) or {}
+    wifi = states.get(unit.get("wifi_signal")) or {}
     proxy_attrs = proxy.get("attributes") or {}
     source_attrs = source.get("attributes") or {}
     return {
@@ -149,9 +169,12 @@ def summarize_unit(unit, states):
         "name": unit["name"],
         "proxy_entity": unit["proxy"],
         "source_entity": unit["source"],
+        "wifi_signal_entity": unit.get("wifi_signal") or "",
         "state": proxy.get("state") or "missing",
         "source_state": source.get("state") or "missing",
         "available": bool(proxy) and proxy.get("state") not in {"unavailable", "unknown"},
+        "wifi_signal": wifi.get("state") if wifi else None,
+        "wifi_signal_label": wifi_signal_label(wifi.get("state") if wifi else None),
         "target_temperature": proxy_attrs.get("temperature"),
         "current_temperature": proxy_attrs.get("current_temperature"),
         "hvac_modes": proxy_attrs.get("hvac_modes") or [],
@@ -176,6 +199,7 @@ def format_unit_summary_line(summary):
     return (
         f"{summary['name']}: {hvac_mode_label(summary.get('state'))}, "
         f"target {target}, fan {fan}, swing {swing}, raw {raw}, {online}."
+        f" Signal {summary.get('wifi_signal_label') or 'unknown'}."
     )
 
 
@@ -208,6 +232,7 @@ def format_unit_status(summary):
         f"{summary['name']} is {online}.",
         f"Mode: {hvac_mode_label(summary.get('state'))}. Target: {_temperature_text(summary.get('target_temperature'))} degrees.",
         f"Fan: {_status_value(summary.get('fan_mode'))}. Swing: {_status_value(summary.get('swing_mode'))}.",
+        f"Signal: {summary.get('wifi_signal_label') or 'unknown'}.",
         f"Raw source mode: {hvac_mode_label(summary.get('source_state'))}.",
     ]
     if summary.get("last_command"):
