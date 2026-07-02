@@ -1,5 +1,6 @@
 import unittest
 import asyncio
+import json
 import tempfile
 import zipfile
 import re
@@ -24,6 +25,7 @@ import viper_matter
 import viper_runtime
 import viper_system_health
 import viper_vacuum as vacuum
+import viper_ui_hvac as ui_hvac
 import viper_ui_vacuum as ui_vacuum
 import viper_vision as vision
 import viper_ui_setup_wizard as setup_wizard
@@ -263,8 +265,8 @@ class ViperReleaseTests(unittest.TestCase):
         text = hvac.format_all_status(summaries)
 
         self.assertIn("Heat pump status: 2 of 2 online. 1 off.", text)
-        self.assertIn("Office: Cool, target 68, fan auto, swing vertical, raw Cool, online. Signal unknown.", text)
-        self.assertIn("Kitchen: Off, target 75, fan auto, swing off, raw Off, online. Signal unknown.", text)
+        self.assertIn("Office: Cool, target 68, fan auto, swing vertical, raw Cool, online. Wi-Fi Unknown.", text)
+        self.assertIn("Kitchen: Off, target 75, fan auto, swing off, raw Off, online. Wi-Fi Unknown.", text)
         self.assertIn("Recent HVAC commands:", text)
         self.assertIn("Office: set temperature to Cool at 68 degrees.", text)
         self.assertNotIn("set_temperature", text)
@@ -275,16 +277,38 @@ class ViperReleaseTests(unittest.TestCase):
             unit["proxy"]: {"state": "cool", "attributes": {"temperature": 70}},
             unit["source"]: {"state": "cool", "attributes": {"fan_mode": "auto", "swing_mode": "off"}},
             unit["wifi_signal"]: {"state": "-58", "attributes": {}},
+            unit["wifi_quality"]: {"state": "Excellent", "attributes": {}},
+            unit["online"]: {"state": "on", "attributes": {}},
         }
 
         summary = hvac.summarize_unit(unit, states)
         text = hvac.format_unit_status(summary)
 
         self.assertEqual(summary["wifi_signal_label"], "excellent")
-        self.assertIn("Signal: excellent.", text)
+        self.assertEqual(summary["wifi_quality_label"], "Excellent")
+        self.assertIn("Wi-Fi: Excellent.", text)
         self.assertNotIn("-58", text)
-        self.assertEqual(hvac.wifi_signal_label("-70"), "good")
-        self.assertEqual(hvac.wifi_signal_label("-80"), "poor")
+        self.assertEqual(hvac.wifi_quality_label("", "-70"), "Good")
+        self.assertEqual(hvac.wifi_quality_label("unknown", "-80"), "Poor")
+
+    def test_hvac_offline_pushover_sends_once_per_outage(self):
+        fake = type("FakeHvacUi", (ui_hvac.HvacTabMixin,), {})()
+        fake.hvac_offline_alerted = set()
+        sent = []
+        fake._safe_submit = lambda func, *args: sent.append(args)
+        previous = {"office": {"available": True, "name": "Office"}}
+        current = {"office": {"available": False, "name": "Office", "wifi_quality_label": "Poor"}}
+
+        with patch.object(viper_runtime, "record_event") as record_event:
+            fake._notify_hvac_offline_transitions(previous, current)
+            fake._notify_hvac_offline_transitions(previous, current)
+            fake._notify_hvac_offline_transitions(current, {"office": {"available": True, "name": "Office"}})
+            fake._notify_hvac_offline_transitions({"office": {"available": True, "name": "Office"}}, current)
+
+        self.assertEqual(len(sent), 2)
+        self.assertIn("Office heat pump went offline", sent[0][1])
+        self.assertIn("Poor", sent[0][1])
+        self.assertEqual(record_event.call_count, 2)
 
     def test_hvac_bulk_result_summary_reports_partial_failures(self):
         message = hvac.summarize_service_results(
@@ -326,6 +350,8 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertNotIn("from waitress import serve", "\n".join(main_text.splitlines()[:80]))
         self.assertIn("from waitress import serve", main_text.split("def run_flask_server", 1)[1])
         self.assertIn('self._setup_tab_once("dash", self.setup_dash_tab, self.tab_dash)', main_text)
+        self.assertIn("wx.CallLater(1200, self._prewarm_lazy_tabs_in_background)", main_text)
+        self.assertIn("def _prewarm_next_lazy_tab", main_text)
         startup_setup_block = main_text.split("def setup_notebook(self):", 1)[1].split("def setup_hidden_ai_voice_compat_controls", 1)[0]
         for eager_call in [
             "self.setup_doorbell_tab()",
@@ -6534,6 +6560,7 @@ class ViperReleaseTests(unittest.TestCase):
             result = ha_recovery.repair_once(
                 notifier=lambda title, message: pushes.append((title, message)) or True,
                 state_path=Path(tmpdir) / "state.json",
+                boot_wait_seconds=0,
             )
 
         self.assertTrue(result["ok"])
@@ -6563,6 +6590,7 @@ class ViperReleaseTests(unittest.TestCase):
                 notifier=lambda title, message: True,
                 state_path=Path(tmpdir) / "state.json",
                 reset_after_failures=3,
+                boot_wait_seconds=0,
             )
 
         self.assertFalse(result["ok"])
@@ -6610,6 +6638,123 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("state=healthy", line)
         self.assertIn("vm=running", line)
 
+    def test_ha_recovery_parses_and_prefers_wired_up_bridge(self):
+        output = """Name:            Realtek RTL8821CE 802.11ac PCIe Adapter
+Status:          Down
+Wireless:        Yes
+
+Name:            Realtek PCIe GbE Family Controller
+Status:          Up
+Wireless:        No
+"""
+
+        adapters = ha_recovery._parse_bridged_adapters(output)
+
+        self.assertEqual(len(adapters), 2)
+        self.assertEqual(ha_recovery.choose_bridge_adapter(adapters), "Realtek PCIe GbE Family Controller")
+
+    def test_ha_recovery_repairs_missing_bridge_before_starting_vm(self):
+        states = [
+            {
+                "ok": False,
+                "state": "vbox_bridge_broken",
+                "message": "VirtualBox sees no bridged network adapters.",
+                "severity": "broken",
+                "ha_health": {"ok": False},
+                "vm": {"state": "poweroff"},
+                "bridged": {"ok": False, "adapters": []},
+            },
+            {
+                "ok": True,
+                "state": "healthy",
+                "message": "Home Assistant Core and Observer are responding.",
+                "severity": "ok",
+                "ha_health": {"ok": True},
+                "vm": {"state": "running"},
+                "bridged": {"ok": True, "adapters": [{"name": "Realtek PCIe GbE Family Controller"}]},
+            },
+        ]
+        vbox_calls = []
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(ha_recovery, "diagnose", side_effect=states), \
+             patch.object(ha_recovery, "repair_virtualbox_bridge", return_value={"ok": True, "message": "Bridge fixed."}), \
+             patch.object(ha_recovery, "ensure_vm_uses_available_bridge", return_value={"ok": True}), \
+             patch.object(ha_recovery, "get_vm_state", return_value={"state": "poweroff"}), \
+             patch.object(ha_recovery, "_vbox", side_effect=lambda args, timeout=60: vbox_calls.append(args) or {"ok": True, "output": ""}), \
+             patch.object(ha_recovery, "_record", return_value={}):
+            result = ha_recovery.repair_once(
+                notifier=lambda title, message: True,
+                state_path=Path(tmpdir) / "state.json",
+                boot_wait_seconds=0,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "repair_bridge")
+        self.assertIn(["startvm", ha_recovery.VM_NAME, "--type", "headless"], vbox_calls)
+
+    def test_ha_recovery_sends_continue_boot_once_before_reset(self):
+        diagnosis = {
+            "ok": False,
+            "state": "ha_unreachable",
+            "message": "Home Assistant is unreachable.",
+            "severity": "broken",
+            "ha_health": {"ok": False},
+            "vm": {"state": "running"},
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(ha_recovery, "diagnose", return_value=diagnosis), \
+             patch.object(ha_recovery, "send_haos_continue_boot", return_value={"ok": True, "output": ""}) as continue_boot, \
+             patch.object(ha_recovery, "_record", return_value={}):
+            result = ha_recovery.repair_once(
+                notifier=lambda title, message: True,
+                state_path=Path(tmpdir) / "state.json",
+                rescue_after_failures=1,
+                boot_wait_seconds=0,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["action"], "continue_haos_boot")
+        continue_boot.assert_called_once()
+
+    def test_ha_recovery_pause_skips_diagnose_and_repair(self):
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(ha_recovery, "diagnose") as diagnose, \
+             patch.object(ha_recovery, "_vbox") as vbox, \
+             patch.object(ha_recovery, "_record", return_value={}):
+            state_path = Path(tmpdir) / "state.json"
+            pause = ha_recovery.pause_recovery(60, "HA update", state_path=state_path)
+            result = ha_recovery.repair_once(
+                notifier=lambda title, message: True,
+                state_path=state_path,
+                boot_wait_seconds=0,
+            )
+
+        self.assertTrue(pause["active"])
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["paused"])
+        self.assertEqual(result["action"], "paused")
+        diagnose.assert_not_called()
+        vbox.assert_not_called()
+
+    def test_ha_recovery_resume_clears_pause_and_failures(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "state.json"
+            ha_recovery.pause_recovery(60, "HA update", state_path=state_path)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state.update({"failures": 5, "last_problem_state": "ha_core_hung", "notified_problem": True, "rescue_continue_tried": True})
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            result = ha_recovery.resume_recovery(state_path=state_path)
+            saved = json.loads(state_path.read_text(encoding="utf-8"))
+
+        self.assertFalse(result["active"])
+        self.assertEqual(saved["failures"], 0)
+        self.assertEqual(saved["last_problem_state"], "")
+        self.assertFalse(saved["notified_problem"])
+        self.assertFalse(saved["rescue_continue_tried"])
+
     def test_diagnostics_watchdog_status_text_is_readable(self):
         status = {
             "installed": True,
@@ -6622,6 +6767,7 @@ class ViperReleaseTests(unittest.TestCase):
             "action_execute": "C:\\WINDOWS\\System32\\wscript.exe",
             "action_arguments": '"C:\\viper_publish_work\\run_ha_watchdog_hidden.vbs"',
             "last_recovery_state": {"failures": 0, "last_problem_state": ""},
+            "maintenance_pause": {"active": True, "until": "2026-07-02T12:00:00+00:00", "reason": "HA update"},
             "message": "Watchdog task is installed and last run was clean.",
             "recent_log_lines": ["ok=True action=none state=healthy core=200 observer=200 vm=running"],
         }
@@ -6629,6 +6775,8 @@ class ViperReleaseTests(unittest.TestCase):
         text = diagnostics.ha_watchdog_status_text(status)
 
         self.assertIn("Installed: yes", text)
+        self.assertIn("Maintenance pause: active", text)
+        self.assertIn("Pause reason: HA update", text)
         self.assertIn("Silent runner: yes", text)
         self.assertIn("Last result: 0", text)
         self.assertIn("Recent watchdog log:", text)

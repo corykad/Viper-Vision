@@ -19,6 +19,7 @@ class HvacTabMixin:
     def setup_hvac_tab(self):
         self.hvac_controls = {}
         self.hvac_last_states = getattr(self, "hvac_last_states", {})
+        self.hvac_offline_alerted = getattr(self, "hvac_offline_alerted", set())
 
         outer = wx.BoxSizer(wx.VERTICAL)
         self.hvac_notebook = wx.Notebook(self.tab_hvac)
@@ -249,7 +250,10 @@ class HvacTabMixin:
             wx.CallAfter(self._finish_hvac_error, f"HVAC refresh failed: {exc}", announce)
 
     def _finish_hvac_refresh(self, summaries, announce=False, focus_unit=""):
+        previous_states = getattr(self, "hvac_last_states", {})
         self.hvac_last_states = {item["key"]: item for item in summaries}
+        if hasattr(self, "_notify_hvac_offline_transitions"):
+            self._notify_hvac_offline_transitions(previous_states, self.hvac_last_states)
         controls_by_unit = getattr(self, "hvac_controls", {})
         for item in summaries:
             if controls_by_unit.get(item["key"]):
@@ -265,6 +269,35 @@ class HvacTabMixin:
                 self.notify(hvac.format_unit_status(self.hvac_last_states[focus_unit]), priority=10)
             else:
                 self.notify("HVAC status refreshed.", priority=10)
+
+    def _notify_hvac_offline_transitions(self, previous_states, current_states):
+        alerted = getattr(self, "hvac_offline_alerted", set())
+        for key, current in (current_states or {}).items():
+            was_available = bool((previous_states or {}).get(key, {}).get("available"))
+            is_available = bool(current.get("available"))
+            name = current.get("name") or key.replace("_", " ").title()
+            if is_available:
+                alerted.discard(key)
+                continue
+            if not was_available or key in alerted:
+                continue
+            alerted.add(key)
+            message = f"{name} heat pump went offline. Wi-Fi was {current.get('wifi_quality_label') or 'unknown'}."
+            viper_runtime.record_event("hvac", message)
+            self._safe_submit(self._send_hvac_offline_pushover, name, message)
+        self.hvac_offline_alerted = alerted
+
+    def _send_hvac_offline_pushover(self, name, message):
+        try:
+            import viper_audio
+
+            sent = viper_audio._send_text_pushover("Viper heat pump offline", message)
+            if sent:
+                logging.info("HVAC offline Pushover sent for %s", name)
+            else:
+                logging.info("HVAC offline Pushover skipped for %s", name)
+        except Exception:
+            logging.exception("HVAC offline Pushover failed for %s", name)
 
     def _finish_hvac_error(self, message, announce=False):
         if hasattr(self, "hvac_all_status_txt"):

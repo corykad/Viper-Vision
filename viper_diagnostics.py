@@ -13,6 +13,7 @@ from datetime import timezone
 from pathlib import Path
 
 import viper_config as cfg
+import viper_ha_recovery
 import viper_health
 import viper_runtime
 
@@ -348,6 +349,8 @@ def ha_watchdog_status():
         "recent_log_lines": [redact_text(line) for line in _tail_file(log_path, limit=12)],
         "message": "Watchdog task has not been checked.",
     }
+    recovery = status["last_recovery_state"] if isinstance(status["last_recovery_state"], dict) else {}
+    status["maintenance_pause"] = viper_ha_recovery.maintenance_pause_status(recovery)
     command = rf"""
 $task = Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue
 if ($null -eq $task) {{
@@ -398,9 +401,13 @@ if ($null -eq $task) {{
 def ha_watchdog_status_text(status):
     status = status if isinstance(status, dict) else {}
     recovery = status.get("last_recovery_state") if isinstance(status.get("last_recovery_state"), dict) else {}
+    pause = status.get("maintenance_pause") if isinstance(status.get("maintenance_pause"), dict) else viper_ha_recovery.maintenance_pause_status(recovery)
     lines = [
         "HA watchdog status:",
         f"Installed: {'yes' if status.get('installed') else 'no'}",
+        f"Maintenance pause: {'active' if pause.get('active') else 'off'}",
+        f"Pause until: {pause.get('until') or 'not paused'}",
+        f"Pause reason: {pause.get('reason') or 'none'}",
         f"Task state: {status.get('state') or 'unknown'}",
         f"Silent runner: {'yes' if status.get('silent') else 'no'}",
         f"Run level: {status.get('run_level') or 'unknown'}",

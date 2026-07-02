@@ -2654,6 +2654,46 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
                 logging.debug("Could not layout lazy tab %s.", key, exc_info=True)
         logging.info("[STARTUP] Built lazy tab %s in %.3fs", key, time.perf_counter() - started)
 
+    def _lazy_tab_prewarm_items(self):
+        return [
+            ("doorbell", self.setup_doorbell_tab, self.tab_doorbell),
+            ("hvac", self.setup_hvac_tab, self.tab_hvac),
+            ("fridge", self.setup_fridge_tab, self.tab_fridge),
+            ("vacuum", self.setup_vacuum_tab, self.tab_vacuum),
+            ("setup", self.setup_setup_tab, self.tab_setup),
+            ("diagnostics", self.setup_diagnostics_tab, self.tab_diagnostics_overview),
+            ("ha_status", self.setup_ha_status_tab, self.tab_ha_status),
+            ("recent_events", self.setup_recent_events_tab, self.tab_recent_events),
+            ("speed", self.setup_speed_tab, self.tab_speed),
+            ("tts", self.setup_tts_config_tab, self.tab_tts),
+            ("devices", self.setup_devices_tab, self.tab_dev),
+            ("prompts", self.setup_prompt_editor_tab, self.tab_prompts),
+            ("utils", self.setup_utils_tab, self.tab_util),
+        ]
+
+    def _prewarm_lazy_tabs_in_background(self):
+        if getattr(self, "_lazy_prewarm_running", False):
+            return
+        self._lazy_prewarm_queue = list(self._lazy_tab_prewarm_items())
+        self._lazy_prewarm_running = True
+        wx.CallLater(75, self._prewarm_next_lazy_tab)
+
+    def _prewarm_next_lazy_tab(self):
+        try:
+            queue = getattr(self, "_lazy_prewarm_queue", [])
+            while queue:
+                key, setup_func, page = queue.pop(0)
+                self._lazy_prewarm_queue = queue
+                if key in getattr(self, "_lazy_setup_done", set()):
+                    continue
+                self._setup_tab_once(key, setup_func, page)
+                wx.CallLater(175, self._prewarm_next_lazy_tab)
+                return
+        except Exception:
+            logging.debug("Could not prewarm lazy tabs.", exc_info=True)
+        self._lazy_prewarm_running = False
+        logging.info("[STARTUP] Lazy tab background prewarm complete.")
+
     def _ensure_selected_notebook_page(self, notebook=None):
         try:
             notebook = notebook or getattr(self, "notebook", None)
@@ -2873,6 +2913,7 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         self._setup_tab_once("dash", self.setup_dash_tab, self.tab_dash)
 
         self.main_sizer.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 5)
+        wx.CallLater(1200, self._prewarm_lazy_tabs_in_background)
 
     def setup_hidden_ai_voice_compat_controls(self):
         def hide_disabled(control):
@@ -6607,6 +6648,25 @@ if __name__ == "__main__":
     if "--ha-recovery-test-push" in sys.argv:
         ok = ha_recovery.send_recovery_test_push()
         print(json.dumps({"ok": ok, "message": "HA recovery Pushover test sent." if ok else "HA recovery Pushover test failed."}, indent=2, sort_keys=True))
+        sys.exit(0)
+    if "--ha-recovery-pause" in sys.argv:
+        minutes = ha_recovery.DEFAULT_PAUSE_MINUTES
+        reason = "Home Assistant maintenance"
+        for index, arg in enumerate(sys.argv):
+            if arg == "--minutes" and index + 1 < len(sys.argv):
+                try:
+                    minutes = int(sys.argv[index + 1])
+                except ValueError:
+                    minutes = ha_recovery.DEFAULT_PAUSE_MINUTES
+            elif arg == "--reason" and index + 1 < len(sys.argv):
+                reason = sys.argv[index + 1]
+        print(json.dumps(ha_recovery.pause_recovery(minutes, reason), indent=2, sort_keys=True))
+        sys.exit(0)
+    if "--ha-recovery-resume" in sys.argv:
+        print(json.dumps(ha_recovery.resume_recovery(), indent=2, sort_keys=True))
+        sys.exit(0)
+    if "--ha-recovery-pause-status" in sys.argv:
+        print(json.dumps(ha_recovery.maintenance_pause_status(), indent=2, sort_keys=True))
         sys.exit(0)
     if "--ha-recovery-once" in sys.argv:
         result = ha_recovery.repair_once(push="--no-push" not in sys.argv)

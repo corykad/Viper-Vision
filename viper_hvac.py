@@ -11,6 +11,8 @@ HEAT_PUMPS = [
         "proxy": "climate.office_heat_pump_alexa",
         "source": "climate.office_heat_pump_office_heat_pump",
         "wifi_signal": "sensor.office_heat_pump_wi_fi_signal",
+        "wifi_quality": "sensor.office_heat_pump_wi_fi_quality",
+        "online": "binary_sensor.office_heat_pump_online",
     },
     {
         "key": "living_room",
@@ -18,6 +20,8 @@ HEAT_PUMPS = [
         "proxy": "climate.living_room_heat_pump_alexa",
         "source": "climate.living_room_heat_pump",
         "wifi_signal": "sensor.living_room_heat_pump_wi_fi_signal",
+        "wifi_quality": "sensor.living_room_heat_pump_wi_fi_quality",
+        "online": "binary_sensor.living_room_heat_pump_online",
     },
     {
         "key": "kitchen",
@@ -25,6 +29,8 @@ HEAT_PUMPS = [
         "proxy": "climate.kitchen_heat_pump_alexa",
         "source": "climate.kitchen_heat_pump",
         "wifi_signal": "sensor.kitchen_heat_pump_wi_fi_signal",
+        "wifi_quality": "sensor.kitchen_heat_pump_wi_fi_quality",
+        "online": "binary_sensor.kitchen_heat_pump_online",
     },
     {
         "key": "jamies_room",
@@ -32,6 +38,8 @@ HEAT_PUMPS = [
         "proxy": "climate.jamie_s_room_heat_pump_alexa",
         "source": "climate.jamie_s_room_heat_pump",
         "wifi_signal": "sensor.jamie_s_room_heat_pump_wi_fi_signal",
+        "wifi_quality": "sensor.jamie_s_room_heat_pump_wi_fi_quality",
+        "online": "binary_sensor.jamie_s_room_heat_pump_online",
     },
     {
         "key": "master_bedroom",
@@ -39,6 +47,8 @@ HEAT_PUMPS = [
         "proxy": "climate.master_bedroom_heat_pump_alexa",
         "source": "climate.master_bedroom_heat_pump",
         "wifi_signal": "sensor.master_bedroom_heat_pump_wi_fi_signal",
+        "wifi_quality": "sensor.master_bedroom_heat_pump_wi_fi_quality",
+        "online": "binary_sensor.master_bedroom_heat_pump_online",
     },
 ]
 
@@ -115,6 +125,14 @@ def wifi_signal_label(value):
     return "poor"
 
 
+def wifi_quality_label(value, fallback_signal=None):
+    text = str(value or "").strip()
+    if text and text.lower() not in {"unknown", "unavailable", "none"}:
+        return text[:1].upper() + text[1:].lower()
+    fallback = wifi_signal_label(fallback_signal)
+    return fallback[:1].upper() + fallback[1:] if fallback else "Unknown"
+
+
 def _command_label(command):
     labels = {
         "set_temperature": "set temperature",
@@ -162,19 +180,32 @@ def summarize_unit(unit, states):
     proxy = states.get(unit["proxy"]) or {}
     source = states.get(unit["source"]) or {}
     wifi = states.get(unit.get("wifi_signal")) or {}
+    wifi_quality = states.get(unit.get("wifi_quality")) or {}
+    online = states.get(unit.get("online")) or {}
     proxy_attrs = proxy.get("attributes") or {}
     source_attrs = source.get("attributes") or {}
+    online_state = str(online.get("state") or "").lower()
+    climate_available = bool(proxy) and proxy.get("state") not in {"unavailable", "unknown"}
+    available = online_state == "on" if online else climate_available
     return {
         "key": unit["key"],
         "name": unit["name"],
         "proxy_entity": unit["proxy"],
         "source_entity": unit["source"],
         "wifi_signal_entity": unit.get("wifi_signal") or "",
+        "wifi_quality_entity": unit.get("wifi_quality") or "",
+        "online_entity": unit.get("online") or "",
         "state": proxy.get("state") or "missing",
         "source_state": source.get("state") or "missing",
-        "available": bool(proxy) and proxy.get("state") not in {"unavailable", "unknown"},
+        "available": available,
+        "online_state": online.get("state") if online else "",
         "wifi_signal": wifi.get("state") if wifi else None,
         "wifi_signal_label": wifi_signal_label(wifi.get("state") if wifi else None),
+        "wifi_quality": wifi_quality.get("state") if wifi_quality else None,
+        "wifi_quality_label": wifi_quality_label(
+            wifi_quality.get("state") if wifi_quality else None,
+            wifi.get("state") if wifi else None,
+        ),
         "target_temperature": proxy_attrs.get("temperature"),
         "current_temperature": proxy_attrs.get("current_temperature"),
         "hvac_modes": proxy_attrs.get("hvac_modes") or [],
@@ -199,7 +230,7 @@ def format_unit_summary_line(summary):
     return (
         f"{summary['name']}: {hvac_mode_label(summary.get('state'))}, "
         f"target {target}, fan {fan}, swing {swing}, raw {raw}, {online}."
-        f" Signal {summary.get('wifi_signal_label') or 'unknown'}."
+        f" Wi-Fi {summary.get('wifi_quality_label') or 'Unknown'}."
     )
 
 
@@ -232,7 +263,7 @@ def format_unit_status(summary):
         f"{summary['name']} is {online}.",
         f"Mode: {hvac_mode_label(summary.get('state'))}. Target: {_temperature_text(summary.get('target_temperature'))} degrees.",
         f"Fan: {_status_value(summary.get('fan_mode'))}. Swing: {_status_value(summary.get('swing_mode'))}.",
-        f"Signal: {summary.get('wifi_signal_label') or 'unknown'}.",
+        f"Wi-Fi: {summary.get('wifi_quality_label') or 'Unknown'}.",
         f"Raw source mode: {hvac_mode_label(summary.get('source_state'))}.",
     ]
     if summary.get("last_command"):

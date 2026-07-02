@@ -48,12 +48,20 @@ class DiagnosticsTabMixin:
         watchdog_buttons = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_refresh_ha_watchdog = wx.Button(self.tab_diagnostics_overview, label="Refresh HA Watchdog", size=(-1, 40))
         self.btn_test_ha_watchdog_push = wx.Button(self.tab_diagnostics_overview, label="Test HA Recovery Push", size=(-1, 40))
+        self.btn_pause_ha_watchdog = wx.Button(self.tab_diagnostics_overview, label="Pause HA Recovery 2 Hours", size=(-1, 40))
+        self.btn_resume_ha_watchdog = wx.Button(self.tab_diagnostics_overview, label="Resume HA Recovery", size=(-1, 40))
         self.btn_refresh_ha_watchdog.Bind(wx.EVT_BUTTON, self.on_refresh_ha_watchdog)
         self.btn_test_ha_watchdog_push.Bind(wx.EVT_BUTTON, self.on_test_ha_watchdog_push)
+        self.btn_pause_ha_watchdog.Bind(wx.EVT_BUTTON, self.on_pause_ha_watchdog)
+        self.btn_resume_ha_watchdog.Bind(wx.EVT_BUTTON, self.on_resume_ha_watchdog)
         self._describe_control(self.btn_refresh_ha_watchdog, "Refresh HA Watchdog button. Checks the scheduled watchdog task, last run result, and latest recovery state.")
         self._describe_control(self.btn_test_ha_watchdog_push, "Test HA Recovery Push button. Sends a safe Pushover test using the same path as the Home Assistant recovery watchdog.")
+        self._describe_control(self.btn_pause_ha_watchdog, "Pause HA Recovery 2 Hours button. Temporarily disables automatic Home Assistant recovery while you run updates or maintenance.")
+        self._describe_control(self.btn_resume_ha_watchdog, "Resume HA Recovery button. Re-enables automatic Home Assistant recovery after maintenance.")
         watchdog_buttons.Add(self.btn_refresh_ha_watchdog, 1, wx.ALL | wx.EXPAND, 5)
         watchdog_buttons.Add(self.btn_test_ha_watchdog_push, 1, wx.ALL | wx.EXPAND, 5)
+        watchdog_buttons.Add(self.btn_pause_ha_watchdog, 1, wx.ALL | wx.EXPAND, 5)
+        watchdog_buttons.Add(self.btn_resume_ha_watchdog, 1, wx.ALL | wx.EXPAND, 5)
         watchdog_sizer.Add(watchdog_buttons, 0, wx.EXPAND)
         sizer.Add(watchdog_sizer, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
 
@@ -261,6 +269,22 @@ class DiagnosticsTabMixin:
             self.ha_watchdog_txt.SetValue("Sending safe HA recovery Pushover test.")
         self.notify("Sending HA recovery Pushover test.", priority=10)
         self._safe_submit(self._run_ha_watchdog_push_test)
+
+    def on_pause_ha_watchdog(self, event):
+        status = viper_ha_recovery.pause_recovery(120, "Home Assistant maintenance from Viper Diagnostics")
+        text = f"HA recovery paused. {status.get('message') or ''}"
+        if hasattr(self, "ha_watchdog_txt"):
+            current = self.refresh_ha_watchdog_status()
+            self.ha_watchdog_txt.SetValue(f"{text}\n\n{current}")
+        self.notify(text, priority=10)
+
+    def on_resume_ha_watchdog(self, event):
+        status = viper_ha_recovery.resume_recovery()
+        text = f"HA recovery resumed. {status.get('message') or ''}"
+        if hasattr(self, "ha_watchdog_txt"):
+            current = self.refresh_ha_watchdog_status()
+            self.ha_watchdog_txt.SetValue(f"{text}\n\n{current}")
+        self.notify(text, priority=10)
 
     def _run_ha_watchdog_push_test(self):
         ok = viper_ha_recovery.send_recovery_test_push()
