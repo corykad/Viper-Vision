@@ -1226,6 +1226,8 @@ class ViperReleaseTests(unittest.TestCase):
             + Path("viper_ui_prompts.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_speakers.py").read_text(encoding="utf-8")
+            + "\n"
+            + Path("viper_ui_tts.py").read_text(encoding="utf-8")
         )
 
         self.assertIn("class AccessibleStatusText(wx.StaticText):", common_text)
@@ -2750,6 +2752,8 @@ class ViperReleaseTests(unittest.TestCase):
             + Path("viper_ui_prompts.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_speakers.py").read_text(encoding="utf-8")
+            + "\n"
+            + Path("viper_ui_tts.py").read_text(encoding="utf-8")
         )
 
         forbidden_button_labels = [
@@ -7094,6 +7098,7 @@ Wireless:        No
         self.assertIn("viper_ui_doorbell.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_prompts.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_speakers.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_ui_tts.py", release_audit.REQUIRED_PACKAGE_FILES)
 
     def test_gitignore_excludes_local_esphome_flash_workdirs(self):
         root = Path(__file__).resolve().parents[1]

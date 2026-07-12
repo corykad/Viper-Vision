@@ -13,6 +13,7 @@ DESKTOP_SOURCE_FILES = [
     "viper_ui_hvac.py",
     "viper_ui_prompts.py",
     "viper_ui_speakers.py",
+    "viper_ui_tts.py",
     "viper_ui_vacuum.py",
 ]
 
