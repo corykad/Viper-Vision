@@ -6196,8 +6196,10 @@ class ViperReleaseTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         main_text = (root / "main.pyw").read_text(encoding="utf-8") + "\n" + (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
         ha_vm_text = (root / "viper_ha_vm.py").read_text(encoding="utf-8")
+        delegate_text = (root / "viper_ha_vm_delegates.py").read_text(encoding="utf-8")
         self.assertIn("def optimize_windows_for_virtualbox", ha_vm_text)
-        self.assertIn("def optimize_windows_for_virtualbox", main_text)
+        self.assertIn('"optimize_windows_for_virtualbox"', delegate_text)
+        self.assertIn("ha_vm_delegates.install_simple_delegates(globals(), ha_vm)", main_text)
         self.assertIn("def on_wizard_optimize_windows_virtualbox", main_text)
         self.assertIn("def on_optimize_windows_virtualbox", main_text)
         self.assertIn("WSL2, Docker Desktop, Windows Sandbox", main_text)
@@ -7061,6 +7063,7 @@ Wireless:        No
 
         self.assertFalse(audit.failures)
         self.assertIn("viper_ha_client.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_ha_vm_delegates.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_system_health.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_common.py", release_audit.REQUIRED_PACKAGE_FILES)
 

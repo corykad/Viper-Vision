@@ -33,6 +33,7 @@ import viper_ha_addons as ha_addons
 import viper_ha_listener as ha_listener
 import viper_ha_package as ha_package
 import viper_ha_vm as ha_vm
+import viper_ha_vm_delegates as ha_vm_delegates
 import viper_speakers as speakers
 import viper_ui_common as ui_common
 import viper_vision as vision
@@ -83,148 +84,7 @@ def open_help(topic="index"):
     return False
 
 
-def open_official_link(*args, **kwargs):
-    return ha_vm.open_official_link(*args, **kwargs)
-
-
-def open_url(*args, **kwargs):
-    return ha_vm.open_url(*args, **kwargs)
-
-
-def find_vboxmanage(*args, **kwargs):
-    return ha_vm.find_vboxmanage(*args, **kwargs)
-
-
-def find_winget(*args, **kwargs):
-    return ha_vm.find_winget(*args, **kwargs)
-
-
-def get_machine_architecture(*args, **kwargs):
-    return ha_vm.get_machine_architecture(*args, **kwargs)
-
-
-def get_ha_vm_platform_status(*args, **kwargs):
-    return ha_vm.get_ha_vm_platform_status(*args, **kwargs)
-
-
-def normalize_ha_vm_ram_mb(*args, **kwargs):
-    return ha_vm.normalize_ha_vm_ram_mb(*args, **kwargs)
-
-
-def normalize_ha_vm_disk_gb(*args, **kwargs):
-    return ha_vm.normalize_ha_vm_disk_gb(*args, **kwargs)
-
-
-def get_ha_vm_drive_space_status(*args, **kwargs):
-    return ha_vm.get_ha_vm_drive_space_status(*args, **kwargs)
-
-
-def get_winget_status(*args, **kwargs):
-    return ha_vm.get_winget_status(*args, **kwargs)
-
-
-def get_virtualbox_status(*args, **kwargs):
-    return ha_vm.get_virtualbox_status(*args, **kwargs)
-
-
-def is_windows_admin(*args, **kwargs):
-    return ha_vm.is_windows_admin(*args, **kwargs)
-
-
-def _run_powershell_command(*args, **kwargs):
-    return ha_vm._run_powershell_command(*args, **kwargs)
-
-
-def _windows_optional_feature_state(*args, **kwargs):
-    return ha_vm._windows_optional_feature_state(*args, **kwargs)
-
-
-def get_windows_virtualization_status(*args, **kwargs):
-    return ha_vm.get_windows_virtualization_status(*args, **kwargs)
-
-
-def optimize_windows_for_virtualbox(*args, **kwargs):
-    return ha_vm.optimize_windows_for_virtualbox(*args, **kwargs)
-
-
-def install_virtualbox_with_winget(*args, **kwargs):
-    return ha_vm.install_virtualbox_with_winget(*args, **kwargs)
-
-
-def _hidden_subprocess_kwargs(*args, **kwargs):
-    return ha_vm._hidden_subprocess_kwargs(*args, **kwargs)
-
-
-def _clean_process_progress_line(*args, **kwargs):
-    return ha_vm._clean_process_progress_line(*args, **kwargs)
-
-
-def _run_process_with_progress(*args, **kwargs):
-    return ha_vm._run_process_with_progress(*args, **kwargs)
-
-
-def _run_vbox(*args, **kwargs):
-    return ha_vm._run_vbox(*args, **kwargs)
-
-
-def _run_vbox_progress(*args, **kwargs):
-    return ha_vm._run_vbox_progress(*args, **kwargs)
-
-
-def _vbox_vm_exists(*args, **kwargs):
-    return ha_vm._vbox_vm_exists(*args, **kwargs)
-
-
-def _choose_bridged_adapter(*args, **kwargs):
-    return ha_vm._choose_bridged_adapter(*args, **kwargs)
-
-
-def get_latest_haos_virtualbox_asset(*args, **kwargs):
-    return ha_vm.get_latest_haos_virtualbox_asset(*args, **kwargs)
-
-
-def download_file(*args, **kwargs):
-    return ha_vm.download_file(*args, **kwargs)
-
-
-def _extract_haos_disk(*args, **kwargs):
-    return ha_vm._extract_haos_disk(*args, **kwargs)
-
-
-def _import_ha_ova(*args, **kwargs):
-    return ha_vm._import_ha_ova(*args, **kwargs)
-
-
-def _resize_virtualbox_disk(*args, **kwargs):
-    return ha_vm._resize_virtualbox_disk(*args, **kwargs)
-
-
-def _setup_progress_default_state(*args, **kwargs):
-    return ha_vm._setup_progress_default_state(*args, **kwargs)
-
-
-def _coerce_setup_progress_state(*args, **kwargs):
-    return ha_vm._coerce_setup_progress_state(*args, **kwargs)
-
-
-def _bytes_progress_percent(*args, **kwargs):
-    return ha_vm._bytes_progress_percent(*args, **kwargs)
-
-
-def _classify_setup_progress_message(*args, **kwargs):
-    return ha_vm._classify_setup_progress_message(*args, **kwargs)
-
-
-def _format_setup_progress_state(*args, **kwargs):
-    return ha_vm._format_setup_progress_state(*args, **kwargs)
-
-
-def _check_home_assistant_core_ready(*args, **kwargs):
-    return ha_vm._check_home_assistant_core_ready(*args, **kwargs)
-
-
-def build_ha_install_preflight_summary(*args, **kwargs):
-    return ha_vm.build_ha_install_preflight_summary(*args, **kwargs)
+ha_vm_delegates.install_simple_delegates(globals(), ha_vm)
 
 
 def wait_for_home_assistant_first_boot(*args, **kwargs):

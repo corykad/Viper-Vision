@@ -39,6 +39,7 @@ import viper_ha_listener as ha_listener
 import viper_ha_package as ha_package
 import viper_health
 import viper_ha_vm as ha_vm
+import viper_ha_vm_delegates as ha_vm_delegates
 import viper_ha_recovery as ha_recovery
 import viper_matter
 import viper_system_health
@@ -181,145 +182,7 @@ def _call_ha_vm_with_overrides(name, override_names, *args, **kwargs):
         for override_name, old_value in old_values.items():
             setattr(ha_vm, override_name, old_value)
 
-def open_official_link(*args, **kwargs):
-    return ha_vm.open_official_link(*args, **kwargs)
-open_official_link._ha_vm_delegate = "open_official_link"
-
-def open_url(*args, **kwargs):
-    return ha_vm.open_url(*args, **kwargs)
-open_url._ha_vm_delegate = "open_url"
-
-def find_vboxmanage(*args, **kwargs):
-    return ha_vm.find_vboxmanage(*args, **kwargs)
-find_vboxmanage._ha_vm_delegate = "find_vboxmanage"
-
-def find_winget(*args, **kwargs):
-    return ha_vm.find_winget(*args, **kwargs)
-find_winget._ha_vm_delegate = "find_winget"
-
-def get_machine_architecture(*args, **kwargs):
-    return ha_vm.get_machine_architecture(*args, **kwargs)
-get_machine_architecture._ha_vm_delegate = "get_machine_architecture"
-
-def get_ha_vm_platform_status(*args, **kwargs):
-    return ha_vm.get_ha_vm_platform_status(*args, **kwargs)
-get_ha_vm_platform_status._ha_vm_delegate = "get_ha_vm_platform_status"
-
-def normalize_ha_vm_ram_mb(*args, **kwargs):
-    return ha_vm.normalize_ha_vm_ram_mb(*args, **kwargs)
-normalize_ha_vm_ram_mb._ha_vm_delegate = "normalize_ha_vm_ram_mb"
-
-def normalize_ha_vm_disk_gb(*args, **kwargs):
-    return ha_vm.normalize_ha_vm_disk_gb(*args, **kwargs)
-normalize_ha_vm_disk_gb._ha_vm_delegate = "normalize_ha_vm_disk_gb"
-
-def get_ha_vm_drive_space_status(*args, **kwargs):
-    return ha_vm.get_ha_vm_drive_space_status(*args, **kwargs)
-get_ha_vm_drive_space_status._ha_vm_delegate = "get_ha_vm_drive_space_status"
-
-def get_winget_status(*args, **kwargs):
-    return ha_vm.get_winget_status(*args, **kwargs)
-get_winget_status._ha_vm_delegate = "get_winget_status"
-
-def get_virtualbox_status(*args, **kwargs):
-    return ha_vm.get_virtualbox_status(*args, **kwargs)
-get_virtualbox_status._ha_vm_delegate = "get_virtualbox_status"
-
-def is_windows_admin(*args, **kwargs):
-    return ha_vm.is_windows_admin(*args, **kwargs)
-is_windows_admin._ha_vm_delegate = "is_windows_admin"
-
-def _run_powershell_command(*args, **kwargs):
-    return ha_vm._run_powershell_command(*args, **kwargs)
-_run_powershell_command._ha_vm_delegate = "_run_powershell_command"
-
-def _windows_optional_feature_state(*args, **kwargs):
-    return ha_vm._windows_optional_feature_state(*args, **kwargs)
-_windows_optional_feature_state._ha_vm_delegate = "_windows_optional_feature_state"
-
-def get_windows_virtualization_status(*args, **kwargs):
-    return ha_vm.get_windows_virtualization_status(*args, **kwargs)
-get_windows_virtualization_status._ha_vm_delegate = "get_windows_virtualization_status"
-
-def optimize_windows_for_virtualbox(*args, **kwargs):
-    return ha_vm.optimize_windows_for_virtualbox(*args, **kwargs)
-optimize_windows_for_virtualbox._ha_vm_delegate = "optimize_windows_for_virtualbox"
-
-def install_virtualbox_with_winget(*args, **kwargs):
-    return ha_vm.install_virtualbox_with_winget(*args, **kwargs)
-install_virtualbox_with_winget._ha_vm_delegate = "install_virtualbox_with_winget"
-
-def _hidden_subprocess_kwargs(*args, **kwargs):
-    return ha_vm._hidden_subprocess_kwargs(*args, **kwargs)
-_hidden_subprocess_kwargs._ha_vm_delegate = "_hidden_subprocess_kwargs"
-
-def _clean_process_progress_line(*args, **kwargs):
-    return ha_vm._clean_process_progress_line(*args, **kwargs)
-_clean_process_progress_line._ha_vm_delegate = "_clean_process_progress_line"
-
-def _run_process_with_progress(*args, **kwargs):
-    return ha_vm._run_process_with_progress(*args, **kwargs)
-_run_process_with_progress._ha_vm_delegate = "_run_process_with_progress"
-
-def _run_vbox(*args, **kwargs):
-    return ha_vm._run_vbox(*args, **kwargs)
-_run_vbox._ha_vm_delegate = "_run_vbox"
-
-def _run_vbox_progress(*args, **kwargs):
-    return ha_vm._run_vbox_progress(*args, **kwargs)
-_run_vbox_progress._ha_vm_delegate = "_run_vbox_progress"
-
-def _vbox_vm_exists(*args, **kwargs):
-    return ha_vm._vbox_vm_exists(*args, **kwargs)
-_vbox_vm_exists._ha_vm_delegate = "_vbox_vm_exists"
-
-def _choose_bridged_adapter(*args, **kwargs):
-    return ha_vm._choose_bridged_adapter(*args, **kwargs)
-_choose_bridged_adapter._ha_vm_delegate = "_choose_bridged_adapter"
-
-def get_latest_haos_virtualbox_asset(*args, **kwargs):
-    return ha_vm.get_latest_haos_virtualbox_asset(*args, **kwargs)
-get_latest_haos_virtualbox_asset._ha_vm_delegate = "get_latest_haos_virtualbox_asset"
-
-def download_file(*args, **kwargs):
-    return ha_vm.download_file(*args, **kwargs)
-download_file._ha_vm_delegate = "download_file"
-
-def _extract_haos_disk(*args, **kwargs):
-    return ha_vm._extract_haos_disk(*args, **kwargs)
-_extract_haos_disk._ha_vm_delegate = "_extract_haos_disk"
-
-def _import_ha_ova(*args, **kwargs):
-    return ha_vm._import_ha_ova(*args, **kwargs)
-_import_ha_ova._ha_vm_delegate = "_import_ha_ova"
-
-def _resize_virtualbox_disk(*args, **kwargs):
-    return ha_vm._resize_virtualbox_disk(*args, **kwargs)
-_resize_virtualbox_disk._ha_vm_delegate = "_resize_virtualbox_disk"
-
-def _setup_progress_default_state(*args, **kwargs):
-    return ha_vm._setup_progress_default_state(*args, **kwargs)
-_setup_progress_default_state._ha_vm_delegate = "_setup_progress_default_state"
-
-def _coerce_setup_progress_state(*args, **kwargs):
-    return ha_vm._coerce_setup_progress_state(*args, **kwargs)
-_coerce_setup_progress_state._ha_vm_delegate = "_coerce_setup_progress_state"
-
-def _bytes_progress_percent(*args, **kwargs):
-    return ha_vm._bytes_progress_percent(*args, **kwargs)
-_bytes_progress_percent._ha_vm_delegate = "_bytes_progress_percent"
-
-def _classify_setup_progress_message(*args, **kwargs):
-    return ha_vm._classify_setup_progress_message(*args, **kwargs)
-_classify_setup_progress_message._ha_vm_delegate = "_classify_setup_progress_message"
-
-def _format_setup_progress_state(*args, **kwargs):
-    return ha_vm._format_setup_progress_state(*args, **kwargs)
-_format_setup_progress_state._ha_vm_delegate = "_format_setup_progress_state"
-
-def _check_home_assistant_core_ready(*args, **kwargs):
-    return ha_vm._check_home_assistant_core_ready(*args, **kwargs)
-_check_home_assistant_core_ready._ha_vm_delegate = "_check_home_assistant_core_ready"
+ha_vm_delegates.install_simple_delegates(globals(), ha_vm)
 
 def build_ha_install_preflight_summary(resources):
     ram_mb = normalize_ha_vm_ram_mb((resources or {}).get("ram_mb"))

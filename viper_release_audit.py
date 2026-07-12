@@ -24,6 +24,7 @@ REPORT_DIR = Path("release_check_reports")
 REQUIRED_PACKAGE_FILES = [
     "main.pyw",
     "viper_ha_client.py",
+    "viper_ha_vm_delegates.py",
     "viper_hvac.py",
     "viper_runtime.py",
     "viper_system_health.py",
