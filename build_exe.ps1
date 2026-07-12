@@ -27,6 +27,7 @@ python -m py_compile `
   .\viper_ui_diagnostics.py `
   .\viper_ui_fridge.py `
   .\viper_ui_hvac.py `
+  .\viper_ui_prompts.py `
   .\viper_ui_setup_wizard.py `
   .\viper_ui_vacuum.py
 

@@ -31,6 +31,7 @@ REQUIRED_PACKAGE_FILES = [
     "viper_ui_common.py",
     "viper_ui_doorbell.py",
     "viper_ui_hvac.py",
+    "viper_ui_prompts.py",
     "templates/remote.html",
     "help/index.html",
 ]

@@ -1219,6 +1219,8 @@ class ViperReleaseTests(unittest.TestCase):
             + Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
+            + "\n"
+            + Path("viper_ui_prompts.py").read_text(encoding="utf-8")
         )
 
         self.assertIn("class AccessibleStatusText(wx.StaticText):", common_text)
@@ -1957,13 +1959,14 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_main_window_has_ai_descriptions_tab_without_profile_language(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
-        prompt_tab_start = main_text.index("def setup_prompt_editor_tab")
-        prompt_tab_end = main_text.index("def setup_setup_tab", prompt_tab_start)
-        prompt_tab_text = main_text[prompt_tab_start:prompt_tab_end]
+        prompt_source = Path("viper_ui_prompts.py").read_text(encoding="utf-8")
+        prompt_tab_start = prompt_source.index("def setup_prompt_editor_tab")
+        prompt_tab_end = prompt_source.index("def _ai_description_style_key", prompt_tab_start)
+        prompt_tab_text = prompt_source[prompt_tab_start:prompt_tab_end]
         self.assertIn('self.notebook.AddPage(self.tab_prompts, "AI Descriptions")', main_text)
-        self.assertIn("Front door alert", main_text)
-        self.assertIn("Back door alert", main_text)
-        self.assertIn("Manual outside video check", main_text)
+        self.assertIn("Front door alert", prompt_source)
+        self.assertIn("Back door alert", prompt_source)
+        self.assertIn("Manual outside video check", prompt_source)
         self.assertIn("Save AI Description Settings", prompt_tab_text)
         self.assertIn("Reset AI Descriptions To Recommended Settings", prompt_tab_text)
         self.assertNotIn("profile", prompt_tab_text.lower())
@@ -2736,6 +2739,8 @@ class ViperReleaseTests(unittest.TestCase):
             + Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
+            + "\n"
+            + Path("viper_ui_prompts.py").read_text(encoding="utf-8")
         )
 
         forbidden_button_labels = [
@@ -7077,6 +7082,7 @@ Wireless:        No
         self.assertIn("viper_system_health.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_common.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_doorbell.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_ui_prompts.py", release_audit.REQUIRED_PACKAGE_FILES)
 
     def test_gitignore_excludes_local_esphome_flash_workdirs(self):
         root = Path(__file__).resolve().parents[1]
