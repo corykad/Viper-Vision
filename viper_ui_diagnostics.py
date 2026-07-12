@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -10,8 +11,10 @@ import viper_config as cfg
 import viper_diagnostics as diagnostics
 import viper_discovery as discovery
 import viper_ha_recovery
+import viper_health
 import viper_matter
 import viper_vision as vision
+from viper_runtime import format_recent_events, recent_events, record_event, safe_submit
 
 
 class DiagnosticsTabMixin:
@@ -708,4 +711,424 @@ class DiagnosticsTabMixin:
             dlg.ShowModal()
         finally:
             dlg.Destroy()
+
+    def setup_recent_events_tab(self):
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        box = wx.StaticBox(self.tab_recent_events, label="Recent Events")
+        bsizer = wx.StaticBoxSizer(box, wx.VERTICAL)
+
+        self.btn_refresh_recent_events = wx.Button(self.tab_recent_events, label="Refresh Recent Events", size=(-1, 40))
+        self.btn_refresh_recent_events.Bind(wx.EVT_BUTTON, self.on_refresh_recent_events)
+        self._describe_control(
+            self.btn_refresh_recent_events,
+            "Refresh Recent Events button. Updates the recent Viper event and Home Assistant recovery journal.",
+        )
+        bsizer.Add(self.btn_refresh_recent_events, 0, wx.ALL | wx.EXPAND, 5)
+
+        self.recent_events_txt = wx.TextCtrl(
+            self.tab_recent_events,
+            value=self._build_recent_events_text(),
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_WORDWRAP,
+            size=(-1, 520),
+        )
+        self._describe_control(
+            self.recent_events_txt,
+            "Recent Events. Read-only timeline of Viper actions, Home Assistant listener status, HVAC refreshes, broadcasts, and SmartThings recovery events.",
+        )
+        bsizer.Add(self.recent_events_txt, 1, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(bsizer, 1, wx.ALL | wx.EXPAND, 10)
+        self.tab_recent_events.SetSizer(sizer)
+
+    def _build_recent_events_text(self):
+        lines = ["Health History", ""]
+        lines.extend(self._build_health_history_lines())
+        lines.extend(["", "Recent Events", ""])
+        lines.extend(format_recent_events(limit=20))
+        health_events = viper_health.recent_health_events(limit=12)
+        lines.extend(["", "Recent Home Assistant recovery events:"])
+        if not health_events:
+            lines.append("No recent recovery events recorded.")
+        else:
+            for item in reversed(health_events):
+                lines.append(f"{item.get('timestamp')}: {item.get('event_type')} {item.get('status')}: {item.get('message')}")
+        return "\n".join(lines)
+
+    def _format_history_timestamp(self, value):
+        try:
+            number = float(value or 0)
+        except (TypeError, ValueError):
+            number = 0
+        if number <= 0:
+            return "never"
+        try:
+            return datetime.fromtimestamp(number).strftime("%Y-%m-%d %I:%M:%S %p")
+        except Exception:
+            return "unknown"
+
+    def _last_runtime_event(self, kinds):
+        wanted = {str(item).lower() for item in (kinds if isinstance(kinds, (list, tuple, set)) else [kinds])}
+        for event in recent_events(limit=40):
+            if str(event.get("kind") or "").lower() in wanted:
+                return event
+        return {}
+
+    def _last_health_recovery_event(self):
+        events = viper_health.recent_health_events(limit=20)
+        for item in reversed(events):
+            if str(item.get("event_type") or "").startswith("smartthings_reload"):
+                return item
+        return {}
+
+    def _build_health_history_lines(self):
+        listener = self.ha_listener.status() if hasattr(self, "ha_listener") else {}
+        last_doorbell = self._last_runtime_event("doorbell")
+        last_hvac = self._last_runtime_event("hvac")
+        last_broadcast = self._last_runtime_event("broadcast")
+        last_recovery = self._last_health_recovery_event()
+        last_routed = listener.get("last_routed_action") or {}
+        lines = [
+            f"HA listener: {'connected' if listener.get('connected') else 'not connected'}.",
+            f"Last connected: {self._format_history_timestamp(listener.get('last_connected_at'))}.",
+            f"Last reconnect attempt: {self._format_history_timestamp(listener.get('last_reconnect_at'))}.",
+            f"Reconnect count: {listener.get('reconnect_count', 0)}.",
+            f"Last successful HA poll: {self._format_history_timestamp(listener.get('last_successful_poll_at'))}.",
+            f"Last HA event: {listener.get('last_event_entity') or 'none'}; {listener.get('last_event_old_state') or ''} -> {listener.get('last_event_new_state') or ''}.",
+            f"Last routed action: {last_routed.get('type') if isinstance(last_routed, dict) else last_routed or 'none'}.",
+            f"Last doorbell action: {last_doorbell.get('time', 'none')}: {last_doorbell.get('message', 'none')}.",
+            f"Last HVAC action: {last_hvac.get('time', 'none')}: {last_hvac.get('message', 'none')}.",
+            f"Last broadcast: {last_broadcast.get('time', 'none')}: {last_broadcast.get('message', 'none')}.",
+            f"Last SmartThings reload: {self._format_history_timestamp(listener.get('last_smartthings_reload_at'))}; result: {listener.get('last_smartthings_reload_result') or 'none'}.",
+            f"SmartThings reloads in 24 hours: {listener.get('repeated_smartthings_reloads_24h', 0)}.",
+        ]
+        if last_recovery:
+            lines.append(
+                f"Last SmartThings recovery journal: {last_recovery.get('timestamp')}: "
+                f"{last_recovery.get('event_type')} {last_recovery.get('status')}: {last_recovery.get('message')}"
+            )
+        else:
+            lines.append("Last SmartThings recovery journal: none.")
+        return lines
+
+    def on_refresh_recent_events(self, event):
+        if hasattr(self, "recent_events_txt"):
+            self.recent_events_txt.SetValue(self._build_recent_events_text())
+        record_event("diagnostics", "Recent Events refreshed.")
+        self.notify("Recent Events refreshed.", priority=10, speak=False)
+
+    def setup_speed_tab(self):
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        box = wx.StaticBox(self.tab_speed, label="Speed Diagnostics")
+        bsizer = wx.StaticBoxSizer(box, wx.VERTICAL)
+
+        self.btn_refresh_speed = wx.Button(self.tab_speed, label="Refresh speed diagnostics", size=(-1, 40))
+        self.btn_refresh_speed.Bind(wx.EVT_BUTTON, self.on_refresh_speed)
+        self._describe_control(
+            self.btn_refresh_speed,
+            "Refresh speed diagnostics button. Reads the latest Viper log and summarizes doorbell, TTS, speaker, and chime timing.",
+        )
+        bsizer.Add(self.btn_refresh_speed, 0, wx.ALL | wx.EXPAND, 5)
+
+        self.speed_status_txt = wx.TextCtrl(
+            self.tab_speed,
+            value="Press Refresh speed diagnostics to read the latest timing log.",
+            style=wx.TE_MULTILINE | wx.TE_READONLY,
+            size=(-1, 420),
+        )
+        self._describe_control(
+            self.speed_status_txt,
+            "Speed diagnostics status. This read only box summarizes recent timing measurements from the Viper log.",
+        )
+        bsizer.Add(self.speed_status_txt, 1, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(bsizer, 1, wx.ALL | wx.EXPAND, 10)
+        self.tab_speed.SetSizer(sizer)
+
+    def setup_ha_status_tab(self):
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        box = wx.StaticBox(self.tab_ha_status, label="Home Assistant Status")
+        bsizer = wx.StaticBoxSizer(box, wx.VERTICAL)
+
+        self.btn_refresh_ha_status = wx.Button(self.tab_ha_status, label="Check Home Assistant status", size=(-1, 40))
+        self.btn_refresh_ha_status.Bind(wx.EVT_BUTTON, self.on_refresh_ha_status)
+        self._describe_control(
+            self.btn_refresh_ha_status,
+            "Check Home Assistant status button. Tests the Home Assistant connection and verifies configured speaker and automation entities.",
+        )
+        bsizer.Add(self.btn_refresh_ha_status, 0, wx.ALL | wx.EXPAND, 5)
+
+        self.ha_listener_status_txt = wx.StaticText(self.tab_ha_status, label="HA listener: starting")
+        self._describe_control(
+            self.ha_listener_status_txt,
+            "Home Assistant listener status. This tells whether Viper is directly listening for Home Assistant state changes.",
+        )
+        bsizer.Add(self.ha_listener_status_txt, 0, wx.ALL | wx.EXPAND, 5)
+
+        self.ha_status_txt = wx.TextCtrl(
+            self.tab_ha_status,
+            value="Press Check Home Assistant status to test Home Assistant and configured entities.",
+            style=wx.TE_MULTILINE | wx.TE_READONLY,
+            size=(-1, 420),
+        )
+        self._describe_control(
+            self.ha_status_txt,
+            "Home Assistant status. This read only box lists connection status, entity checks, and useful counts.",
+        )
+        bsizer.Add(self.ha_status_txt, 1, wx.ALL | wx.EXPAND, 5)
+        sizer.Add(bsizer, 1, wx.ALL | wx.EXPAND, 10)
+        self.tab_ha_status.SetSizer(sizer)
+
+    def on_refresh_speed(self, event):
+        self.speed_status_txt.SetValue("Reading speed log...")
+        safe_submit(self._run_speed_diagnostics)
+
+    def _run_speed_diagnostics(self):
+        log_path = cfg.DATA_DIR / "viper_full_debug.log"
+        if not log_path.exists():
+            wx.CallAfter(self.speed_status_txt.SetValue, f"No speed log found at {log_path}.")
+            return
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="ignore")
+            summary = self._build_speed_summary(text)
+        except Exception as e:
+            summary = f"Could not read speed log: {e}"
+        wx.CallAfter(self.speed_status_txt.SetValue, summary)
+
+    def _latest_trace_block(self, lines, trace):
+        if not trace:
+            return []
+        start = next((i for i, line in enumerate(lines) if trace in line and "webhook_received" in line), None)
+        if start is None:
+            start = next((i for i, line in enumerate(lines) if trace in line), None)
+        if start is None:
+            return []
+        end = min(len(lines), start + 180)
+        return lines[start:end]
+
+    def _first_float(self, pattern, text):
+        match = re.search(pattern, text)
+        return float(match.group(1)) if match else None
+
+    def _last_float(self, pattern, text):
+        matches = re.findall(pattern, text)
+        return float(matches[-1]) if matches else None
+
+    def _format_seconds(self, value):
+        return f"{value:.2f} seconds" if value is not None else "not found"
+
+    def _median(self, values):
+        if not values:
+            return None
+        values = sorted(values)
+        mid = len(values) // 2
+        if len(values) % 2:
+            return values[mid]
+        return (values[mid - 1] + values[mid]) / 2
+
+    def _build_speed_summary(self, text):
+        lines = text.splitlines()
+        traces = []
+        for trace in re.findall(r"trace=(doorbell-[a-z]+-\d+)", text):
+            if trace not in traces:
+                traces.append(trace)
+
+        output = ["Speed Diagnostics", f"Log: {cfg.DATA_DIR / 'viper_full_debug.log'}", ""]
+        latest = ""
+        for trace in reversed(traces):
+            if "fast_capture=" in "\n".join(self._latest_trace_block(lines, trace)):
+                latest = trace
+                break
+        if not latest and traces:
+            latest = traces[-1]
+        if not latest:
+            output.append("No doorbell traces found yet.")
+        else:
+            block_lines = self._latest_trace_block(lines, latest)
+            block = "\n".join(block_lines)
+            output.extend([
+                f"Latest doorbell trace: {latest}",
+                f"RTSP capture: {self._format_seconds(self._first_float(r'fast_capture=([0-9.]+)s', block))}",
+                f"Total to vision verdict: {self._format_seconds(self._first_float(r'total_to_verdict=([0-9.]+)s', block))}",
+                f"Audio submitted: {self._format_seconds(self._first_float(r'audio_notification_submitted=([0-9.]+)s', block))}",
+                f"Doorbell TTS path: {self._format_seconds(self._last_float(r'TTS path for doorbell:unknown completed in ([0-9.]+)s', block))}",
+                f"Home Assistant play request: {self._format_seconds(self._last_float(r'HA PLAY TIMING .* submitted in ([0-9.]+)s', block))}",
+                f"Sonos play request: {self._format_seconds(self._last_float(r'SONOS DISPATCH TIMING - .* submitted in ([0-9.]+)s', block))}",
+                f"Pushover sent: {'yes' if '[PUSHOVER]' in block else 'not found'}",
+            ])
+            engine_match = re.search(r"category=doorbell engine=([a-z]+)", block)
+            if engine_match:
+                output.append(f"Doorbell TTS engine: {engine_match.group(1)}")
+
+        output.append("")
+        output.append("Recent medians from the whole log:")
+        recent_doorbell_blocks = []
+        for trace in reversed(traces):
+            block = "\n".join(self._latest_trace_block(lines, trace))
+            if "fast_capture=" in block:
+                recent_doorbell_blocks.append(block)
+            if len(recent_doorbell_blocks) >= 8:
+                break
+        capture_values = [self._first_float(r"fast_capture=([0-9.]+)s", b) for b in recent_doorbell_blocks]
+        verdict_values = [self._first_float(r"total_to_verdict=([0-9.]+)s", b) for b in recent_doorbell_blocks]
+        capture_values = [v for v in capture_values if v is not None]
+        verdict_values = [v for v in verdict_values if v is not None]
+        gemini_tts_values = [float(v) for v in re.findall(r"Gemini TTS API response took: ([0-9.]+)s", text)][-20:]
+        ha_play_values = [float(v) for v in re.findall(r"HA PLAY TIMING .* submitted in ([0-9.]+)s", text)][-20:]
+        sonos_values = [float(v) for v in re.findall(r"SONOS .* TIMING - .* submitted in ([0-9.]+)s", text)][-20:]
+        output.extend([
+            f"Doorbell RTSP capture median: {self._format_seconds(self._median(capture_values))}",
+            f"Doorbell verdict median: {self._format_seconds(self._median(verdict_values))}",
+            f"Gemini TTS API median: {self._format_seconds(self._median(gemini_tts_values))}",
+            f"HA play request median: {self._format_seconds(self._median(ha_play_values))}",
+            f"Sonos play request median: {self._format_seconds(self._median(sonos_values))}",
+        ])
+        output.append("")
+        output.append("Notes:")
+        output.append("If doorbell TTS engine says google, the latest doorbell did not use Gemini voice.")
+        output.append("If HA play is above 1 second but Sonos is fast, the delay is likely Home Assistant media service response time.")
+        return "\n".join(output)
+
+    def on_refresh_ha_status(self, event):
+        self.ha_status_txt.SetValue("Checking Home Assistant...")
+        record_event("diagnostics", "Home Assistant status check started.")
+        safe_submit(self._run_ha_status_check)
+
+    def _run_ha_status_check(self):
+        try:
+            summary = self._build_ha_status_summary()
+        except Exception as e:
+            summary = f"Home Assistant status check failed: {e}"
+            record_event("diagnostics", summary)
+        else:
+            record_event("diagnostics", "Home Assistant status check finished.")
+        wx.CallAfter(self.ha_status_txt.SetValue, summary)
+        wx.CallAfter(self.refresh_system_health_display)
+
+    def _format_ha_status_timestamp(self, value):
+        try:
+            value = float(value or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value <= 0:
+            return "never"
+        return datetime.fromtimestamp(value).isoformat(timespec="seconds")
+
+    def _build_ha_status_summary(self):
+        ha_settings = cfg.get_ha_settings(self.config, include_env=True)
+        lines = [
+            "Home Assistant Status",
+            f"Host: {ha_settings.get('ha_ip') or 'not configured'}:{ha_settings.get('ha_port') or '8123'}",
+            "",
+        ]
+        listener_status = self.ha_listener.status() if hasattr(self, "ha_listener") else {}
+        lines.extend([
+            f"Viper HA listener enabled: {'yes' if self.config.get('ha_listener_enabled', True) else 'no'}",
+            f"Viper HA listener connected: {'yes' if listener_status.get('connected') else 'no'}",
+            f"Viper HA listener last error: {listener_status.get('last_error') or 'none'}",
+            f"Last HA event entity: {listener_status.get('last_event_entity') or 'none'}",
+            f"Last HA event raw state: {listener_status.get('last_event_old_state') or ''} -> {listener_status.get('last_event_new_state') or ''}",
+            f"Last HA event normalized: {listener_status.get('last_event_old_normalized') or ''} -> {listener_status.get('last_event_new_normalized') or ''}",
+            f"Last HA event routed actions: {listener_status.get('last_event_action_count', 0)}",
+            f"Last routed action: {listener_status.get('last_routed_action') or 'none'}",
+            f"Last fridge/freezer poll: {self._format_ha_status_timestamp(listener_status.get('last_fridge_poll_at'))}",
+            f"Last vacuum poll: {self._format_ha_status_timestamp(listener_status.get('last_cinderella_poll_at'))}",
+            f"Last successful poll: {self._format_ha_status_timestamp(listener_status.get('last_successful_poll_at'))}",
+            f"Reconnect count: {listener_status.get('reconnect_count', 0)}",
+            f"Poll failure count: {listener_status.get('poll_failure_count', 0)}",
+            f"Last poll error: {listener_status.get('last_poll_error') or 'none'}",
+            "",
+        ])
+
+        connection = discovery.test_ha_connection(
+            token=ha_settings.get("ha_token"),
+            ha_ip=ha_settings.get("ha_ip"),
+            ha_port=ha_settings.get("ha_port"),
+            timeout=5,
+        )
+        if not connection.get("ok"):
+            lines.append(f"Connection: failed. {connection.get('message') or connection.get('error')}")
+            return "\n".join(lines)
+        lines.append(f"Connection: ok. Entities visible: {connection.get('entity_count', 'unknown')}")
+
+        scan = discovery.discover_ha_entities(
+            token=ha_settings.get("ha_token"),
+            ha_ip=ha_settings.get("ha_ip"),
+            ha_port=ha_settings.get("ha_port"),
+            timeout=8,
+        )
+        if scan.get("ok"):
+            categories = scan.get("categories", {})
+            lines.extend([
+                "",
+                "Discovery counts:",
+                f"Media players: {len(categories.get('media_players', []))}",
+                f"Ring cameras: {len(categories.get('ring_cameras', []))}",
+                f"Door sensors: {len(categories.get('door_sensors', []))}",
+                f"Fridge sensors: {len(categories.get('fridge_sensors', []))}",
+                f"Freezer sensors: {len(categories.get('freezer_sensors', []))}",
+                f"Roborock entities: {len(categories.get('roborock_entities', []))}",
+            ])
+        else:
+            lines.append(f"Discovery: failed. {scan.get('message') or scan.get('error')}")
+
+        triggers = self.config.get("doorbell_triggers", {})
+        lines.extend(["", "Doorbell RTSP triggers:"])
+        for side in ("front", "back"):
+            trigger = triggers.get(side, {}) if isinstance(triggers, dict) else {}
+            label = "Front" if side == "front" else "Back"
+            lines.append(
+                f"{label}: enabled={bool(trigger.get('enabled'))}, source={trigger.get('source') or 'ha_state'}, "
+                f"trigger entity={trigger.get('trigger_entity_id') or 'not selected'}, "
+                f"RTSP={'set' if trigger.get('rtsp_url') else 'missing'}"
+            )
+
+        entity_ids = []
+        for name, speaker in self.config.get("speakers", {}).items():
+            if speaker.get("type") in {"ha", "alexa"} and speaker.get("id"):
+                entity_ids.append((f"Speaker {name}", speaker["id"]))
+        ice_entities = self._configured_ice_maker_entities()
+        for label, entity_id in [
+            ("Fridge door", "binary_sensor.refrigerator_fridge_door"),
+            ("Freezer door", "binary_sensor.refrigerator_freezer_door"),
+            ("Water filter", "sensor.refrigerator_water_filter_usage"),
+            ("Ice maker switch", ice_entities["switch"]),
+            ("Ice maker keep-on helper", ice_entities["keep_on"]),
+            ("Ice usage counter", ice_entities["counter"]),
+            ("Cinderella status", self.config.get("cinderella_status_entity") or "sensor.cinderella_status"),
+            ("Cinderella vacuum error", self.config.get("cinderella_vacuum_error_entity") or "sensor.cinderella_vacuum_error"),
+            ("Cinderella dock error", self.config.get("cinderella_dock_error_entity") or "sensor.cinderella_dock_dock_error"),
+            ("Cinderella mop drying", self.config.get("cinderella_mop_drying_entity") or "binary_sensor.cinderella_dock_mop_drying"),
+        ]:
+            entity_ids.append((label, entity_id))
+
+        lines.append("")
+        lines.append("Entity checks:")
+        seen = set()
+        for label, entity_id in entity_ids:
+            if entity_id in seen:
+                continue
+            seen.add(entity_id)
+            result = discovery.validate_entity_exists(
+                entity_id,
+                token=ha_settings.get("ha_token"),
+                ha_ip=ha_settings.get("ha_ip"),
+                ha_port=ha_settings.get("ha_port"),
+                timeout=5,
+            )
+            if result.get("ok") and result.get("exists"):
+                state = result.get("entity", {}).get("state", "unknown")
+                lines.append(f"{label}: found. {entity_id}. State: {state}")
+            elif result.get("ok"):
+                lines.append(f"{label}: missing. {entity_id}")
+            else:
+                lines.append(f"{label}: check failed. {entity_id}. {result.get('message') or result.get('error')}")
+
+        lines.append("")
+        lines.append("Configured speakers:")
+        speakers = self.config.get("speakers", {})
+        if not speakers:
+            lines.append("No speakers configured in Viper.")
+        else:
+            for name, speaker in speakers.items():
+                enabled = "enabled" if speaker.get("enabled", True) else "disabled"
+                lines.append(f"{name}: {speaker.get('type')} {speaker.get('id')} {enabled}")
+        return "\n".join(lines)
 

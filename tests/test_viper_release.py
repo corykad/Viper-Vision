@@ -3545,9 +3545,11 @@ class ViperReleaseTests(unittest.TestCase):
     def test_recent_events_text_combines_runtime_and_recovery_events(self):
         fake = main.ViperDashboard.__new__(main.ViperDashboard)
         fake.ha_listener = type("Listener", (), {"status": lambda _self: {"connected": True}})()
-        with patch.object(main, "recent_events", return_value=[]), \
-             patch.object(main, "format_recent_events", return_value=["Recent Viper events:", "now: hvac: refreshed"]), \
-             patch.object(main.viper_health, "recent_health_events", return_value=[
+        import viper_ui_diagnostics
+
+        with patch.object(viper_ui_diagnostics, "recent_events", return_value=[]), \
+             patch.object(viper_ui_diagnostics, "format_recent_events", return_value=["Recent Viper events:", "now: hvac: refreshed"]), \
+             patch.object(viper_ui_diagnostics.viper_health, "recent_health_events", return_value=[
                  {"timestamp": "2026-06-26T10:00:00+00:00", "event_type": "smartthings_reload_skipped", "status": "cooldown", "message": "Skipped reload."}
              ]):
             text = main.ViperDashboard._build_recent_events_text(fake)
@@ -3590,8 +3592,10 @@ class ViperReleaseTests(unittest.TestCase):
             {"timestamp": "2026-06-26T09:55:00+00:00", "event_type": "smartthings_reload", "status": "ok", "message": "Reloaded."}
         ]
 
-        with patch.object(main, "recent_events", return_value=runtime_events), \
-             patch.object(main.viper_health, "recent_health_events", return_value=health_events):
+        import viper_ui_diagnostics
+
+        with patch.object(viper_ui_diagnostics, "recent_events", return_value=runtime_events), \
+             patch.object(viper_ui_diagnostics.viper_health, "recent_health_events", return_value=health_events):
             text = "\n".join(main.ViperDashboard._build_health_history_lines(fake))
 
         self.assertIn("HA listener: connected.", text)
