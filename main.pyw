@@ -46,6 +46,7 @@ from viper_ui_fridge import FridgeTabMixin
 from viper_ui_hvac import HvacTabMixin
 from viper_ui_vacuum import VacuumTabMixin
 from viper_ui_diagnostics import DiagnosticsTabMixin
+import viper_ui_common as ui_common
 from viper_ui_setup_wizard import (
     DiscoveredSpeakersDialog,
     HomeAssistantFirstRunAssistantDialog,
@@ -60,6 +61,7 @@ import viper_vision as vision
 from viper_runtime import executor, format_recent_events, is_shutting_down, mark_startup_phase, recent_events, record_event, safe_submit, startup_summary_lines
 
 mark_startup_phase("main imports complete")
+AccessibleStatusText = ui_common.AccessibleStatusText
 
 AI_DESCRIPTION_STYLE_LABELS = {
     "balanced": "Balanced",
@@ -116,43 +118,6 @@ _web_looks_like_roborock = vacuum.web_looks_like_roborock
 _web_show_vacuum_setting = vacuum.web_show_vacuum_setting
 _is_hidden_vacuum_setting_entity_id = vacuum.is_hidden_vacuum_setting_entity_id
 _normalize_vacuum_cleaning_mode = vacuum.normalize_vacuum_cleaning_mode
-
-class AccessibleStatusText(wx.StaticText):
-    """Static status text with TextCtrl-like setters for existing update paths."""
-
-    def __init__(self, parent, value="", wrap_width=760, **kwargs):
-        self._wrap_width = wrap_width
-        self._value = str(value or "")
-        super().__init__(parent, label=self._value, **kwargs)
-        if self._wrap_width:
-            self.Wrap(self._wrap_width)
-
-    def SetLabel(self, label):
-        self._value = str(label or "")
-        super().SetLabel(self._value)
-        if self._wrap_width:
-            self.Wrap(self._wrap_width)
-        parent = self.GetParent()
-        if parent:
-            try:
-                parent.Layout()
-            except Exception:
-                pass
-
-    def SetValue(self, value):
-        self.SetLabel(value)
-
-    def GetValue(self):
-        return self._value
-
-    def SetInsertionPointEnd(self):
-        pass
-
-    def ShowPosition(self, pos):
-        pass
-
-    def GetLastPosition(self):
-        return len(self._value)
 
 # --- FLASK INIT ---
 def _resolve_template_dir() -> str:
@@ -4099,7 +4064,8 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         elif key == "speakers":
             self.on_test_diagnostics_manual_broadcast(event)
         elif key == "fridge":
-            self.on_test_diagnostics_chime(event, "fridge_open")
+            self._open_devices_page("fridge")
+            self.notify("Opened Refrigerator & Ice. Use the fridge/freezer chime test buttons there.", priority=10)
         elif key == "vacuum":
             self._open_devices_page("vacuum")
             self.on_refresh_vacuum(event)
@@ -4901,19 +4867,18 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         return choice
 
     def _describe_control(self, control, description):
-        control.SetName(description)
-        control.SetToolTip(description)
-        if os.getenv("VIPER_FOCUS_LOG", "").strip().lower() in {"1", "true", "yes", "on"}:
-            try:
-                control.Bind(wx.EVT_SET_FOCUS, self._on_control_focus_for_diagnostics)
-            except Exception:
-                pass
+        ui_common.describe_control(
+            control,
+            description,
+            focus_handler=self._on_control_focus_for_diagnostics,
+            bind_focus=ui_common.should_log_focus(),
+        )
 
     def _make_accessible_status_text(self, parent, **kwargs):
-        return AccessibleStatusText(parent, **kwargs)
+        return ui_common.make_accessible_status_text(parent, **kwargs)
 
     def _safe_submit(self, fn, *args, **kwargs):
-        return safe_submit(fn, *args, **kwargs)
+        return ui_common.submit_ui_task(fn, *args, **kwargs)
 
     def _normalize_broadcast_mode(self, mode):
         return _normalize_broadcast_mode(mode)

@@ -17,9 +17,11 @@ import viper_health
 
 
 STATE_FILE = cfg.DATA_DIR / "ha_recovery_state.json"
+WATCHDOG_PAUSE_FILE = cfg.DATA_DIR / "ha_watchdog_paused.txt"
 EVENT_TYPE = "ha_vbox_recovery"
 VM_NAME = ha_vm.HA_VM_NAME
 DEFAULT_BRIDGE_INF = Path(r"C:\Program Files\Oracle\VirtualBox\drivers\network\netlwf\VBoxNetLwf.inf")
+HOST_HARDENING_SCRIPT = Path(__file__).with_name("harden_home_assistant_virtualbox_host.ps1")
 RESCUE_CONTINUE_SCANCODES = ["1d", "20", "a0", "9d"]
 DEFAULT_PAUSE_MINUTES = 120
 
@@ -117,6 +119,23 @@ def repair_virtualbox_bridge():
         return {"ok": False, "message": "VirtualBox bridge repair is only available on Windows."}
     if not is_admin():
         return {"ok": False, "message": "Administrator rights are required to repair the VirtualBox bridged networking driver."}
+
+    hardening = run_virtualbox_host_hardening()
+    if hardening.get("ok"):
+        bridged = get_bridged_adapters()
+        ok = bool(bridged.get("ok"))
+        return {
+            "ok": ok,
+            "message": (
+                "VirtualBox host hardening completed and bridged networking is available."
+                if ok
+                else bridged.get("message", "VirtualBox host hardening completed, but bridged networking is still unavailable.")
+            ),
+            "steps": [{"command": "harden_home_assistant_virtualbox_host.ps1", "ok": True, "output": hardening.get("output", "")[:500]}],
+            "bridged": bridged,
+            "hardening": hardening,
+        }
+
     if not DEFAULT_BRIDGE_INF.exists():
         return {"ok": False, "message": f"VirtualBox bridge driver INF was not found: {DEFAULT_BRIDGE_INF}"}
 
@@ -140,6 +159,39 @@ def repair_virtualbox_bridge():
         "message": "VirtualBox bridged networking is available again." if ok else bridged.get("message", "VirtualBox bridge repair did not expose any bridged adapters."),
         "steps": steps,
         "bridged": bridged,
+    }
+
+
+def run_virtualbox_host_hardening(*, register_tasks=False):
+    if os.name != "nt":
+        return {"ok": False, "message": "VirtualBox host hardening is only available on Windows."}
+    if not is_admin():
+        return {"ok": False, "message": "Administrator rights are required to run VirtualBox host hardening."}
+    if not HOST_HARDENING_SCRIPT.exists():
+        return {"ok": False, "message": f"VirtualBox host hardening script was not found: {HOST_HARDENING_SCRIPT}"}
+
+    args = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(HOST_HARDENING_SCRIPT),
+    ]
+    if register_tasks:
+        args.append("-RegisterTasks")
+
+    result = _run(args, timeout=180)
+    output = result.get("output") or ""
+    return {
+        "ok": bool(result.get("ok")),
+        "returncode": result.get("returncode"),
+        "message": (
+            "VirtualBox host hardening completed."
+            if result.get("ok")
+            else (output[:500] or "VirtualBox host hardening failed.")
+        ),
+        "output": output[-2000:],
     }
 
 
@@ -205,6 +257,10 @@ def diagnose(config_data=None):
         "vboxsup": _service_state("vboxsup"),
         "VBoxNetLwf": _service_state("VBoxNetLwf"),
     }
+    broken_services = [
+        name for name, state in services.items()
+        if state not in {"running", "not_applicable"}
+    ]
 
     if ha_health.get("ok"):
         state = "healthy"
@@ -213,6 +269,10 @@ def diagnose(config_data=None):
     elif not vbox_status.get("installed"):
         state = "virtualbox_missing"
         message = vbox_status.get("message") or "VirtualBox is not installed."
+        severity = "broken"
+    elif broken_services:
+        state = "vbox_driver_broken"
+        message = f"VirtualBox driver/service problem: {', '.join(f'{name}={services[name]}' for name in broken_services)}."
         severity = "broken"
     elif not bridged.get("ok"):
         state = "vbox_bridge_broken"
@@ -314,7 +374,7 @@ def maintenance_pause_status(state=None, *, now=None):
     }
 
 
-def pause_recovery(minutes=DEFAULT_PAUSE_MINUTES, reason="Home Assistant maintenance", *, state_path=STATE_FILE):
+def pause_recovery(minutes=DEFAULT_PAUSE_MINUTES, reason="Home Assistant maintenance", *, state_path=STATE_FILE, pause_path=WATCHDOG_PAUSE_FILE):
     try:
         minutes = int(minutes)
     except (TypeError, ValueError):
@@ -332,10 +392,16 @@ def pause_recovery(minutes=DEFAULT_PAUSE_MINUTES, reason="Home Assistant mainten
         }
     )
     _save_state(state, state_path)
+    try:
+        pause_file = Path(pause_path)
+        pause_file.parent.mkdir(parents=True, exist_ok=True)
+        pause_file.write_text(until.astimezone().strftime("%Y-%m-%d %H:%M:%S"), encoding="ascii")
+    except OSError:
+        logging.warning("[HA RECOVERY] Could not write watchdog pause file.", exc_info=True)
     return maintenance_pause_status(state, now=now)
 
 
-def resume_recovery(*, state_path=STATE_FILE):
+def resume_recovery(*, state_path=STATE_FILE, pause_path=WATCHDOG_PAUSE_FILE):
     state = _load_state(state_path)
     state.update(
         {
@@ -350,6 +416,10 @@ def resume_recovery(*, state_path=STATE_FILE):
         }
     )
     _save_state(state, state_path)
+    try:
+        Path(pause_path).unlink(missing_ok=True)
+    except OSError:
+        logging.warning("[HA RECOVERY] Could not remove watchdog pause file.", exc_info=True)
     return maintenance_pause_status(state)
 
 
@@ -494,15 +564,15 @@ def repair_once(*, push=True, notifier=send_pushover, state_path=STATE_FILE, res
 
     action = "manual"
     repair_message = "Manual repair required."
-    if before["state"] == "vbox_bridge_broken":
-        action = "repair_bridge"
-        repair_message = "Repairing the VirtualBox bridged networking driver."
+    if before["state"] in {"vbox_bridge_broken", "vbox_driver_broken"}:
+        action = "repair_virtualbox_host"
+        repair_message = "Repairing the VirtualBox host drivers and bridged networking."
         _notify("Viper HA recovery started", repair_message, push=push, notifier=notifier)
         bridge_result = repair_virtualbox_bridge()
         if bridge_result.get("ok"):
-            ensure_vm_uses_available_bridge()
             vm_state = get_vm_state()
             if vm_state.get("state") in {"poweroff", "saved", "aborted"}:
+                ensure_vm_uses_available_bridge()
                 _vbox(["startvm", VM_NAME, "--type", "headless"], timeout=60)
         else:
             after = diagnose()
@@ -518,7 +588,7 @@ def repair_once(*, push=True, notifier=send_pushover, state_path=STATE_FILE, res
         result = _vbox(["startvm", VM_NAME, "--type", "headless"], timeout=60)
         if not result["ok"]:
             classified = classify_vbox_start_error(result["output"])
-            if classified["state"] == "vbox_bridge_broken":
+            if classified["state"] in {"vbox_bridge_broken", "vbox_driver_broken"}:
                 bridge_result = repair_virtualbox_bridge()
                 if bridge_result.get("ok"):
                     ensure_vm_uses_available_bridge()

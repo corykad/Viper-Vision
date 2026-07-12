@@ -278,6 +278,32 @@ def route_state_change(config, entity_id, old_state, new_state):
     return actions
 
 
+def _configured_doorbell_entity_ids(config):
+    entity_ids = set()
+    for trigger in normalize_doorbell_triggers(config).values():
+        if not trigger.get("enabled") or trigger.get("source") != "ha_state":
+            continue
+        for entity_id in trigger.get("trigger_entity_ids") or [trigger.get("trigger_entity_id")]:
+            entity_id = str(entity_id or "").strip()
+            if entity_id:
+                entity_ids.add(entity_id)
+    return entity_ids
+
+
+def should_log_state_change_at_info(config, entity_id, actions=None):
+    """Keep the normal log focused on routed alerts and configured trigger entities."""
+    entity_id = str(entity_id or "").strip()
+    if actions:
+        return True
+    if entity_id in FRIDGE_DOOR_MESSAGES:
+        return True
+    if entity_id in cinderella_entities(config).values():
+        return True
+    if entity_id in _configured_doorbell_entity_ids(config):
+        return True
+    return False
+
+
 def websocket_url(ha_ip, ha_port):
     host = str(ha_ip or "").strip()
     port = str(ha_port or "8123").strip()
@@ -714,7 +740,8 @@ class HomeAssistantEventListener:
             last_event_new_normalized=new_norm,
             last_event_action_count=len(actions),
         )
-        logging.info(
+        log = logging.info if should_log_state_change_at_info(config, entity_id, actions) else logging.debug
+        log(
             "[HA LISTENER] event entity=%s raw_old=%s raw_new=%s norm_old=%s norm_new=%s actions=%s",
             entity_id,
             old_raw,

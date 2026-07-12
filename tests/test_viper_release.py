@@ -1206,6 +1206,7 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_short_statuses_use_accessible_static_text_not_read_only_edit_boxes(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
+        common_text = Path("viper_ui_common.py").read_text(encoding="utf-8")
         main_dashboard = (
             main_text.split("class ViperDashboard", 1)[1]
             + "\n"
@@ -1216,7 +1217,8 @@ class ViperReleaseTests(unittest.TestCase):
             + Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
         )
 
-        self.assertIn("class AccessibleStatusText(wx.StaticText):", main_text)
+        self.assertIn("class AccessibleStatusText(wx.StaticText):", common_text)
+        self.assertIn("AccessibleStatusText = ui_common.AccessibleStatusText", main_text)
         expected_statuses = [
             "self.status_display = AccessibleStatusText",
             "self.video_analysis_status_txt = AccessibleStatusText",
@@ -1812,9 +1814,12 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn('label="Test Front Camera Frame"', tab_text)
         self.assertIn('label="Test Manual Broadcast"', tab_text)
         self.assertIn('label="Test Pushover"', tab_text)
-        self.assertIn('label="Simulate Fridge Event"', tab_text)
-        self.assertIn('label="Simulate Vacuum Event"', tab_text)
         self.assertIn('label="Save HA Snapshot"', tab_text)
+        self.assertNotIn('label="Test Fridge Chime"', tab_text)
+        self.assertNotIn('label="Test Freezer Chime"', tab_text)
+        self.assertNotIn('label="Simulate Fridge Event"', tab_text)
+        self.assertNotIn('label="Simulate Vacuum Event"', tab_text)
+        self.assertNotIn('label="Reload Refrigerator SmartThings"', tab_text)
 
     def test_safe_smoke_report_points_to_first_broken_item(self):
         fake = main.ViperDashboard.__new__(main.ViperDashboard)
@@ -1850,16 +1855,24 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("def on_test_diagnostics_manual_broadcast", main_text)
         self.assertIn("def on_test_diagnostics_pushover", main_text)
         self.assertIn("def on_test_ha_watchdog_push", main_text)
-        self.assertIn("def on_test_diagnostics_chime", main_text)
-        self.assertIn("def on_simulate_diagnostics_fridge_event", main_text)
-        self.assertIn("def on_simulate_diagnostics_vacuum_event", main_text)
         self.assertIn("def on_save_diagnostics_ha_snapshot", main_text)
         self.assertIn('_dispatch_broadcast_message(message, channel="manual")', main_text)
         self.assertIn("audio._send_text_pushover", main_text)
         self.assertIn("viper_ha_recovery.send_recovery_test_push", main_text)
-        self.assertIn("audio.play_broadcast_chime(chime, channel)", main_text)
-        self.assertIn("route_state_change(self.config", main_text)
         self.assertIn("save_ha_integration_snapshot", main_text)
+        self.assertNotIn("def on_test_diagnostics_chime", main_text)
+        self.assertNotIn("def on_simulate_diagnostics_fridge_event", main_text)
+        self.assertNotIn("def on_simulate_diagnostics_vacuum_event", main_text)
+
+    def test_refrigerator_tab_owns_fridge_chimes_and_smartthings_reload(self):
+        fridge_text = Path("viper_ui_fridge.py").read_text(encoding="utf-8")
+        diagnostics_text = Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
+
+        self.assertIn("def _on_test_fridge_chime", fridge_text)
+        self.assertIn('label="Reload Refrigerator SmartThings"', fridge_text)
+        self.assertIn("def on_reload_refrigerator_smartthings", fridge_text)
+        self.assertIn("manual_smartthings_reload", fridge_text)
+        self.assertNotIn("on_reload_diagnostics_fridge_smartthings", diagnostics_text)
 
     def test_diagnostics_pushover_button_sends_test_notification(self):
         fake = main.ViperDashboard.__new__(main.ViperDashboard)
@@ -1877,41 +1890,6 @@ class ViperReleaseTests(unittest.TestCase):
 
         send_push.assert_called_once()
         self.assertEqual(fake.messages, ["Pushover test sent. Check your phone."])
-
-    def test_diagnostics_fridge_simulation_routes_and_dispatches(self):
-        fake = main.ViperDashboard.__new__(main.ViperDashboard)
-        fake.config = cfg.validate_and_normalize_config({})
-        fake.messages = []
-        fake._finish_diagnostics_action = lambda message: fake.messages.append(message)
-        fake._dispatch_broadcast_message = lambda message, channel="manual": {
-            "ok": True,
-            "message": f"{channel}:{message}",
-        }
-
-        with patch.object(main.wx, "CallAfter", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)), \
-             patch.object(main.discovery, "validate_entity_exists", return_value={"ok": True, "exists": True, "entity": {"state": "off"}}):
-            main.ViperDashboard._run_diagnostics_fridge_event_simulation(fake)
-
-        self.assertEqual(len(fake.messages), 1)
-        self.assertIn("Fridge event simulation", fake.messages[0])
-        self.assertIn("Route logic: ok", fake.messages[0])
-        self.assertIn("dispatch ok", fake.messages[0])
-
-    def test_diagnostics_vacuum_simulation_routes_and_dispatches(self):
-        fake = main.ViperDashboard.__new__(main.ViperDashboard)
-        fake.config = cfg.validate_and_normalize_config({})
-        fake.messages = []
-        fake._finish_diagnostics_action = lambda message: fake.messages.append(message)
-        fake._dispatch_cinderella_event = lambda event, error="", source="vacuum": event == "departure"
-
-        with patch.object(main.wx, "CallAfter", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)), \
-             patch.object(main.discovery, "validate_entity_exists", return_value={"ok": True, "exists": True, "entity": {"state": "idle"}}):
-            main.ViperDashboard._run_diagnostics_vacuum_event_simulation(fake)
-
-        self.assertEqual(len(fake.messages), 1)
-        self.assertIn("Vacuum event simulation", fake.messages[0])
-        self.assertIn("Route logic: ok", fake.messages[0])
-        self.assertIn("dispatch ok", fake.messages[0])
 
     def test_filter_check_uses_runtime_ha_settings_and_recovers_address(self):
         fake = main.ViperDashboard.__new__(main.ViperDashboard)
@@ -2712,7 +2690,15 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_vacuum_settings_use_slow_service_timeout_and_clear_timeout_message(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
-        service_text = main_text + "\n" + Path("viper_ui_fridge.py").read_text(encoding="utf-8") + "\n" + Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
+        service_text = (
+            main_text
+            + "\n"
+            + Path("viper_ui_fridge.py").read_text(encoding="utf-8")
+            + "\n"
+            + Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
+            + "\n"
+            + Path("viper_ha_client.py").read_text(encoding="utf-8")
+        )
         compact = re.sub(r"\s+", " ", service_text)
 
         self.assertIn('"select/select_option", {"entity_id": entity_id, "option": option}, f"Set {entity_id} to {option}.", timeout=30', compact)
@@ -4762,6 +4748,33 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertEqual(actions, [{"type": "cinderella", "event": "departure", "error": "", "source": "vacuum"}])
         self.assertEqual(listener.status()["last_action_at"] > 0, True)
 
+    def test_ha_listener_only_info_logs_important_state_changes(self):
+        config = cfg.validate_and_normalize_config(
+            {
+                "cinderella_enabled": True,
+                "doorbell_triggers": {
+                    "front": {
+                        "enabled": True,
+                        "source": "ha_state",
+                        "trigger_entity_id": "binary_sensor.front_door_motion",
+                    }
+                },
+            }
+        )
+
+        self.assertFalse(ha_listener.should_log_state_change_at_info(config, "sensor.cinderella_cleaning_time", []))
+        self.assertFalse(ha_listener.should_log_state_change_at_info(config, "image.cinderella_map_0", []))
+        self.assertTrue(ha_listener.should_log_state_change_at_info(config, "sensor.cinderella_status", []))
+        self.assertTrue(ha_listener.should_log_state_change_at_info(config, "binary_sensor.refrigerator_fridge_door", []))
+        self.assertTrue(ha_listener.should_log_state_change_at_info(config, "binary_sensor.front_door_motion", []))
+        self.assertTrue(
+            ha_listener.should_log_state_change_at_info(
+                config,
+                "sensor.cinderella_cleaning_time",
+                [{"type": "cinderella", "event": "departure", "error": "", "source": "vacuum"}],
+            )
+        )
+
     def test_ha_listener_vacuum_poll_catches_missed_transition(self):
         actions = []
         listener = ha_listener.HomeAssistantEventListener(
@@ -6510,6 +6523,10 @@ class ViperReleaseTests(unittest.TestCase):
         watch = (root / "watch_ha_health.ps1").read_text(encoding="utf-8")
         harden = (root / "harden_ha_virtualbox.ps1").read_text(encoding="utf-8")
         vm_watchdog = (root / "watch_home_assistant_vm.ps1").read_text(encoding="utf-8")
+        vm_boot = (root / "start_home_assistant_vm_safe.ps1").read_text(encoding="utf-8")
+        host_hardening = (root / "harden_home_assistant_virtualbox_host.ps1").read_text(encoding="utf-8")
+        ha_recovery_text = (root / "viper_ha_recovery.py").read_text(encoding="utf-8")
+        spec = (root / "ViperVision.spec").read_text(encoding="utf-8")
 
         self.assertIn("core_hung_vm_alive", watch)
         self.assertIn("4357", watch)
@@ -6522,6 +6539,47 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("--ha-recovery-once", vm_watchdog)
         self.assertIn("--compact", vm_watchdog)
         self.assertIn("Viper HA recovery engine", vm_watchdog)
+        self.assertIn("ha_watchdog_paused.txt", vm_watchdog)
+        self.assertIn("ha_vm_watchdog.lock", vm_watchdog)
+        self.assertIn("MinimumRunIntervalSeconds", vm_watchdog)
+        self.assertIn("Skipping watchdog run", vm_watchdog)
+        self.assertIn("VBoxSDS", vm_boot)
+        self.assertIn("vboxsup", vm_boot)
+        self.assertIn("VBoxSup.inf", vm_boot)
+        self.assertIn("harden_home_assistant_virtualbox_host.ps1", vm_boot)
+        self.assertIn("startvm", vm_boot)
+        self.assertIn('("start_home_assistant_vm_safe.ps1", ".")', spec)
+        self.assertIn('("harden_home_assistant_virtualbox_host.ps1", ".")', spec)
+        self.assertIn('("viper_heat_pump_alexa.yaml", ".")', spec)
+        self.assertIn("HiberbootEnabled", host_hardening)
+        self.assertIn("VBoxNetLwf.inf", host_hardening)
+        self.assertIn("VBoxSup.inf", host_hardening)
+        self.assertIn("oracle_VBoxNetLwf", host_hardening)
+        self.assertIn("Realtek PCIe GbE Family Controller", host_hardening)
+        self.assertIn("Register-ScheduledTask", host_hardening)
+        self.assertIn("run_virtualbox_host_hardening", ha_recovery_text)
+        self.assertIn("harden_home_assistant_virtualbox_host.ps1", ha_recovery_text)
+        self.assertIn("vbox_driver_broken", ha_recovery_text)
+
+    def test_heat_pump_airflow_package_uses_preset_modes_without_duplicate_ir(self):
+        root = Path(__file__).resolve().parents[1]
+        text = (root / "viper_heat_pump_alexa.yaml").read_text(encoding="utf-8")
+
+        self.assertIn('name: "Airflow Office"', text)
+        self.assertIn("preset_modes:", text)
+        self.assertIn("- auto", text)
+        self.assertIn("- quiet", text)
+        self.assertIn("- low", text)
+        self.assertIn("- medium", text)
+        self.assertIn("- high", text)
+        self.assertIn("Ignored Airflow Office turn_on; speed commands send the actual IR.", text)
+        self.assertIn("climate.turn_off", text)
+        self.assertIn("requested_fan_mode == 'off'", text)
+        self.assertIn("preset_mode == 'off'", text)
+        self.assertIn("requested_fan_mode", text)
+        self.assertIn("!= requested_fan_mode", text)
+        self.assertIn("!= preset_mode", text)
+        self.assertNotIn("switch.office_airflow_low", text)
 
     def test_ha_recovery_classifies_virtualbox_driver_failure(self):
         result = ha_recovery.classify_vbox_start_error(
@@ -6690,8 +6748,19 @@ Wireless:        No
             )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["action"], "repair_bridge")
+        self.assertEqual(result["action"], "repair_virtualbox_host")
         self.assertIn(["startvm", ha_recovery.VM_NAME, "--type", "headless"], vbox_calls)
+
+    def test_ha_recovery_host_hardening_uses_powershell_script(self):
+        with patch.object(ha_recovery, "is_admin", return_value=True), \
+             patch.object(ha_recovery, "_run", return_value={"ok": True, "returncode": 0, "output": "finished"}) as run:
+            result = ha_recovery.run_virtualbox_host_hardening(register_tasks=True)
+
+        self.assertTrue(result["ok"])
+        args = run.call_args.args[0]
+        self.assertIn("powershell.exe", args)
+        self.assertIn("harden_home_assistant_virtualbox_host.ps1", " ".join(args))
+        self.assertIn("-RegisterTasks", args)
 
     def test_ha_recovery_sends_continue_boot_once_before_reset(self):
         diagnosis = {
@@ -6724,14 +6793,17 @@ Wireless:        No
              patch.object(ha_recovery, "_vbox") as vbox, \
              patch.object(ha_recovery, "_record", return_value={}):
             state_path = Path(tmpdir) / "state.json"
-            pause = ha_recovery.pause_recovery(60, "HA update", state_path=state_path)
+            pause_path = Path(tmpdir) / "ha_watchdog_paused.txt"
+            pause = ha_recovery.pause_recovery(60, "HA update", state_path=state_path, pause_path=pause_path)
             result = ha_recovery.repair_once(
                 notifier=lambda title, message: True,
                 state_path=state_path,
                 boot_wait_seconds=0,
             )
+            pause_file_exists = pause_path.exists()
 
         self.assertTrue(pause["active"])
+        self.assertTrue(pause_file_exists)
         self.assertTrue(result["ok"])
         self.assertTrue(result["paused"])
         self.assertEqual(result["action"], "paused")
@@ -6741,15 +6813,17 @@ Wireless:        No
     def test_ha_recovery_resume_clears_pause_and_failures(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             state_path = Path(tmpdir) / "state.json"
-            ha_recovery.pause_recovery(60, "HA update", state_path=state_path)
+            pause_path = Path(tmpdir) / "ha_watchdog_paused.txt"
+            ha_recovery.pause_recovery(60, "HA update", state_path=state_path, pause_path=pause_path)
             state = json.loads(state_path.read_text(encoding="utf-8"))
             state.update({"failures": 5, "last_problem_state": "ha_core_hung", "notified_problem": True, "rescue_continue_tried": True})
             state_path.write_text(json.dumps(state), encoding="utf-8")
 
-            result = ha_recovery.resume_recovery(state_path=state_path)
+            result = ha_recovery.resume_recovery(state_path=state_path, pause_path=pause_path)
             saved = json.loads(state_path.read_text(encoding="utf-8"))
 
         self.assertFalse(result["active"])
+        self.assertFalse(pause_path.exists())
         self.assertEqual(saved["failures"], 0)
         self.assertEqual(saved["last_problem_state"], "")
         self.assertFalse(saved["notified_problem"])
@@ -6841,6 +6915,22 @@ Wireless:        No
         self.assertEqual(args[1], "http://homeassistant:8123/api/states")
         self.assertTrue(kwargs["headers"]["Authorization"].startswith("Bearer "))
         self.assertEqual(kwargs["timeout"], 3)
+
+    def test_shared_ha_client_result_helpers_return_ui_friendly_errors(self):
+        config = cfg.validate_and_normalize_config({"ha_ip": "homeassistant", "ha_port": "8123", "ha_token": "token"})
+        not_found = ha_client.requests.exceptions.HTTPError("not found")
+        not_found.response = type("Response", (), {"status_code": 404})()
+
+        with patch.object(ha_client, "get_state", side_effect=not_found):
+            state = ha_client.get_entity_state_result(config, "sensor.missing")
+        self.assertTrue(state["ok"])
+        self.assertFalse(state["exists"])
+
+        with patch.object(ha_client, "request", side_effect=ha_client.requests.exceptions.ReadTimeout()):
+            result = ha_client.call_service_result(config, "select/select_option", {"entity_id": "select.test"}, timeout=30)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "timeout")
+        self.assertIn("30 seconds", result["message"])
 
     def test_hvac_uses_shared_home_assistant_client(self):
         with patch.object(ha_client, "get_states", return_value={"climate.office": {"state": "off"}}) as get_states:
@@ -6959,6 +7049,7 @@ Wireless:        No
         self.assertFalse(audit.failures)
         self.assertIn("viper_ha_client.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_system_health.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_ui_common.py", release_audit.REQUIRED_PACKAGE_FILES)
 
     def test_gitignore_excludes_local_esphome_flash_workdirs(self):
         root = Path(__file__).resolve().parents[1]

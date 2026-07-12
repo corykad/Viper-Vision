@@ -9,9 +9,7 @@ import viper_audio as audio
 import viper_config as cfg
 import viper_diagnostics as diagnostics
 import viper_discovery as discovery
-import viper_health
 import viper_ha_recovery
-import viper_ha_listener as ha_listener
 import viper_matter
 import viper_vision as vision
 
@@ -48,7 +46,12 @@ class DiagnosticsTabMixin:
         watchdog_buttons = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_refresh_ha_watchdog = wx.Button(self.tab_diagnostics_overview, label="Refresh HA Watchdog", size=(-1, 40))
         self.btn_test_ha_watchdog_push = wx.Button(self.tab_diagnostics_overview, label="Test HA Recovery Push", size=(-1, 40))
-        self.btn_pause_ha_watchdog = wx.Button(self.tab_diagnostics_overview, label="Pause HA Recovery 2 Hours", size=(-1, 40))
+        self.ha_watchdog_pause_choice = wx.Choice(
+            self.tab_diagnostics_overview,
+            choices=["30 minutes", "1 hour", "2 hours", "4 hours", "8 hours", "Until tomorrow"],
+        )
+        self.ha_watchdog_pause_choice.SetSelection(2)
+        self.btn_pause_ha_watchdog = wx.Button(self.tab_diagnostics_overview, label="Pause HA Recovery", size=(-1, 40))
         self.btn_resume_ha_watchdog = wx.Button(self.tab_diagnostics_overview, label="Resume HA Recovery", size=(-1, 40))
         self.btn_refresh_ha_watchdog.Bind(wx.EVT_BUTTON, self.on_refresh_ha_watchdog)
         self.btn_test_ha_watchdog_push.Bind(wx.EVT_BUTTON, self.on_test_ha_watchdog_push)
@@ -56,10 +59,12 @@ class DiagnosticsTabMixin:
         self.btn_resume_ha_watchdog.Bind(wx.EVT_BUTTON, self.on_resume_ha_watchdog)
         self._describe_control(self.btn_refresh_ha_watchdog, "Refresh HA Watchdog button. Checks the scheduled watchdog task, last run result, and latest recovery state.")
         self._describe_control(self.btn_test_ha_watchdog_push, "Test HA Recovery Push button. Sends a safe Pushover test using the same path as the Home Assistant recovery watchdog.")
-        self._describe_control(self.btn_pause_ha_watchdog, "Pause HA Recovery 2 Hours button. Temporarily disables automatic Home Assistant recovery while you run updates or maintenance.")
+        self._describe_control(self.ha_watchdog_pause_choice, "HA Recovery pause length. Choose how long Viper should leave Home Assistant alone during manual shutdowns or updates.")
+        self._describe_control(self.btn_pause_ha_watchdog, "Pause HA Recovery button. Temporarily disables automatic Home Assistant repair while you manually shut down, update, or restart Home Assistant.")
         self._describe_control(self.btn_resume_ha_watchdog, "Resume HA Recovery button. Re-enables automatic Home Assistant recovery after maintenance.")
         watchdog_buttons.Add(self.btn_refresh_ha_watchdog, 1, wx.ALL | wx.EXPAND, 5)
         watchdog_buttons.Add(self.btn_test_ha_watchdog_push, 1, wx.ALL | wx.EXPAND, 5)
+        watchdog_buttons.Add(self.ha_watchdog_pause_choice, 1, wx.ALL | wx.EXPAND, 5)
         watchdog_buttons.Add(self.btn_pause_ha_watchdog, 1, wx.ALL | wx.EXPAND, 5)
         watchdog_buttons.Add(self.btn_resume_ha_watchdog, 1, wx.ALL | wx.EXPAND, 5)
         watchdog_sizer.Add(watchdog_buttons, 0, wx.EXPAND)
@@ -83,11 +88,6 @@ class DiagnosticsTabMixin:
         self.btn_test_back_camera_diag = wx.Button(self.tab_diagnostics_overview, label="Test Back Camera Frame", size=(-1, 40))
         self.btn_test_manual_broadcast_diag = wx.Button(self.tab_diagnostics_overview, label="Test Manual Broadcast", size=(-1, 40))
         self.btn_test_pushover_diag = wx.Button(self.tab_diagnostics_overview, label="Test Pushover", size=(-1, 40))
-        self.btn_test_fridge_chime_diag = wx.Button(self.tab_diagnostics_overview, label="Test Fridge Chime", size=(-1, 40))
-        self.btn_test_freezer_chime_diag = wx.Button(self.tab_diagnostics_overview, label="Test Freezer Chime", size=(-1, 40))
-        self.btn_sim_fridge_event_diag = wx.Button(self.tab_diagnostics_overview, label="Simulate Fridge Event", size=(-1, 40))
-        self.btn_sim_vacuum_event_diag = wx.Button(self.tab_diagnostics_overview, label="Simulate Vacuum Event", size=(-1, 40))
-        self.btn_reload_fridge_smartthings_diag = wx.Button(self.tab_diagnostics_overview, label="Reload Refrigerator SmartThings", size=(-1, 40))
         self.btn_save_ha_snapshot_diag = wx.Button(self.tab_diagnostics_overview, label="Save HA Snapshot", size=(-1, 40))
         self.btn_check_matter_diag = wx.Button(self.tab_diagnostics_overview, label="Check Matter And Alexa", size=(-1, 40))
         self.btn_repair_matter_diag = wx.Button(self.tab_diagnostics_overview, label="Repair Matter And Alexa", size=(-1, 40))
@@ -96,11 +96,6 @@ class DiagnosticsTabMixin:
         self.btn_test_back_camera_diag.Bind(wx.EVT_BUTTON, lambda event: self.on_test_diagnostics_camera(event, "back"))
         self.btn_test_manual_broadcast_diag.Bind(wx.EVT_BUTTON, self.on_test_diagnostics_manual_broadcast)
         self.btn_test_pushover_diag.Bind(wx.EVT_BUTTON, self.on_test_diagnostics_pushover)
-        self.btn_test_fridge_chime_diag.Bind(wx.EVT_BUTTON, lambda event: self.on_test_diagnostics_chime(event, "fridge_open"))
-        self.btn_test_freezer_chime_diag.Bind(wx.EVT_BUTTON, lambda event: self.on_test_diagnostics_chime(event, "freezer_open"))
-        self.btn_sim_fridge_event_diag.Bind(wx.EVT_BUTTON, self.on_simulate_diagnostics_fridge_event)
-        self.btn_sim_vacuum_event_diag.Bind(wx.EVT_BUTTON, self.on_simulate_diagnostics_vacuum_event)
-        self.btn_reload_fridge_smartthings_diag.Bind(wx.EVT_BUTTON, self.on_reload_diagnostics_fridge_smartthings)
         self.btn_save_ha_snapshot_diag.Bind(wx.EVT_BUTTON, self.on_save_diagnostics_ha_snapshot)
         self.btn_check_matter_diag.Bind(wx.EVT_BUTTON, self.on_check_diagnostics_matter)
         self.btn_repair_matter_diag.Bind(wx.EVT_BUTTON, self.on_repair_diagnostics_matter)
@@ -110,11 +105,6 @@ class DiagnosticsTabMixin:
             self.btn_test_back_camera_diag: "Test Back Camera Frame button. Captures one frame from the configured back camera stream.",
             self.btn_test_manual_broadcast_diag: "Test Manual Broadcast button. Speaks a short manual test announcement through configured speakers.",
             self.btn_test_pushover_diag: "Test Pushover button. Sends a short phone push notification through the configured Pushover account.",
-            self.btn_test_fridge_chime_diag: "Test Fridge Chime button. Plays the configured fridge open chime through fridge route speakers.",
-            self.btn_test_freezer_chime_diag: "Test Freezer Chime button. Plays the configured freezer open chime through fridge route speakers.",
-            self.btn_sim_fridge_event_diag: "Simulate Fridge Event button. Verifies the fridge entity exists, routes a sample transition through Viper, and dispatches the configured fridge alert.",
-            self.btn_sim_vacuum_event_diag: "Simulate Vacuum Event button. Verifies the vacuum status entity exists, routes a sample transition through Viper, and dispatches a Cinderella alert.",
-            self.btn_reload_fridge_smartthings_diag: "Reload Refrigerator SmartThings button. Reloads the Home Assistant SmartThings entry that owns the refrigerator door sensors.",
             self.btn_save_ha_snapshot_diag: "Save HA Snapshot button. Saves current important Home Assistant entities and reports what changed since the previous snapshot.",
             self.btn_check_matter_diag: "Check Matter And Alexa button. Checks Viper Matter switches, Samba reachability, Matterbridge, exposed devices, and Alexa pairing fabric.",
             self.btn_repair_matter_diag: "Repair Matter And Alexa button. Repairs Viper-owned Home Assistant Matter duplicates, refreshes Matterbridge configuration, and restarts Matterbridge when needed.",
@@ -271,8 +261,9 @@ class DiagnosticsTabMixin:
         self._safe_submit(self._run_ha_watchdog_push_test)
 
     def on_pause_ha_watchdog(self, event):
-        status = viper_ha_recovery.pause_recovery(120, "Home Assistant maintenance from Viper Diagnostics")
-        text = f"HA recovery paused. {status.get('message') or ''}"
+        minutes = self._selected_ha_watchdog_pause_minutes()
+        status = viper_ha_recovery.pause_recovery(minutes, "Manual Home Assistant shutdown or update from Viper")
+        text = f"HA recovery paused for {self._ha_watchdog_pause_label(minutes)}. {status.get('message') or ''}"
         if hasattr(self, "ha_watchdog_txt"):
             current = self.refresh_ha_watchdog_status()
             self.ha_watchdog_txt.SetValue(f"{text}\n\n{current}")
@@ -285,6 +276,24 @@ class DiagnosticsTabMixin:
             current = self.refresh_ha_watchdog_status()
             self.ha_watchdog_txt.SetValue(f"{text}\n\n{current}")
         self.notify(text, priority=10)
+
+    def _selected_ha_watchdog_pause_minutes(self):
+        choice = getattr(self, "ha_watchdog_pause_choice", None)
+        value = choice.GetStringSelection() if choice else "2 hours"
+        return {
+            "30 minutes": 30,
+            "1 hour": 60,
+            "2 hours": 120,
+            "4 hours": 240,
+            "8 hours": 480,
+            "Until tomorrow": 12 * 60,
+        }.get(value, 120)
+
+    def _ha_watchdog_pause_label(self, minutes):
+        if minutes < 60:
+            return f"{minutes} minutes"
+        hours = minutes // 60
+        return f"{hours} hour" if hours == 1 else f"{hours} hours"
 
     def _run_ha_watchdog_push_test(self):
         ok = viper_ha_recovery.send_recovery_test_push()
@@ -498,145 +507,6 @@ class DiagnosticsTabMixin:
             f"Test Pushover notification from Viper Vision at {datetime.now().strftime('%I:%M %p')}.",
         )
         text = "Pushover test sent. Check your phone." if ok else "Pushover test failed. Open Diagnostics or the Viper log for the Pushover error."
-        wx.CallAfter(self._finish_diagnostics_action, text)
-
-    def on_test_diagnostics_chime(self, event, channel):
-        label = channel.replace("_", " ").title()
-        if hasattr(self, "smoke_test_txt"):
-            self.smoke_test_txt.SetValue(f"Sending {label} chime test.")
-        self.notify(f"Testing {label} chime.", priority=10)
-        self._safe_submit(self._run_diagnostics_chime, channel)
-
-    def _run_diagnostics_chime(self, channel):
-        try:
-            ch_settings = self.config.get("broadcast_channels", {}).get(channel, {})
-            chime = ch_settings.get("chime", "")
-            audio.play_broadcast_chime(chime, channel)
-            text = f"{channel.replace('_', ' ').title()} chime test sent."
-        except Exception as e:
-            logging.exception("Diagnostics chime test failed channel=%s", channel)
-            text = f"{channel.replace('_', ' ').title()} chime test failed. {e}"
-        wx.CallAfter(self._finish_diagnostics_action, text)
-
-    def on_simulate_diagnostics_fridge_event(self, event):
-        if hasattr(self, "smoke_test_txt"):
-            self.smoke_test_txt.SetValue("Simulating fridge-open event through Viper.")
-        self.notify("Simulating fridge event through Viper.", priority=10)
-        self._safe_submit(self._run_diagnostics_fridge_event_simulation)
-
-    def _run_diagnostics_fridge_event_simulation(self):
-        entity_id = diagnostics.FRIDGE_DOOR_ENTITY
-        ha_settings = cfg.get_ha_settings(self.config, include_env=True)
-        entity_check = discovery.validate_entity_exists(
-            entity_id,
-            token=ha_settings.get("ha_token"),
-            ha_ip=ha_settings.get("ha_ip"),
-            ha_port=ha_settings.get("ha_port"),
-            timeout=5,
-        )
-        entity_line = "entity not checked"
-        if entity_check.get("ok"):
-            entity_line = "entity found" if entity_check.get("exists") else "entity missing"
-        elif entity_check.get("message") or entity_check.get("error"):
-            entity_line = f"entity check failed: {entity_check.get('message') or entity_check.get('error')}"
-        actions = ha_listener.route_state_change(self.config, entity_id, {"state": "off"}, {"state": "on"})
-        route_ok = bool(actions and actions[0].get("type") == "broadcast" and actions[0].get("channel") == "fridge_open")
-        if route_ok:
-            action = actions[0]
-            result = self._dispatch_broadcast_message(action.get("message", ""), channel=action.get("channel", "fridge_open"))
-            dispatch_line = f"dispatch {'ok' if result.get('ok') else 'failed'}: {result.get('message') or ''}"
-        else:
-            dispatch_line = "dispatch skipped: route logic did not produce fridge_open"
-        text = "\n".join(
-            [
-                "Fridge event simulation",
-                f"HA entity: {entity_line}. {entity_id}",
-                f"Route logic: {'ok' if route_ok else 'failed'}. Actions: {actions}",
-                dispatch_line,
-            ]
-        )
-        wx.CallAfter(self._finish_diagnostics_action, text)
-
-    def on_simulate_diagnostics_vacuum_event(self, event):
-        if hasattr(self, "smoke_test_txt"):
-            self.smoke_test_txt.SetValue("Simulating vacuum status event through Viper.")
-        self.notify("Simulating vacuum event through Viper.", priority=10)
-        self._safe_submit(self._run_diagnostics_vacuum_event_simulation)
-
-    def _run_diagnostics_vacuum_event_simulation(self):
-        entity_id = self.config.get("cinderella_status_entity") or "sensor.cinderella_status"
-        ha_settings = cfg.get_ha_settings(self.config, include_env=True)
-        entity_check = discovery.validate_entity_exists(
-            entity_id,
-            token=ha_settings.get("ha_token"),
-            ha_ip=ha_settings.get("ha_ip"),
-            ha_port=ha_settings.get("ha_port"),
-            timeout=5,
-        )
-        entity_line = "entity not checked"
-        if entity_check.get("ok"):
-            entity_line = "entity found" if entity_check.get("exists") else "entity missing"
-        elif entity_check.get("message") or entity_check.get("error"):
-            entity_line = f"entity check failed: {entity_check.get('message') or entity_check.get('error')}"
-        actions = ha_listener.route_state_change(self.config, entity_id, {"state": "idle"}, {"state": "room_cleaning"})
-        route_ok = bool(actions and actions[0].get("type") == "cinderella" and actions[0].get("event") == "departure")
-        if route_ok and hasattr(self, "_dispatch_cinderella_event"):
-            action = actions[0]
-            ok = self._dispatch_cinderella_event(action.get("event", ""), action.get("error", ""), action.get("source", "vacuum"))
-            dispatch_line = f"dispatch {'ok' if ok else 'failed'}"
-        elif route_ok:
-            dispatch_line = "dispatch skipped: dashboard Cinderella dispatcher is unavailable"
-        else:
-            dispatch_line = "dispatch skipped: route logic did not produce a departure action"
-        text = "\n".join(
-            [
-                "Vacuum event simulation",
-                f"HA entity: {entity_line}. {entity_id}",
-                f"Route logic: {'ok' if route_ok else 'failed'}. Actions: {actions}",
-                dispatch_line,
-            ]
-        )
-        wx.CallAfter(self._finish_diagnostics_action, text)
-
-    def on_reload_diagnostics_fridge_smartthings(self, event):
-        if hasattr(self, "smoke_test_txt"):
-            self.smoke_test_txt.SetValue("Reloading the Home Assistant SmartThings entry for the refrigerator.")
-        self.notify("Reloading refrigerator SmartThings entry.", priority=10)
-        self._safe_submit(self._run_diagnostics_fridge_smartthings_reload)
-
-    def _run_diagnostics_fridge_smartthings_reload(self):
-        import asyncio
-
-        ha_settings = cfg.get_ha_settings(self.config, include_env=True)
-        entry = asyncio.run(viper_health.find_config_entry_for_entity(
-            ha_settings.get("ha_ip"),
-            ha_settings.get("ha_port") or "8123",
-            ha_settings.get("ha_token"),
-            diagnostics.FRIDGE_DOOR_ENTITY,
-        ))
-        if not entry.get("ok"):
-            text = f"Refrigerator SmartThings reload failed. Viper could not find the HA config entry: {entry.get('message')}"
-            wx.CallAfter(self._finish_diagnostics_action, text)
-            return
-        result = viper_health.reload_config_entry(
-            ha_settings.get("ha_ip"),
-            ha_settings.get("ha_port") or "8123",
-            ha_settings.get("ha_token"),
-            entry.get("config_entry_id"),
-        )
-        viper_health.record_health_event(
-            "manual_smartthings_reload",
-            "ok" if result.get("ok") else "failed",
-            f"Manual refrigerator SmartThings reload from Diagnostics: {result.get('message') or 'unknown result'}",
-            details={"entry": entry, "result": result},
-        )
-        text = "\n".join([
-            "Refrigerator SmartThings reload",
-            f"Entry: {entry.get('config_entry_id')}",
-            f"Platform: {entry.get('platform') or 'unknown'}",
-            f"Result: {'ok' if result.get('ok') else 'failed'}. {result.get('message') or ''}",
-            "Next: open and close the fridge once, then refresh Health Summary. Viper should show the fridge door event as the last HA event.",
-        ])
         wx.CallAfter(self._finish_diagnostics_action, text)
 
     def on_save_diagnostics_ha_snapshot(self, event):

@@ -9,7 +9,12 @@ param(
     [switch]$NoReset,
     [string]$VBoxManage = "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe",
     [string]$LogPath = "$env:APPDATA\viper_vision_1.0\ha_vm_watchdog.log",
-    [string]$FailureStatePath = "$env:APPDATA\viper_vision_1.0\ha_vm_watchdog_failures.txt"
+    [string]$FailureStatePath = "$env:APPDATA\viper_vision_1.0\ha_vm_watchdog_failures.txt",
+    [string]$PausePath = "$env:APPDATA\viper_vision_1.0\ha_watchdog_paused.txt",
+    [string]$LastRunPath = "$env:APPDATA\viper_vision_1.0\ha_vm_watchdog_last_run.txt",
+    [string]$LockPath = "$env:APPDATA\viper_vision_1.0\ha_vm_watchdog.lock",
+    [int]$MinimumRunIntervalSeconds = 300,
+    [int]$LockStaleMinutes = 30
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,18 +22,98 @@ $RecoveryScript = Join-Path $PSScriptRoot "viper_ha_recovery.py"
 $RecoveryExe = Join-Path $PSScriptRoot "ViperVision.exe"
 $PythonExe = "python"
 
-function Write-WatchdogLog {
-    param([string]$Message)
+function Ensure-ParentDirectory {
+    param([string]$Path)
 
-    $directory = Split-Path -Parent $LogPath
+    $directory = Split-Path -Parent $Path
     if ($directory -and -not (Test-Path $directory)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
+}
+
+function Write-WatchdogLog {
+    param([string]$Message)
+
+    Ensure-ParentDirectory $LogPath
 
     $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "$stamp $Message"
     Add-Content -Path $LogPath -Value $line -Encoding UTF8
     Write-Output $line
+}
+
+function Get-PathAgeSeconds {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return $null
+    }
+
+    $item = Get-Item $Path -ErrorAction SilentlyContinue
+    if (-not $item) {
+        return $null
+    }
+
+    return ((Get-Date).ToUniversalTime() - $item.LastWriteTimeUtc).TotalSeconds
+}
+
+function Test-WatchdogPaused {
+    if (-not (Test-Path $PausePath)) {
+        return $false
+    }
+
+    $raw = Get-Content $PausePath -ErrorAction SilentlyContinue | Select-Object -First 1
+    $until = [datetime]::MinValue
+    if ([datetime]::TryParse($raw, [ref]$until)) {
+        if ($until.ToUniversalTime() -gt (Get-Date).ToUniversalTime()) {
+            Write-WatchdogLog "Watchdog is paused until $($until.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss'))."
+            return $true
+        }
+
+        Remove-Item $PausePath -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+
+    Write-WatchdogLog "Watchdog is paused by $PausePath."
+    return $true
+}
+
+function Test-CooldownActive {
+    $age = Get-PathAgeSeconds $LastRunPath
+    if ($null -eq $age) {
+        return $false
+    }
+
+    if ($age -lt $MinimumRunIntervalSeconds) {
+        $remaining = [math]::Ceiling($MinimumRunIntervalSeconds - $age)
+        Write-WatchdogLog "Skipping watchdog run. Last run was $([math]::Round($age)) seconds ago; cooldown has $remaining seconds left."
+        return $true
+    }
+
+    return $false
+}
+
+function Set-LastRunNow {
+    Ensure-ParentDirectory $LastRunPath
+    Set-Content -Path $LastRunPath -Value ((Get-Date).ToUniversalTime().ToString("o")) -Encoding ASCII
+}
+
+function Acquire-WatchdogLock {
+    Ensure-ParentDirectory $LockPath
+
+    if (Test-Path $LockPath) {
+        $age = Get-PathAgeSeconds $LockPath
+        if ($null -ne $age -and $age -lt ($LockStaleMinutes * 60)) {
+            Write-WatchdogLog "Skipping watchdog run. Another watchdog run appears active."
+            return $false
+        }
+
+        Write-WatchdogLog "Removing stale watchdog lock."
+        Remove-Item $LockPath -Force -ErrorAction SilentlyContinue
+    }
+
+    New-Item -Path $LockPath -ItemType File -Value ((Get-Date).ToUniversalTime().ToString("o")) -ErrorAction Stop | Out-Null
+    return $true
 }
 
 function Invoke-VBox {
@@ -100,10 +185,7 @@ function Get-FailureCount {
 function Set-FailureCount {
     param([int]$Count)
 
-    $directory = Split-Path -Parent $FailureStatePath
-    if ($directory -and -not (Test-Path $directory)) {
-        New-Item -ItemType Directory -Path $directory -Force | Out-Null
-    }
+    Ensure-ParentDirectory $FailureStatePath
 
     Set-Content -Path $FailureStatePath -Value $Count
 }
@@ -195,17 +277,40 @@ function Invoke-WatchdogCycle {
     }
 }
 
-do {
-    try {
-        Invoke-WatchdogCycle
-    } catch {
-        Write-WatchdogLog "Watchdog error: $($_.Exception.Message)"
-        Set-FailureCount ((Get-FailureCount) + 1)
+$lockAcquired = $false
+
+try {
+    if (Test-WatchdogPaused) {
+        return
     }
 
-    if ($Once) {
-        break
+    if (Test-CooldownActive) {
+        return
     }
 
-    Start-Sleep -Seconds 60
-} while ($true)
+    $lockAcquired = Acquire-WatchdogLock
+    if (-not $lockAcquired) {
+        return
+    }
+
+    Set-LastRunNow
+
+    do {
+        try {
+            Invoke-WatchdogCycle
+        } catch {
+            Write-WatchdogLog "Watchdog error: $($_.Exception.Message)"
+            Set-FailureCount ((Get-FailureCount) + 1)
+        }
+
+        if ($Once) {
+            break
+        }
+
+        Start-Sleep -Seconds 60
+    } while ($true)
+} finally {
+    if ($lockAcquired) {
+        Remove-Item $LockPath -Force -ErrorAction SilentlyContinue
+    }
+}

@@ -74,3 +74,42 @@ def call_service(config, domain_service, data=None, *, timeout=10):
         json_data=data or {},
         timeout=timeout,
     )
+
+
+def get_entity_state_result(config, entity_id, *, timeout=5):
+    entity_id = str(entity_id or "").strip()
+    if not entity_id:
+        return {"ok": False, "exists": False, "message": "Entity id is blank."}
+    try:
+        entity = get_state(config, entity_id, timeout=timeout)
+        return {"ok": True, "exists": True, "entity_id": entity_id, "entity": entity}
+    except requests.exceptions.HTTPError as exc:
+        if getattr(exc.response, "status_code", None) == 404:
+            return {"ok": True, "exists": False, "entity_id": entity_id, "message": "Entity was not found."}
+        return {"ok": False, "exists": False, "entity_id": entity_id, "message": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "exists": False, "entity_id": entity_id, "message": str(exc)}
+
+
+def call_service_result(config, domain_service, data=None, *, timeout=10, return_response=False):
+    payload = data or {}
+    entity_id = payload.get("entity_id", "Home Assistant")
+    try:
+        path = f"/api/services/{str(domain_service or '').strip('/')}"
+        if return_response:
+            path += "?return_response"
+        response = request(config, "POST", path, json_data=payload, timeout=timeout)
+        if return_response:
+            return {"ok": True, "entity_id": entity_id, "data": response or {}}
+        return {"ok": True, "entity_id": entity_id}
+    except requests.exceptions.ReadTimeout:
+        return {
+            "ok": False,
+            "entity_id": entity_id,
+            "reason": "timeout",
+            "message": f"Home Assistant did not answer within {timeout} seconds for {entity_id}.",
+        }
+    except requests.exceptions.HTTPError as exc:
+        return {"ok": False, "entity_id": entity_id, "reason": "http", "message": f"HA service failed for {entity_id}: {exc}"}
+    except Exception as exc:
+        return {"ok": False, "entity_id": entity_id, "reason": "error", "message": f"HA service failed for {entity_id}: {exc}"}

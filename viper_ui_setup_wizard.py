@@ -34,6 +34,7 @@ import viper_ha_listener as ha_listener
 import viper_ha_package as ha_package
 import viper_ha_vm as ha_vm
 import viper_speakers as speakers
+import viper_ui_common as ui_common
 import viper_vision as vision
 from viper_runtime import safe_submit
 
@@ -59,35 +60,7 @@ MAX_HA_VM_DISK_GB = ha_vm.MAX_HA_VM_DISK_GB
 SUPPORT_EMAIL = ha_vm.SUPPORT_EMAIL
 SETUP_PROGRESS_PHASES = ha_vm.SETUP_PROGRESS_PHASES
 HA_INSTALL_LOG_PATH = cfg.DATA_DIR / "viper_ha_install.log"
-
-class AccessibleStatusText(wx.StaticText):
-    def __init__(self, parent, value="", wrap_width=760, **kwargs):
-        self._wrap_width = wrap_width
-        self._value = str(value or "")
-        super().__init__(parent, label=self._value, **kwargs)
-        if self._wrap_width:
-            self.Wrap(self._wrap_width)
-
-    def SetLabel(self, label):
-        self._value = str(label or "")
-        super().SetLabel(self._value)
-        if self._wrap_width:
-            self.Wrap(self._wrap_width)
-
-    def SetValue(self, value):
-        self.SetLabel(value)
-
-    def GetValue(self):
-        return self._value
-
-    def AppendText(self, text):
-        self.SetLabel(self._value + str(text or ""))
-
-    def Clear(self):
-        self.SetLabel("")
-
-    def GetLastPosition(self):
-        return len(self._value)
+AccessibleStatusText = ui_common.AccessibleStatusText
 
 
 def _help_file(topic="index"):
@@ -448,18 +421,18 @@ class HomeAssistantFirstRunAssistantDialog(wx.Dialog):
         wx.CallAfter(self.on_check_pc, None)
 
     def _describe_control(self, control, description):
-        control.SetName(description)
-        control.SetToolTip(description)
-        try:
-            control.Bind(wx.EVT_SET_FOCUS, self._on_control_focus_for_diagnostics)
-        except Exception:
-            pass
+        ui_common.describe_control(
+            control,
+            description,
+            focus_handler=self._on_control_focus_for_diagnostics,
+            bind_focus=True,
+        )
 
     def _make_accessible_status_text(self, parent, **kwargs):
-        return AccessibleStatusText(parent, **kwargs)
+        return ui_common.make_accessible_status_text(parent, **kwargs)
 
     def _safe_submit(self, fn, *args, **kwargs):
-        return safe_submit(fn, *args, **kwargs)
+        return ui_common.submit_ui_task(fn, *args, **kwargs)
 
     def _normalize_broadcast_mode(self, mode):
         return _normalize_broadcast_mode(mode)
@@ -2279,19 +2252,13 @@ class HomeAssistantSetupDialog(wx.Dialog):
         event.Skip()
 
     def _describe_control(self, control, name, description=""):
-        control.SetName(name)
-        control.SetToolTip(description or name)
-        try:
-            accessible = control.GetOrCreateAccessible()
-            if accessible:
-                accessible.SetName(name)
-                accessible.SetDescription(description or name)
-        except Exception:
-            pass
-        try:
-            control.Bind(wx.EVT_SET_FOCUS, self._on_control_focus_for_diagnostics)
-        except Exception:
-            pass
+        ui_common.describe_control(
+            control,
+            name,
+            description,
+            focus_handler=self._on_control_focus_for_diagnostics,
+            bind_focus=True,
+        )
 
     def _on_control_focus_for_diagnostics(self, event):
         control = event.GetEventObject()

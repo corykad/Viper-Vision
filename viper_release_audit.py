@@ -27,6 +27,7 @@ REQUIRED_PACKAGE_FILES = [
     "viper_hvac.py",
     "viper_runtime.py",
     "viper_system_health.py",
+    "viper_ui_common.py",
     "viper_ui_hvac.py",
     "templates/remote.html",
     "help/index.html",

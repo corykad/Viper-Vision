@@ -27,10 +27,13 @@ datas = [
     ("help", "help"),
     ("watch_ha_health.ps1", "."),
     ("watch_home_assistant_vm.ps1", "."),
+    ("start_home_assistant_vm_safe.ps1", "."),
+    ("viper_heat_pump_alexa.yaml", "."),
     ("run_ha_watchdog_hidden.vbs", "."),
     ("backup_home_assistant_to_d.ps1", "."),
     ("run_ha_backup_hidden.vbs", "."),
     ("harden_ha_virtualbox.ps1", "."),
+    ("harden_home_assistant_virtualbox_host.ps1", "."),
 ]
 
 

@@ -1,9 +1,10 @@
-import requests
 import time
 import wx
 
 import viper_audio as audio
 import viper_config as cfg
+import viper_ha_client as ha_client
+import viper_health
 
 
 FRIDGE_CHANNELS = [
@@ -161,6 +162,14 @@ class FridgeTabMixin:
         )
         reset_refresh_row.Add(self.btn_refresh_refrigerator_controls, 1, wx.ALL | wx.EXPAND, 5)
         controls_sizer.Add(reset_refresh_row, 0, wx.EXPAND)
+
+        self.btn_reload_refrigerator_smartthings = wx.Button(self.tab_fridge, label="Reload Refrigerator SmartThings", size=(-1, 36))
+        self.btn_reload_refrigerator_smartthings.Bind(wx.EVT_BUTTON, self.on_reload_refrigerator_smartthings)
+        self._describe_control(
+            self.btn_reload_refrigerator_smartthings,
+            "Reload Refrigerator SmartThings button. Reloads the Home Assistant SmartThings entry that owns the refrigerator door sensors.",
+        )
+        controls_sizer.Add(self.btn_reload_refrigerator_smartthings, 0, wx.ALL | wx.EXPAND, 5)
         outer.Add(controls_sizer, 0, wx.ALL | wx.EXPAND, 10)
 
         btn_save = wx.Button(self.tab_fridge, label="Save All Fridge Settings", size=(-1, 40))
@@ -374,6 +383,50 @@ class FridgeTabMixin:
 
         self._safe_submit(worker)
 
+    def on_reload_refrigerator_smartthings(self, event):
+        if hasattr(self, "refrigerator_status_txt"):
+            self.refrigerator_status_txt.SetValue("Reloading Refrigerator SmartThings in Home Assistant...")
+        self.notify("Reloading Refrigerator SmartThings.", priority=10)
+        self._safe_submit(self._run_refrigerator_smartthings_reload)
+
+    def _run_refrigerator_smartthings_reload(self):
+        import asyncio
+
+        ha_settings = cfg.get_ha_settings(self.config, include_env=True)
+        entry = asyncio.run(viper_health.find_config_entry_for_entity(
+            ha_settings.get("ha_ip"),
+            ha_settings.get("ha_port") or "8123",
+            ha_settings.get("ha_token"),
+            "binary_sensor.refrigerator_fridge_door",
+        ))
+        if not entry.get("ok"):
+            text = f"Refrigerator SmartThings reload failed. Viper could not find the HA config entry: {entry.get('message')}"
+            wx.CallAfter(self._finish_refrigerator_smartthings_reload, text)
+            return
+        result = viper_health.reload_config_entry(
+            ha_settings.get("ha_ip"),
+            ha_settings.get("ha_port") or "8123",
+            ha_settings.get("ha_token"),
+            entry.get("config_entry_id"),
+        )
+        viper_health.record_health_event(
+            "manual_smartthings_reload",
+            "ok" if result.get("ok") else "failed",
+            f"Manual refrigerator SmartThings reload from Refrigerator tab: {result.get('message') or 'unknown result'}",
+            details={"entry": entry, "result": result},
+        )
+        text = "\n".join([
+            "Refrigerator SmartThings reload",
+            f"Result: {'ok' if result.get('ok') else 'failed'}. {result.get('message') or ''}",
+            "Next: open and close the fridge once, then refresh refrigerator controls.",
+        ])
+        wx.CallAfter(self._finish_refrigerator_smartthings_reload, text)
+
+    def _finish_refrigerator_smartthings_reload(self, text):
+        if hasattr(self, "refrigerator_status_txt"):
+            self.refrigerator_status_txt.SetValue(str(text))
+        self.notify(str(text).splitlines()[0] if text else "Refrigerator SmartThings reload finished.", priority=10)
+
     def _configured_ice_maker_entities(self):
         return {
             "switch": self.config.get("ice_maker_switch_entity") or cfg.ICE_MAKER_SWITCH_ENTITY,
@@ -383,27 +436,7 @@ class FridgeTabMixin:
         }
 
     def _get_ha_entity_state(self, entity_id: str, *, timeout=5):
-        entity_id = str(entity_id or "").strip()
-        if not entity_id:
-            return {"ok": False, "exists": False, "message": "Entity id is blank."}
-        try:
-            ha_settings = cfg.get_ha_settings(self.config, include_env=True)
-            token = ha_settings.get("ha_token")
-            ha_ip = ha_settings.get("ha_ip")
-            ha_port = ha_settings.get("ha_port") or "8123"
-            if not ha_ip or not token:
-                raise RuntimeError("Home Assistant host or token is missing.")
-            response = requests.get(
-                f"http://{ha_ip}:{ha_port}/api/states/{entity_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=timeout,
-            )
-            if response.status_code == 404:
-                return {"ok": True, "exists": False, "entity_id": entity_id, "message": "Entity was not found."}
-            response.raise_for_status()
-            return {"ok": True, "exists": True, "entity_id": entity_id, "entity": response.json()}
-        except Exception as e:
-            return {"ok": False, "exists": False, "entity_id": entity_id, "message": str(e)}
+        return ha_client.get_entity_state_result(self.config, entity_id, timeout=timeout)
 
     def get_ice_maker_status(self, *, timeout=5):
         entities = self._configured_ice_maker_entities()
@@ -483,33 +516,17 @@ class FridgeTabMixin:
 
     def _call_ha_service_data(self, domain_service: str, data: dict, *, timeout=10):
         entity_id = (data or {}).get("entity_id", "Home Assistant")
-        try:
-            ha_settings = cfg.get_ha_settings(self.config, include_env=True)
-            token = ha_settings.get("ha_token")
-            ha_ip = ha_settings.get("ha_ip")
-            ha_port = ha_settings.get("ha_port") or "8123"
-            if not ha_ip or not token:
-                raise RuntimeError("Home Assistant host or token is missing.")
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            }
-            response = requests.post(
-                f"http://{ha_ip}:{ha_port}/api/services/{domain_service}",
-                headers=headers,
-                json=data or {},
-                timeout=timeout,
-            )
-            response.raise_for_status()
+        result = ha_client.call_service_result(self.config, domain_service, data, timeout=timeout)
+        if result.get("ok"):
             return True
-        except requests.exceptions.ReadTimeout:
+        reason = result.get("reason")
+        if reason == "timeout":
             self.notify(
                 f"Home Assistant did not answer within {timeout} seconds for {entity_id}. "
                 "The Roborock integration can be slow; press Refresh vacuum controls to check whether the setting changed.",
                 priority=10,
             )
-            return False
-        except requests.exceptions.HTTPError as e:
+        elif reason == "http":
             if self._is_hidden_vacuum_setting_entity_id(entity_id):
                 self.notify(
                     "Home Assistant reports that Roborock dock empty mode exists, but its integration rejects write attempts. "
@@ -517,39 +534,13 @@ class FridgeTabMixin:
                     priority=10,
                 )
             else:
-                self.notify(f"HA service failed for {entity_id}: {e}", priority=10)
-            return False
-        except Exception as e:
-            self.notify(f"HA service failed for {entity_id}: {e}", priority=10)
-            return False
+                self.notify(result.get("message") or f"HA service failed for {entity_id}.", priority=10)
+        else:
+            self.notify(result.get("message") or f"HA service failed for {entity_id}.", priority=10)
+        return False
 
     def _call_ha_service_response(self, domain_service: str, data: dict):
-        entity_id = (data or {}).get("entity_id", "Home Assistant")
-        try:
-            ha_settings = cfg.get_ha_settings(self.config, include_env=True)
-            token = ha_settings.get("ha_token")
-            ha_ip = ha_settings.get("ha_ip")
-            ha_port = ha_settings.get("ha_port") or "8123"
-            if not ha_ip or not token:
-                raise RuntimeError("Home Assistant host or token is missing.")
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            }
-            response = requests.post(
-                f"http://{ha_ip}:{ha_port}/api/services/{domain_service}?return_response",
-                headers=headers,
-                json=data or {},
-                timeout=15,
-            )
-            response.raise_for_status()
-            try:
-                payload = response.json()
-            except ValueError:
-                payload = {}
-            return {"ok": True, "data": payload}
-        except Exception as e:
-            return {"ok": False, "message": f"HA service failed for {entity_id}: {e}"}
+        return ha_client.call_service_result(self.config, domain_service, data, timeout=15, return_response=True)
 
     def on_ice_maker_on(self, event):
         entities = self._configured_ice_maker_entities()
