@@ -1776,7 +1776,9 @@ class ViperReleaseTests(unittest.TestCase):
         main.dash_app.build_setup_next_action_summary = lambda: "Core setup is ready."
         main.dash_app.build_setup_checklist_summary = lambda: "Setup Status"
 
-        with patch.object(main, "_save_current_ha_snapshot", return_value={
+        import viper_remote_web
+
+        with patch.object(viper_remote_web, "_save_current_ha_snapshot", return_value={
             "ok": True,
             "path": "C:/tmp/snapshot.json",
             "diff": {"added": ["a"], "removed": [], "changed": []},
@@ -2004,8 +2006,9 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_remote_manual_video_analysis_submits_background_request(self):
         main.dash_app = FakeDashboard()
+        import viper_remote_web
 
-        with patch.object(main, "safe_submit", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs) or object()):
+        with patch.object(viper_remote_web, "safe_submit", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs) or object()):
             response = self.client.post(
                 "/remote/doorbell/video_analyze/back",
                 data={"manual_clip_seconds": "4"},
@@ -2699,6 +2702,7 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_flaky_roborock_dock_empty_mode_is_hidden_from_easy_settings(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
+        remote_web_text = Path("viper_remote_web.py").read_text(encoding="utf-8")
         vacuum_text = Path("viper_vacuum.py").read_text(encoding="utf-8")
 
         self.assertFalse(main._web_show_vacuum_setting({"entity_id": "select.cinderella_dock_empty_mode"}))
@@ -2706,7 +2710,7 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertTrue(vacuum.is_hidden_vacuum_setting_entity_id("select.cinderella_dock_empty_mode"))
         self.assertIn("HIDDEN_VACUUM_SETTING_SUFFIXES", main_text)
         self.assertIn('"_dock_empty_mode"', vacuum_text)
-        self.assertIn("Home Assistant reports it but rejects write attempts", main_text)
+        self.assertIn("Home Assistant reports it but rejects write attempts", remote_web_text)
 
     def test_vacuum_settings_use_slow_service_timeout_and_clear_timeout_message(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
@@ -7111,6 +7115,7 @@ Wireless:        No
         self.assertIn("viper_ha_client.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ha_vm_delegates.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_remote_api.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_remote_web.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_system_health.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_common.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_dashboard.py", release_audit.REQUIRED_PACKAGE_FILES)

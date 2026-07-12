@@ -21,6 +21,7 @@ python -m py_compile `
   .\viper_ha_client.py `
   .\viper_matter.py `
   .\viper_remote_api.py `
+  .\viper_remote_web.py `
   .\viper_runtime.py `
   .\viper_system_health.py `
   .\viper_ui_common.py `

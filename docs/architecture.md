@@ -36,7 +36,7 @@ Each major desktop tab is a mixin inherited by `ViperDashboard`.
 
 ## Web And Remote
 
-- `main.pyw` still owns the remote web page and most Flask web routes.
+- `viper_remote_web.py` owns the browser remote page, browser remote form posts, webhook routes, diagnostics web routes, and Cinderella webhook.
 - `viper_remote_api.py` owns the JSON control API routes used by Home Assistant/Matter integrations for arm/disarm, global mute, speaker enable switches, and ice maker enable state.
 - `templates/remote.html` is the browser remote UI.
 
