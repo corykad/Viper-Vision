@@ -4459,86 +4459,6 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         self._update_main_setup_actions()
         self.notify("Setup checks finished.", priority=10)
 
-    def setup_ai_tab(self):
-        sizer = wx.BoxSizer(wx.VERTICAL)
-
-        def hide_disabled(control):
-            control.Hide()
-            control.Enable(False)
-
-        ebox = wx.StaticBox(self.tab_ai, label="Vision Engine")
-        esizer = wx.StaticBoxSizer(ebox, wx.HORIZONTAL)
-        engines = ["Gemini (Cloud)", "Ollama (Local)", "Dual (Comparison)"]
-        self.engine_choice = wx.Choice(self.tab_ai, choices=engines)
-        self.engine_choice.SetStringSelection(self.config.get("vision_engine", "Gemini (Cloud)"))
-        self.engine_choice.Bind(wx.EVT_CHOICE, self.on_engine_change)
-        esizer.Add(self.engine_choice, 1, wx.ALL | wx.EXPAND, 5)
-        sizer.Add(esizer, 0, wx.ALL | wx.EXPAND, 5)
-
-        vbox = wx.StaticBox(self.tab_ai, label="Offline Voice")
-        self.vsizer = wx.StaticBoxSizer(vbox, wx.VERTICAL)
-
-        self.tts_engine_choice = wx.Choice(self.tab_ai, choices=["Edge TTS (Natural)", "Gemini TTS", "Google Cloud", "Local PC SAPI"])
-        self.tts_engine_choice.SetStringSelection(self.config.get("tts_engine", "Edge TTS (Natural)"))
-        self.tts_engine_choice.Bind(wx.EVT_CHOICE, self.on_tts_engine_change)
-        hide_disabled(self.tts_engine_choice)
-
-        self.secondary_voice_label = wx.StaticText(self.tab_ai, label="Network Speaker Voice:")
-        self.secondary_voice_choice = wx.Choice(self.tab_ai, choices=[])
-        self.secondary_voice_choice.Bind(wx.EVT_CHOICE, self.on_secondary_voice_change)
-        hide_disabled(self.secondary_voice_label)
-        hide_disabled(self.secondary_voice_choice)
-
-        self.btn_refresh_v = wx.Button(self.tab_ai, label="Force Refresh Natural Voices")
-        self.btn_refresh_v.Bind(wx.EVT_BUTTON, self.on_refresh_edge_voices)
-        hide_disabled(self.btn_refresh_v)
-
-        self.voice_list = audio.get_available_windows_voices()
-        self.voice_choice = wx.Choice(self.tab_ai, choices=self.voice_list)
-        current_voice_idx = self.config.get("local_voice_index", 1)
-        if self.voice_list and current_voice_idx < len(self.voice_list): self.voice_choice.SetSelection(current_voice_idx)
-        elif self.voice_list: self.voice_choice.SetSelection(0)
-        self.voice_choice.Bind(wx.EVT_CHOICE, self.on_voice_change)
-        self.vsizer.Add(wx.StaticText(self.tab_ai, label="Offline PC Voice for computer speakers and fallback:"), 0, wx.LEFT | wx.RIGHT, 5)
-        self.vsizer.Add(self.voice_choice, 0, wx.EXPAND | wx.ALL, 5)
-        self._describe_control(
-            self.voice_choice,
-            "Offline PC voice selector. This only changes speech from the computer speakers and the offline fallback mode. It does not change Gemini cloud voices.",
-        )
-
-        sizer.Add(self.vsizer, 0, wx.ALL | wx.EXPAND, 5)
-
-        pbox = wx.StaticBox(self.tab_ai, label="AI Prompt Editor")
-        psizer = wx.StaticBoxSizer(pbox, wx.VERTICAL)
-        self.prompt_choice = wx.Choice(self.tab_ai, choices=list(self.config["prompts"].keys()))
-        active_p = self.config.get("active_prompt", "Standard")
-        self.prompt_choice.SetStringSelection(active_p)
-        self.prompt_choice.Bind(wx.EVT_CHOICE, self.on_prompt_change)
-        psizer.Add(self.prompt_choice, 0, wx.EXPAND | wx.ALL, 5)
-        self.prompt_editor = wx.TextCtrl(self.tab_ai, style=wx.TE_MULTILINE, size=(-1, 70))
-        self.prompt_editor.SetValue(self.config["prompts"].get(active_p, ""))
-        psizer.Add(self.prompt_editor, 0, wx.EXPAND | wx.ALL, 5)
-        pbtn_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_save_prompt = wx.Button(self.tab_ai, label="Save Current")
-        self.btn_save_prompt.Bind(wx.EVT_BUTTON, self.on_save_prompt)
-        self.btn_new_prompt = wx.Button(self.tab_ai, label="New Profile")
-        self.btn_new_prompt.Bind(wx.EVT_BUTTON, self.on_new_prompt)
-        self.btn_del_prompt = wx.Button(self.tab_ai, label="Delete Profile")
-        self.btn_del_prompt.Bind(wx.EVT_BUTTON, self.on_del_prompt)
-        pbtn_sizer.Add(self.btn_save_prompt, 1, wx.ALL, 2)
-        pbtn_sizer.Add(self.btn_new_prompt, 1, wx.ALL, 2)
-        pbtn_sizer.Add(self.btn_del_prompt, 1, wx.ALL, 2)
-        psizer.Add(pbtn_sizer, 0, wx.EXPAND | wx.ALL, 0)
-        sizer.Add(psizer, 0, wx.ALL | wx.EXPAND, 5)
-
-        self.tab_ai.SetSizer(sizer)
-
-        self._update_secondary_voice_ui()
-        hide_disabled(self.tts_engine_choice)
-        hide_disabled(self.secondary_voice_label)
-        hide_disabled(self.secondary_voice_choice)
-        hide_disabled(self.btn_refresh_v)
-
     def setup_tts_config_tab(self):
         sizer = wx.BoxSizer(wx.VERTICAL)
         self._sapi_voice_choices = []
@@ -4883,8 +4803,6 @@ class ViperDashboard(FridgeTabMixin, HvacTabMixin, VacuumTabMixin, DiagnosticsTa
         for control in (self.tts_engine_choice, self.secondary_voice_label, self.secondary_voice_choice, self.btn_refresh_v):
             control.Hide()
             control.Enable(False)
-        if hasattr(self, "tab_ai"):
-            self.tab_ai.Layout()
 
     def setup_devices_tab(self):
         sizer = wx.BoxSizer(wx.VERTICAL)

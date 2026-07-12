@@ -352,6 +352,8 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn('self._setup_tab_once("dash", self.setup_dash_tab, self.tab_dash)', main_text)
         self.assertIn("wx.CallLater(1200, self._prewarm_lazy_tabs_in_background)", main_text)
         self.assertIn("def _prewarm_next_lazy_tab", main_text)
+        self.assertNotIn("def setup_ai_tab", main_text)
+        self.assertNotIn("self.tab_ai", main_text)
         startup_setup_block = main_text.split("def setup_notebook(self):", 1)[1].split("def setup_hidden_ai_voice_compat_controls", 1)[0]
         for eager_call in [
             "self.setup_doorbell_tab()",
