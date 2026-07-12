@@ -93,7 +93,7 @@
                 </div>
             </div>
             <h3>Health</h3>
-            <pre>{{ diagnostics_summary }}</pre>
+            <pre aria-label="System health summary" tabindex="0">{{ diagnostics_summary }}</pre>
         </section>
 
         <section aria-labelledby="quick-heading">
@@ -137,7 +137,7 @@
                 {% set doorbell_cfg = config.get('doorbell_triggers', {}) %}
                 {% set front_door = doorbell_cfg.get('front', {}) %}
                 {% set back_door = doorbell_cfg.get('back', {}) %}
-                <ul class="status-list" aria-label="Selected vacuum status">
+                <ul class="status-list" aria-label="Doorbell trigger status">
                     <li>Front trigger: {{ front_door.get('trigger_entity_id') or config.get('ring_front_binary_sensor') or 'Not configured' }}</li>
                     <li>Back trigger: {{ back_door.get('trigger_entity_id') or config.get('ring_back_binary_sensor') or 'Not configured' }}</li>
                 </ul>
@@ -338,7 +338,7 @@
             </div>
             {% if setup_smoke_report %}
             <h3>Latest Smoke Test</h3>
-            <pre>{{ setup_smoke_report }}</pre>
+            <pre aria-label="Latest setup smoke test report" tabindex="0">{{ setup_smoke_report }}</pre>
             {% endif %}
         </section>
 
@@ -358,8 +358,8 @@
             </div>
             <details>
                 <summary>Setup Status</summary>
-                <pre>{{ setup_status_summary }}</pre>
-                <pre>{{ setup_checklist_summary }}</pre>
+                <pre aria-label="Setup next action summary" tabindex="0">{{ setup_status_summary }}</pre>
+                <pre aria-label="Setup checklist summary" tabindex="0">{{ setup_checklist_summary }}</pre>
             </details>
         </section>
 

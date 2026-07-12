@@ -2861,8 +2861,11 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn('id="arm-status-text"', template)
         self.assertIn('aria-live="polite"', template)
         self.assertIn('role="alert"', template)
-        self.assertIn('aria-label="Selected vacuum status"', template)
+        self.assertIn('aria-label="Doorbell trigger status"', template)
         self.assertIn('aria-label="Latest doorbell video analysis results"', template)
+        self.assertIn('aria-label="System health summary"', template)
+        self.assertIn('aria-label="Setup next action summary"', template)
+        self.assertIn('aria-label="Setup checklist summary"', template)
 
     def test_remote_accessibility_contract_for_form_controls(self):
         template = Path("templates/remote.html").read_text(encoding="utf-8")
