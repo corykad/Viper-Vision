@@ -1212,6 +1212,8 @@ class ViperReleaseTests(unittest.TestCase):
         main_dashboard = (
             main_text.split("class ViperDashboard", 1)[1]
             + "\n"
+            + Path("viper_ui_doorbell.py").read_text(encoding="utf-8")
+            + "\n"
             + Path("viper_ui_fridge.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
@@ -1956,7 +1958,7 @@ class ViperReleaseTests(unittest.TestCase):
     def test_main_window_has_ai_descriptions_tab_without_profile_language(self):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
         prompt_tab_start = main_text.index("def setup_prompt_editor_tab")
-        prompt_tab_end = main_text.index("def _video_prompt_name_for_mode", prompt_tab_start)
+        prompt_tab_end = main_text.index("def setup_setup_tab", prompt_tab_start)
         prompt_tab_text = main_text[prompt_tab_start:prompt_tab_end]
         self.assertIn('self.notebook.AddPage(self.tab_prompts, "AI Descriptions")', main_text)
         self.assertIn("Front door alert", main_text)
@@ -2728,6 +2730,8 @@ class ViperReleaseTests(unittest.TestCase):
         main_text = Path("main.pyw").read_text(encoding="utf-8")
         main_dashboard = (
             main_text.split("class ViperDashboard", 1)[1]
+            + "\n"
+            + Path("viper_ui_doorbell.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
             + "\n"
@@ -7072,6 +7076,7 @@ Wireless:        No
         self.assertIn("viper_ha_vm_delegates.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_system_health.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_common.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_ui_doorbell.py", release_audit.REQUIRED_PACKAGE_FILES)
 
     def test_gitignore_excludes_local_esphome_flash_workdirs(self):
         root = Path(__file__).resolve().parents[1]
