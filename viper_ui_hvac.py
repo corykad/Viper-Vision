@@ -2,6 +2,7 @@ import logging
 
 import wx
 
+import viper_ha_client as ha_client
 import viper_hvac as hvac
 import viper_runtime
 
@@ -245,6 +246,10 @@ class HvacTabMixin:
             states = hvac.get_states(self.config, timeout=8)
             summaries = [hvac.summarize_unit(unit, states) for unit in hvac.HEAT_PUMPS]
             wx.CallAfter(self._finish_hvac_refresh, summaries, announce, focus_unit)
+        except ha_client.HomeAssistantClientError as exc:
+            message = f"HVAC status unavailable until Home Assistant is configured: {exc}"
+            logging.info(message)
+            wx.CallAfter(self._finish_hvac_error, message, announce)
         except Exception as exc:
             logging.exception("HVAC refresh failed")
             wx.CallAfter(self._finish_hvac_error, f"HVAC refresh failed: {exc}", announce)

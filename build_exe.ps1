@@ -21,6 +21,7 @@ python -m py_compile `
   .\viper_matter.py `
   .\viper_runtime.py `
   .\viper_system_health.py `
+  .\viper_ui_common.py `
   .\viper_ui_diagnostics.py `
   .\viper_ui_fridge.py `
   .\viper_ui_hvac.py `

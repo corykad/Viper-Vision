@@ -6971,6 +6971,19 @@ Wireless:        No
         self.assertTrue(fake.health_refreshed)
         self.assertFalse(hasattr(fake, "hvac_controls"))
 
+    def test_startup_hvac_refresh_without_ha_config_does_not_log_exception(self):
+        fake = type("FakeDashboard", (main.HvacTabMixin,), {})()
+        fake.config = cfg.validate_and_normalize_config({})
+        fake.health_refreshed = False
+        fake.refresh_system_health_display = lambda: setattr(fake, "health_refreshed", True)
+
+        with patch.object(main.wx, "CallAfter", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs)), \
+             patch.object(main.logging, "exception") as log_exception:
+            main.HvacTabMixin._run_hvac_refresh(fake, announce=False)
+
+        log_exception.assert_not_called()
+        self.assertTrue(fake.health_refreshed)
+
     def test_cached_hvac_status_populates_swing_choices_when_tab_opens(self):
         class FakeChoice:
             def __init__(self):
