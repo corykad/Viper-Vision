@@ -1233,6 +1233,8 @@ class ViperReleaseTests(unittest.TestCase):
             + "\n"
             + Path("viper_ui_setup_status.py").read_text(encoding="utf-8")
             + "\n"
+            + Path("viper_ui_setup_windows.py").read_text(encoding="utf-8")
+            + "\n"
             + Path("viper_ui_tts.py").read_text(encoding="utf-8")
         )
 
@@ -2769,6 +2771,8 @@ class ViperReleaseTests(unittest.TestCase):
             + "\n"
             + Path("viper_ui_setup_status.py").read_text(encoding="utf-8")
             + "\n"
+            + Path("viper_ui_setup_windows.py").read_text(encoding="utf-8")
+            + "\n"
             + Path("viper_ui_tts.py").read_text(encoding="utf-8")
         )
 
@@ -3158,6 +3162,8 @@ class ViperReleaseTests(unittest.TestCase):
             + "\n"
             + (root / "viper_ui_setup_status.py").read_text(encoding="utf-8")
             + "\n"
+            + (root / "viper_ui_setup_windows.py").read_text(encoding="utf-8")
+            + "\n"
             + (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
             + "\n"
             + (root / "viper_ui_diagnostics.py").read_text(encoding="utf-8")
@@ -3312,10 +3318,11 @@ class ViperReleaseTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         main_text = (root / "main.pyw").read_text(encoding="utf-8")
         setup_status_text = (root / "viper_ui_setup_status.py").read_text(encoding="utf-8")
+        setup_windows_text = (root / "viper_ui_setup_windows.py").read_text(encoding="utf-8")
         self.assertIn("dlg = ViperSetupWizardDialog(None, owner=self)", setup_status_text)
-        self.assertIn("def _enter_setup_window_mode", main_text)
-        self.assertIn("self.Show(False)", main_text)
-        self.assertIn("def _leave_setup_window_mode", main_text)
+        self.assertIn("def _enter_setup_window_mode", setup_windows_text)
+        self.assertIn("self.Show(False)", setup_windows_text)
+        self.assertIn("def _leave_setup_window_mode", setup_windows_text)
 
     def test_startup_restore_does_not_force_control_focus(self):
         fake = main.ViperDashboard.__new__(main.ViperDashboard)
@@ -7128,6 +7135,7 @@ Wireless:        No
         self.assertIn("viper_ui_prompts.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_speakers.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_setup_status.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_ui_setup_windows.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_tts.py", release_audit.REQUIRED_PACKAGE_FILES)
 
     def test_gitignore_excludes_local_esphome_flash_workdirs(self):

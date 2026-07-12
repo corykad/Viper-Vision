@@ -16,6 +16,7 @@ DESKTOP_SOURCE_FILES = [
     "viper_ui_prompts.py",
     "viper_ui_speakers.py",
     "viper_ui_setup_status.py",
+    "viper_ui_setup_windows.py",
     "viper_ui_tts.py",
     "viper_ui_vacuum.py",
 ]
