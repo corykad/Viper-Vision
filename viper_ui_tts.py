@@ -290,6 +290,24 @@ class TtsSettingsMixin:
                 break
         choice.SetStringSelection(label)
 
+    def _tts_target_choices(self):
+        choices = ["configured", "all"]
+        choices.extend(self.config.get("speakers", {}).keys())
+        return choices
+
+    def _refresh_tts_target_choices(self):
+        if not hasattr(self, "tts_profile_controls"):
+            return
+        choices = self._tts_target_choices()
+        for controls in self.tts_profile_controls.values():
+            target_choice = controls["target"]
+            current = target_choice.GetStringSelection() or "configured"
+            new_choices = list(choices)
+            if current not in new_choices:
+                new_choices.append(current)
+            target_choice.Set(new_choices)
+            target_choice.SetStringSelection(current)
+
     def _format_gemini_warm_status(self):
         status = audio.gemini_tts_connection.status()
         if status.get("warm"):
