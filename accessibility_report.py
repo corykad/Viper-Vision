@@ -4,6 +4,18 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 
+DESKTOP_SOURCE_FILES = [
+    "main.pyw",
+    "viper_ui_dashboard.py",
+    "viper_ui_doorbell.py",
+    "viper_ui_diagnostics.py",
+    "viper_ui_fridge.py",
+    "viper_ui_hvac.py",
+    "viper_ui_prompts.py",
+    "viper_ui_vacuum.py",
+]
+
+
 class RemoteControlParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -110,7 +122,11 @@ def remote_inventory(template_text):
 
 def build_report(root):
     root = Path(root)
-    main_text = (root / "main.pyw").read_text(encoding="utf-8")
+    main_text = "\n".join(
+        (root / path).read_text(encoding="utf-8")
+        for path in DESKTOP_SOURCE_FILES
+        if (root / path).exists()
+    )
     template_text = (root / "templates" / "remote.html").read_text(encoding="utf-8")
     lines = [
         "Viper Vision Accessibility Control Inventory",

@@ -25,6 +25,7 @@ import viper_matter
 import viper_runtime
 import viper_system_health
 import viper_vacuum as vacuum
+import viper_ui_dashboard
 import viper_ui_hvac as ui_hvac
 import viper_ui_vacuum as ui_vacuum
 import viper_vision as vision
@@ -1211,6 +1212,8 @@ class ViperReleaseTests(unittest.TestCase):
         common_text = Path("viper_ui_common.py").read_text(encoding="utf-8")
         main_dashboard = (
             main_text.split("class ViperDashboard", 1)[1]
+            + "\n"
+            + Path("viper_ui_dashboard.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_doorbell.py").read_text(encoding="utf-8")
             + "\n"
@@ -2734,6 +2737,8 @@ class ViperReleaseTests(unittest.TestCase):
         main_dashboard = (
             main_text.split("class ViperDashboard", 1)[1]
             + "\n"
+            + Path("viper_ui_dashboard.py").read_text(encoding="utf-8")
+            + "\n"
             + Path("viper_ui_doorbell.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
@@ -3656,11 +3661,11 @@ class ViperReleaseTests(unittest.TestCase):
         fake.refresh_system_health_display = lambda: None
         recorded = []
 
-        with patch.object(main.discovery, "test_ha_connection", return_value={"ok": True, "entity_count": 123}) as ha_test, \
+        with patch.object(viper_ui_dashboard.discovery, "test_ha_connection", return_value={"ok": True, "entity_count": 123}) as ha_test, \
              patch.object(main.audio, "_send_text_pushover", side_effect=AssertionError("startup must not send pushover")), \
              patch.object(main.vision, "get_gemini_client", side_effect=AssertionError("startup must not call Gemini")), \
-             patch.object(main, "record_event", side_effect=lambda kind, message, **details: recorded.append((kind, message))), \
-             patch.object(main.wx, "CallAfter", lambda func, *args, **kwargs: func(*args, **kwargs)):
+             patch.object(viper_ui_dashboard, "record_event", side_effect=lambda kind, message, **details: recorded.append((kind, message))), \
+             patch.object(viper_ui_dashboard.wx, "CallAfter", lambda func, *args, **kwargs: func(*args, **kwargs)):
             main.ViperDashboard._run_startup_api_checks_worker(fake)
 
         ha_test.assert_called_once()
@@ -7081,6 +7086,7 @@ Wireless:        No
         self.assertIn("viper_ha_vm_delegates.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_system_health.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_common.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_ui_dashboard.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_doorbell.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_prompts.py", release_audit.REQUIRED_PACKAGE_FILES)
 
