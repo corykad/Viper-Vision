@@ -1215,6 +1215,8 @@ class ViperReleaseTests(unittest.TestCase):
             + "\n"
             + Path("viper_ui_dashboard.py").read_text(encoding="utf-8")
             + "\n"
+            + Path("viper_ui_device_tools.py").read_text(encoding="utf-8")
+            + "\n"
             + Path("viper_ui_doorbell.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_fridge.py").read_text(encoding="utf-8")
@@ -2743,6 +2745,8 @@ class ViperReleaseTests(unittest.TestCase):
             + "\n"
             + Path("viper_ui_dashboard.py").read_text(encoding="utf-8")
             + "\n"
+            + Path("viper_ui_device_tools.py").read_text(encoding="utf-8")
+            + "\n"
             + Path("viper_ui_doorbell.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_vacuum.py").read_text(encoding="utf-8")
@@ -3151,8 +3155,9 @@ class ViperReleaseTests(unittest.TestCase):
 
     def test_suggested_setup_page_routes_to_missing_step(self):
         fake = main.ViperDashboard.__new__(main.ViperDashboard)
-        fake.config = {}
-        self.assertEqual(main.ViperDashboard.suggested_setup_page(fake), "connect")
+        with patch.object(main.cfg, "get_ha_settings", return_value={"ha_ip": "", "ha_token": "", "ha_port": "8123"}):
+            fake.config = {}
+            self.assertEqual(main.ViperDashboard.suggested_setup_page(fake), "connect")
 
         fake.config = {
             "ha_ip": "192.168.4.56",
@@ -5483,7 +5488,7 @@ class ViperReleaseTests(unittest.TestCase):
                 calls.append(("discover", settings["ha_ip"]))
 
         fake = FakeSetupDialog()
-        with patch.object(main, "safe_submit", side_effect=lambda func, *args: func(*args)):
+        with patch.object(setup_wizard, "safe_submit", side_effect=lambda func, *args: func(*args)):
             main.HomeAssistantSetupDialog._finish_find_ha(
                 fake,
                 {"ok": True, "ha_ip": "192.168.4.49", "ha_port": "8123", "auth_ok": True},
@@ -6428,8 +6433,9 @@ class ViperReleaseTests(unittest.TestCase):
         fake.ha_listener = type("Listener", (), {"status": lambda _self: {"connected": False}})()
         fake.last_setup_status = "Speaker test passed."
 
-        next_action = main.ViperDashboard.build_setup_next_action_summary(fake)
-        checklist = main.ViperDashboard.build_setup_checklist_summary(fake)
+        with patch.object(main.cfg, "get_ha_settings", return_value={"ha_ip": "", "ha_token": "", "ha_port": "8123"}):
+            next_action = main.ViperDashboard.build_setup_next_action_summary(fake)
+            checklist = main.ViperDashboard.build_setup_checklist_summary(fake)
 
         self.assertIn("Next recommended action: Fix Home Assistant", next_action)
         self.assertIn("Last successful step: Speaker test passed.", next_action)
@@ -7095,6 +7101,7 @@ Wireless:        No
         self.assertIn("viper_system_health.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_common.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_dashboard.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_ui_device_tools.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_doorbell.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_prompts.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_speakers.py", release_audit.REQUIRED_PACKAGE_FILES)

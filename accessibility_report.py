@@ -7,6 +7,7 @@ from pathlib import Path
 DESKTOP_SOURCE_FILES = [
     "main.pyw",
     "viper_ui_dashboard.py",
+    "viper_ui_device_tools.py",
     "viper_ui_doorbell.py",
     "viper_ui_diagnostics.py",
     "viper_ui_fridge.py",
