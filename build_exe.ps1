@@ -20,6 +20,7 @@ python -m py_compile `
   .\viper_hvac.py `
   .\viper_ha_client.py `
   .\viper_matter.py `
+  .\viper_remote_api.py `
   .\viper_runtime.py `
   .\viper_system_health.py `
   .\viper_ui_common.py `
@@ -29,8 +30,10 @@ python -m py_compile `
   .\viper_ui_diagnostics.py `
   .\viper_ui_fridge.py `
   .\viper_ui_hvac.py `
+  .\viper_ui_lifecycle.py `
   .\viper_ui_prompts.py `
   .\viper_ui_speakers.py `
+  .\viper_ui_setup_status.py `
   .\viper_ui_setup_wizard.py `
   .\viper_ui_tts.py `
   .\viper_ui_vacuum.py

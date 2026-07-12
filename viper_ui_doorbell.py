@@ -2,10 +2,12 @@ import logging
 import time
 from datetime import datetime
 
+import requests
 import wx
 
 import viper_audio as audio
 import viper_config as cfg
+import viper_ha_listener as ha_listener
 import viper_ui_common as ui_common
 import viper_vision as vision
 from viper_runtime import safe_submit
@@ -431,3 +433,116 @@ class DoorbellTabMixin:
         self.config["back_chime"] = "" if b_val == "(Default)" else b_val
         self.save_config()
         self.notify("Custom chimes saved.", priority=10)
+
+    def on_test_doorbell_full_flow(self, event, side: str):
+        side = "back" if side == "back" else "front"
+        label = "back" if side == "back" else "front"
+        self.notify(f"Starting {label} doorbell full flow test through Home Assistant.", priority=10)
+        safe_submit(self._run_doorbell_full_flow_test, side)
+
+    def _run_doorbell_full_flow_test(self, side: str):
+        side = "back" if side == "back" else "front"
+        label = "Back" if side == "back" else "Front"
+        try:
+            triggers = ha_listener.normalize_doorbell_triggers(self.config)
+            trigger = triggers.get(side, {})
+            other_side = "front" if side == "back" else "back"
+            other_trigger = triggers.get(other_side, {})
+            entity_id = trigger.get("trigger_entity_id") or ""
+            rtsp_url = trigger.get("rtsp_url") or self._doorbell_rtsp_for_key(side)
+            listener_warning = ""
+            if not self.config.get("ha_listener_enabled", True):
+                listener_warning = (
+                    "Home Assistant listener is disabled. Sending the test event anyway, then running the doorbell flow directly."
+                )
+            if hasattr(self, "ha_listener"):
+                status = self.ha_listener.status()
+                if not status.get("connected"):
+                    error = status.get("last_error") or "not connected"
+                    listener_warning = (
+                        f"Home Assistant listener is not connected: {error}. Sending the test event anyway, then running the doorbell flow directly."
+                    )
+            if listener_warning:
+                wx.CallAfter(self.notify, listener_warning, 10)
+            if not trigger.get("enabled"):
+                wx.CallAfter(self.notify, f"{label} doorbell trigger is not enabled. Save a trigger entity and RTSP URL in Home Assistant Setup first.", 10)
+                return
+            if not entity_id:
+                wx.CallAfter(self.notify, f"{label} doorbell trigger entity is missing. Choose it in Home Assistant Setup first.", 10)
+                return
+            other_entity_id = other_trigger.get("trigger_entity_id") or ""
+            if other_trigger.get("enabled") and other_entity_id and other_entity_id == entity_id:
+                wx.CallAfter(
+                    self.notify,
+                    f"{label} doorbell full flow test was not sent because front and back use the same Home Assistant trigger entity. Open Home Assistant Setup and choose separate front and back trigger entities.",
+                    10,
+                )
+                return
+            if not rtsp_url:
+                wx.CallAfter(self.notify, f"{label} doorbell RTSP URL is missing. Add and test the camera URL first.", 10)
+                return
+
+            ha_settings = cfg.get_ha_settings(self.config, include_env=True)
+            token = ha_settings.get("ha_token")
+            ha_ip = ha_settings.get("ha_ip")
+            ha_port = ha_settings.get("ha_port") or "8123"
+            if not ha_ip or not token:
+                wx.CallAfter(self.notify, "Home Assistant host or token is missing. Open Home Assistant Setup first.", 10)
+                return
+
+            active_states = trigger.get("active_states") or ha_listener.DEFAULT_ACTIVE_STATES
+            active_state = str(active_states[0] if active_states else "on")
+            now = datetime.now().isoformat(timespec="seconds")
+            payload = {
+                "entity_id": entity_id,
+                "old_state": {
+                    "entity_id": entity_id,
+                    "state": "off",
+                    "attributes": {"friendly_name": f"Viper {label} Doorbell Test"},
+                    "last_changed": now,
+                    "last_updated": now,
+                },
+                "new_state": {
+                    "entity_id": entity_id,
+                    "state": active_state,
+                    "attributes": {
+                        "friendly_name": f"Viper {label} Doorbell Test",
+                        "viper_test": True,
+                    },
+                    "last_changed": now,
+                    "last_updated": now,
+                },
+            }
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+            response = requests.post(
+                f"http://{ha_ip}:{ha_port}/api/events/state_changed",
+                headers=headers,
+                json=payload,
+                timeout=10,
+            )
+            response.raise_for_status()
+            logging.info(
+                "[HA SETUP] Fired synthetic %s doorbell state_changed event entity=%s active_state=%s rtsp_configured=%s",
+                side,
+                entity_id,
+                active_state,
+                bool(rtsp_url),
+            )
+            wx.CallAfter(
+                self.notify,
+                f"{label} doorbell test event accepted by Home Assistant. Running the full doorbell flow now.",
+                10,
+            )
+            status_text, status_code = self._run_doorbell_pipeline(f"{side} door", rtsp_url, side)
+            logging.info(
+                "[HA SETUP] Direct %s doorbell full flow completed code=%s status=%s",
+                side,
+                status_code,
+                status_text,
+            )
+        except Exception as e:
+            logging.exception("[HA SETUP] Doorbell full flow test failed side=%s", side)
+            wx.CallAfter(self.notify, f"{label} doorbell full flow test failed: {e}", 10)

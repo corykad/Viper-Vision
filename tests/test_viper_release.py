@@ -1225,9 +1225,13 @@ class ViperReleaseTests(unittest.TestCase):
             + "\n"
             + Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
             + "\n"
+            + Path("viper_ui_lifecycle.py").read_text(encoding="utf-8")
+            + "\n"
             + Path("viper_ui_prompts.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_speakers.py").read_text(encoding="utf-8")
+            + "\n"
+            + Path("viper_ui_setup_status.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_tts.py").read_text(encoding="utf-8")
         )
@@ -2753,9 +2757,13 @@ class ViperReleaseTests(unittest.TestCase):
             + "\n"
             + Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
             + "\n"
+            + Path("viper_ui_lifecycle.py").read_text(encoding="utf-8")
+            + "\n"
             + Path("viper_ui_prompts.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_speakers.py").read_text(encoding="utf-8")
+            + "\n"
+            + Path("viper_ui_setup_status.py").read_text(encoding="utf-8")
             + "\n"
             + Path("viper_ui_tts.py").read_text(encoding="utf-8")
         )
@@ -3141,6 +3149,8 @@ class ViperReleaseTests(unittest.TestCase):
         text = (
             (root / "main.pyw").read_text(encoding="utf-8")
             + "\n"
+            + (root / "viper_ui_setup_status.py").read_text(encoding="utf-8")
+            + "\n"
             + (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
             + "\n"
             + (root / "viper_ui_diagnostics.py").read_text(encoding="utf-8")
@@ -3294,7 +3304,8 @@ class ViperReleaseTests(unittest.TestCase):
     def test_setup_wizard_is_top_level_and_hides_dashboard_during_setup(self):
         root = Path(__file__).resolve().parents[1]
         main_text = (root / "main.pyw").read_text(encoding="utf-8")
-        self.assertIn("dlg = ViperSetupWizardDialog(None, owner=self)", main_text)
+        setup_status_text = (root / "viper_ui_setup_status.py").read_text(encoding="utf-8")
+        self.assertIn("dlg = ViperSetupWizardDialog(None, owner=self)", setup_status_text)
         self.assertIn("def _enter_setup_window_mode", main_text)
         self.assertIn("self.Show(False)", main_text)
         self.assertIn("def _leave_setup_window_mode", main_text)
@@ -4098,10 +4109,10 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertTrue(any("duplicate Viper Matter entities" in issue for issue in report["issues"]))
 
     def test_setup_tab_has_alexa_google_switch_setup_button(self):
-        main_text = Path("main.pyw").read_text(encoding="utf-8")
-        self.assertIn("Set Up Alexa And Google Controls", main_text)
-        self.assertIn("Add Alexa Ceiling Fan", main_text)
-        self.assertIn("on_setup_matter_switches", main_text)
+        setup_status_text = Path("viper_ui_setup_status.py").read_text(encoding="utf-8")
+        self.assertIn("Set Up Alexa And Google Controls", setup_status_text)
+        self.assertIn("Add Alexa Ceiling Fan", setup_status_text)
+        self.assertIn("on_setup_matter_switches", setup_status_text)
 
     def test_diagnostics_tab_has_matter_health_and_repair_buttons(self):
         text = Path("viper_ui_diagnostics.py").read_text(encoding="utf-8")
@@ -5751,8 +5762,9 @@ class ViperReleaseTests(unittest.TestCase):
     def test_setup_wizard_is_documented_and_available(self):
         root = Path(__file__).resolve().parents[1]
         main_text = (root / "main.pyw").read_text(encoding="utf-8")
+        setup_status_text = (root / "viper_ui_setup_status.py").read_text(encoding="utf-8")
         setup_text = (root / "viper_ui_setup_wizard.py").read_text(encoding="utf-8")
-        combined_text = main_text + "\n" + setup_text
+        combined_text = main_text + "\n" + setup_status_text + "\n" + setup_text
         setup_help = (root / "help" / "setup.html").read_text(encoding="utf-8")
         readme = (root / "README.md").read_text(encoding="utf-8")
         self.assertIn("class ViperSetupWizardDialog", setup_text)
@@ -7098,13 +7110,16 @@ Wireless:        No
         self.assertFalse(audit.failures)
         self.assertIn("viper_ha_client.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ha_vm_delegates.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_remote_api.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_system_health.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_common.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_dashboard.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_device_tools.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_doorbell.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_ui_lifecycle.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_prompts.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_speakers.py", release_audit.REQUIRED_PACKAGE_FILES)
+        self.assertIn("viper_ui_setup_status.py", release_audit.REQUIRED_PACKAGE_FILES)
         self.assertIn("viper_ui_tts.py", release_audit.REQUIRED_PACKAGE_FILES)
 
     def test_gitignore_excludes_local_esphome_flash_workdirs(self):
