@@ -59,7 +59,7 @@ from viper_ui_setup_wizard import (
 import viper_speakers as speakers
 import viper_vacuum as vacuum
 import viper_vision as vision
-from viper_runtime import executor, format_recent_events, is_shutting_down, mark_startup_phase, recent_events, record_event, safe_submit, startup_summary_lines
+from viper_runtime import executor, format_recent_events, is_shutting_down, mark_startup_phase, record_event, safe_submit, startup_summary_lines
 
 mark_startup_phase("main imports complete")
 AccessibleStatusText = ui_common.AccessibleStatusText
