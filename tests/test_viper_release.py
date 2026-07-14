@@ -1,6 +1,8 @@
 import unittest
 import asyncio
+import importlib
 import json
+import sys
 import tempfile
 import zipfile
 import re
@@ -1096,6 +1098,55 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertGreaterEqual(fill_section.count("action: switch.turn_off"), 2)
         self.assertIn("- delay: '00:00:05'", fill_section)
         self.assertIn("action: counter.reset", fill_section)
+
+    def test_generated_viper_core_package_routes_events_to_addon(self):
+        package_text = ha_package.generate_viper_core_ha_package(
+            {
+                "front_doorbell_mqtt_topic": "ring/front/ding",
+                "back_doorbell_mqtt_topic": "ring/back/ding",
+                "fridge_door_entity": "binary_sensor.refrigerator_fridge_door",
+                "freezer_door_entity": "binary_sensor.refrigerator_freezer_door",
+                "filter_sensor_entity": "sensor.refrigerator_water_filter_usage",
+                "ice_maker_switch_entity": "switch.refrigerator_cubed_ice",
+                "ice_maker_keep_on_entity": "input_boolean.keep_ice_maker_on",
+                "ice_maker_auto_refill_entity": "input_boolean.ice_maker_auto_refill_running",
+                "ice_usage_counter_entity": "counter.ice_usage_counter",
+                "heat_pump_online_entities": ["binary_sensor.office_heat_pump_online"],
+            }
+        )
+
+        self.assertIn("url: \"http://viper_core:8099/event/doorbell\"", package_text)
+        self.assertIn("url: \"http://viper_core:8099/event/fridge\"", package_text)
+        self.assertIn("url: \"http://viper_core:8099/event/vacuum\"", package_text)
+        self.assertIn("url: \"http://viper_core:8099/event/ice_maker\"", package_text)
+        self.assertIn("url: \"http://viper_core:8099/event/hvac\"", package_text)
+        self.assertIn("- id: viper_core_door_ai_monitor", package_text)
+        self.assertIn("- id: viper_core_refrigerator_door_router", package_text)
+        self.assertIn("- id: viper_core_refrigerator_filter_notifications", package_text)
+        self.assertIn("- id: viper_core_ice_maker_fill_and_reset", package_text)
+        self.assertIn("- id: viper_core_cinderella_event_router", package_text)
+        self.assertIn("- id: viper_core_heat_pump_availability_router", package_text)
+        self.assertIn("- binary_sensor.office_heat_pump_online", package_text)
+        self.assertIn("action: rest_command.viper_core_ice_maker", package_text)
+        self.assertIn("action: auto_refill_finished_counter_reset", package_text)
+
+    def test_package_bundle_writes_windows_and_viper_core_packages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = ha_package.write_package_bundle(
+                {"front_doorbell_mqtt_topic": "ring/front/ding"},
+                package_path=Path(tmp) / "windows.yaml",
+                core_package_path=Path(tmp) / "core.yaml",
+                notes_path=Path(tmp) / "install.txt",
+            )
+
+            self.assertTrue(bundle["package"].exists())
+            self.assertTrue(bundle["core_package"].exists())
+            self.assertTrue(bundle["instructions"].exists())
+            self.assertIn("rest_command.ring_vision_front", bundle["package"].read_text(encoding="utf-8"))
+            self.assertIn("rest_command.viper_core_doorbell", bundle["core_package"].read_text(encoding="utf-8"))
+            notes = bundle["instructions"].read_text(encoding="utf-8")
+            self.assertIn("windows.yaml", notes)
+            self.assertIn("core.yaml", notes)
 
     def test_fridge_tab_and_remote_use_single_ice_maker_toggle(self):
         root = Path(__file__).resolve().parents[1]
@@ -7142,6 +7193,87 @@ Wireless:        No
         root = Path(__file__).resolve().parents[1]
         gitignore = (root / ".gitignore").read_text(encoding="utf-8")
         self.assertIn(".esphome_flash*/", gitignore)
+
+    def test_viper_core_home_assistant_addon_scaffold_is_present(self):
+        root = Path(__file__).resolve().parents[1]
+        addon = root / "ha_addons" / "viper_core"
+        required = [
+            root / "ha_addons" / "repository.yaml",
+            addon / "config.yaml",
+            addon / "build.yaml",
+            addon / "Dockerfile",
+            addon / "run.sh",
+            addon / "README.md",
+            addon / "viper_core" / "__main__.py",
+            addon / "viper_core" / "config.py",
+            addon / "viper_core" / "events.py",
+            addon / "viper_core" / "ha.py",
+            addon / "viper_core" / "health_server.py",
+            addon / "viper_core_package.yaml",
+            root / "docs" / "ha-green-viper-core.md",
+        ]
+
+        for path in required:
+            self.assertTrue(path.exists(), f"Missing Viper Core add-on file: {path}")
+
+        config = (addon / "config.yaml").read_text(encoding="utf-8")
+        self.assertIn("slug: viper_core", config)
+        self.assertIn("ingress: true", config)
+        self.assertIn("hassio_api: true", config)
+        self.assertIn("homeassistant_api: true", config)
+        self.assertIn("aarch64", config)
+        self.assertIn("amd64", config)
+        self.assertIn("armv7", config)
+
+        package = (addon / "viper_core_package.yaml").read_text(encoding="utf-8")
+        self.assertIn("rest_command:", package)
+        self.assertIn("viper_core_doorbell:", package)
+        self.assertIn("http://viper_core:8099/event/fridge", package)
+        self.assertIn("http://viper_core:8099/event/vacuum", package)
+        self.assertIn("http://viper_core:8099/event/ice_maker", package)
+        self.assertIn("http://viper_core:8099/event/hvac", package)
+
+    def test_viper_core_event_processor_handles_ha_events(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        config_module = importlib.import_module("viper_core.config")
+        events_module = importlib.import_module("viper_core.events")
+
+        class FakeHa:
+            def __init__(self):
+                self.calls = []
+
+            def available(self):
+                return True
+
+            def call_service(self, service, payload):
+                self.calls.append((service, payload))
+                return []
+
+            def create_notification(self, title, message):
+                self.calls.append(("persistent_notification/create", {"title": title, "message": message}))
+                return []
+
+        cfg_obj = config_module.CoreConfig(
+            notification_service="persistent_notification.create",
+            pushover_service="notify.pushover",
+        )
+        fake_ha = FakeHa()
+        processor = events_module.EventProcessor(cfg_obj, fake_ha)
+
+        result = processor.handle("doorbell", {"door": "front", "action": "pressed"})
+        duplicate = processor.handle("doorbell", {"door": "front", "action": "pressed"})
+        fridge = processor.handle("fridge", {"appliance": "freezer", "state": "open"})
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(duplicate["duplicate"])
+        self.assertTrue(fridge["ok"])
+        self.assertIn("Front doorbell pressed.", result["message"])
+        self.assertIn("freezer is open", fridge["message"])
+        self.assertIn(("notify.pushover", {"title": "Viper Doorbell", "message": "Front doorbell pressed."}), fake_ha.calls)
+        self.assertEqual(len(processor.recent_events), 3)
 
 
 if __name__ == "__main__":

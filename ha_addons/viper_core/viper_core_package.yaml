@@ -1,0 +1,89 @@
+# Viper Core Home Assistant package
+# Copy to /config/packages/viper_core_package.yaml after installing the Viper Core add-on.
+
+rest_command:
+  viper_core_doorbell:
+    url: "http://viper_core:8099/event/doorbell"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"door": {{ door | default('front') | tojson }},
+       "action": {{ action | default('pressed') | tojson }},
+       "entity_id": {{ entity_id | default('') | tojson }}}
+    timeout: 10
+
+  viper_core_fridge:
+    url: "http://viper_core:8099/event/fridge"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"appliance": {{ appliance | default('fridge') | tojson }},
+       "state": {{ state | default('changed') | tojson }},
+       "entity_id": {{ entity_id | default('') | tojson }}}
+    timeout: 10
+
+  viper_core_vacuum:
+    url: "http://viper_core:8099/event/vacuum"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"event": {{ event | default('status') | tojson }},
+       "error": {{ error | default('') | tojson }},
+       "entity_id": {{ entity_id | default('') | tojson }}}
+    timeout: 10
+
+  viper_core_ice_maker:
+    url: "http://viper_core:8099/event/ice_maker"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"action": {{ action | default('status') | tojson }},
+       "entity_id": {{ entity_id | default('') | tojson }}}
+    timeout: 10
+
+  viper_core_hvac:
+    url: "http://viper_core:8099/event/hvac"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"unit": {{ unit | default('Heat pump') | tojson }},
+       "state": {{ state | default('changed') | tojson }},
+       "entity_id": {{ entity_id | default('') | tojson }}}
+    timeout: 10
+
+automation:
+  - id: viper_core_refrigerator_door_router
+    alias: "Viper Core: Refrigerator Door Router"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id:
+          - binary_sensor.refrigerator_fridge_door
+          - binary_sensor.refrigerator_freezer_door
+        to:
+          - "on"
+          - "off"
+    actions:
+      - action: rest_command.viper_core_fridge
+        data:
+          appliance: "{{ 'freezer' if 'freezer' in trigger.entity_id else 'fridge' }}"
+          state: "{{ 'open' if trigger.to_state.state == 'on' else 'closed' }}"
+          entity_id: "{{ trigger.entity_id }}"
+
+  - id: viper_core_heat_pump_availability_router
+    alias: "Viper Core: Heat Pump Availability Router"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id:
+          - binary_sensor.office_heat_pump_online
+          - binary_sensor.living_room_heat_pump_online
+          - binary_sensor.kitchen_heat_pump_online
+          - binary_sensor.jamie_s_room_heat_pump_online
+          - binary_sensor.master_bedroom_heat_pump_online
+    actions:
+      - action: rest_command.viper_core_hvac
+        data:
+          unit: "{{ state_attr(trigger.entity_id, 'friendly_name') or trigger.entity_id }}"
+          state: "{{ 'online' if trigger.to_state.state == 'on' else 'offline' }}"
+          entity_id: "{{ trigger.entity_id }}"

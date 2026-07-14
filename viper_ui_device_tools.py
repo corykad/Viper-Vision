@@ -136,7 +136,7 @@ class DeviceToolsMixin:
         options = ha_package.package_options_from_config(self.config)
         bundle = ha_package.write_package_bundle(options)
         self.notify(
-            f"HA package generated: {bundle['package'].name}. See ha_packages folder.",
+            f"HA packages generated: {bundle['package'].name} and {bundle['core_package'].name}. See ha_packages folder.",
             priority=10,
         )
 
