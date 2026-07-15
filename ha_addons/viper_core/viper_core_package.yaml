@@ -3,7 +3,7 @@
 
 rest_command:
   viper_core_doorbell:
-    url: "http://viper_core:8099/event/doorbell"
+    url: "http://local-viper-core:8099/event/doorbell"
     method: POST
     content_type: "application/json"
     payload: >
@@ -13,7 +13,7 @@ rest_command:
     timeout: 10
 
   viper_core_fridge:
-    url: "http://viper_core:8099/event/fridge"
+    url: "http://local-viper-core:8099/event/fridge"
     method: POST
     content_type: "application/json"
     payload: >
@@ -23,17 +23,18 @@ rest_command:
     timeout: 10
 
   viper_core_vacuum:
-    url: "http://viper_core:8099/event/vacuum"
+    url: "http://local-viper-core:8099/event/vacuum"
     method: POST
     content_type: "application/json"
     payload: >
       {"event": {{ event | default('status') | tojson }},
        "error": {{ error | default('') | tojson }},
+       "source": {{ source | default('vacuum') | tojson }},
        "entity_id": {{ entity_id | default('') | tojson }}}
     timeout: 10
 
   viper_core_ice_maker:
-    url: "http://viper_core:8099/event/ice_maker"
+    url: "http://local-viper-core:8099/event/ice_maker"
     method: POST
     content_type: "application/json"
     payload: >
@@ -42,7 +43,7 @@ rest_command:
     timeout: 10
 
   viper_core_hvac:
-    url: "http://viper_core:8099/event/hvac"
+    url: "http://local-viper-core:8099/event/hvac"
     method: POST
     content_type: "application/json"
     payload: >
@@ -52,6 +53,37 @@ rest_command:
     timeout: 10
 
 automation:
+  - id: viper_core_ring_doorbell_router
+    alias: "Viper Core: Ring Doorbell Router"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id:
+          - binary_sensor.front_door_ding
+          - binary_sensor.viper_front_door_ring_motion
+          - binary_sensor.front_door_motion
+        to: "on"
+        id: front
+      - trigger: state
+        entity_id:
+          - binary_sensor.back_door_ding
+          - binary_sensor.viper_back_door_ring_motion
+          - binary_sensor.back_door_motion
+        to: "on"
+        id: back
+    conditions:
+      - condition: template
+        value_template: >
+          {{ trigger.from_state is not none
+             and trigger.from_state.state not in ['unknown', 'unavailable']
+             and trigger.to_state.state == 'on' }}
+    actions:
+      - action: rest_command.viper_core_doorbell
+        data:
+          door: "{{ trigger.id }}"
+          action: "{{ 'pressed' if 'ding' in trigger.entity_id else 'motion' }}"
+          entity_id: "{{ trigger.entity_id }}"
+
   - id: viper_core_refrigerator_door_router
     alias: "Viper Core: Refrigerator Door Router"
     mode: queued
@@ -70,6 +102,25 @@ automation:
           state: "{{ 'open' if trigger.to_state.state == 'on' else 'closed' }}"
           entity_id: "{{ trigger.entity_id }}"
 
+  - id: viper_core_refrigerator_stale_check
+    alias: "Viper Core: Refrigerator Stale Check"
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "/30"
+    conditions:
+      - condition: template
+        value_template: >
+          {% set fridge_age = (now() - states.binary_sensor.refrigerator_fridge_door.last_changed).total_seconds() if states.binary_sensor.refrigerator_fridge_door is defined else 999999 %}
+          {% set freezer_age = (now() - states.binary_sensor.refrigerator_freezer_door.last_changed).total_seconds() if states.binary_sensor.refrigerator_freezer_door is defined else 999999 %}
+          {{ [fridge_age, freezer_age] | min > 2700 }}
+    actions:
+      - action: rest_command.viper_core_fridge
+        data:
+          appliance: "refrigerator"
+          state: "stale_check"
+          entity_id: "binary_sensor.refrigerator_fridge_door,binary_sensor.refrigerator_freezer_door"
+
   - id: viper_core_heat_pump_availability_router
     alias: "Viper Core: Heat Pump Availability Router"
     mode: queued
@@ -81,9 +132,226 @@ automation:
           - binary_sensor.kitchen_heat_pump_online
           - binary_sensor.jamie_s_room_heat_pump_online
           - binary_sensor.master_bedroom_heat_pump_online
+        to:
+          - "on"
+          - "off"
+        for: "00:01:00"
+    conditions:
+      - condition: template
+        value_template: >
+          {{ trigger.from_state is not none
+             and trigger.from_state.state not in ['unknown', 'unavailable']
+             and trigger.to_state.state != trigger.from_state.state }}
     actions:
       - action: rest_command.viper_core_hvac
         data:
           unit: "{{ state_attr(trigger.entity_id, 'friendly_name') or trigger.entity_id }}"
           state: "{{ 'online' if trigger.to_state.state == 'on' else 'offline' }}"
           entity_id: "{{ trigger.entity_id }}"
+
+  - id: viper_core_cinderella_event_router
+    alias: "Viper Core: Cinderella Event Router"
+    mode: queued
+    max: 10
+    triggers:
+      - trigger: state
+        entity_id: sensor.cinderella_vacuum_error
+        not_to:
+          - "none"
+          - "unknown"
+          - "unavailable"
+        id: vacuum_error
+      - trigger: state
+        entity_id: sensor.cinderella_dock_dock_error
+        not_to:
+          - "ok"
+          - "unknown"
+          - "unavailable"
+        id: dock_error
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to:
+          - "starting"
+          - "cleaning"
+          - "spot_cleaning"
+          - "zoned_cleaning"
+          - "zone_cleaning"
+          - "segment_cleaning"
+          - "mapping"
+          - "robot_status_mopping"
+          - "clean_mop_cleaning"
+          - "clean_mop_mopping"
+          - "segment_mopping"
+          - "zoned_mopping"
+        for:
+          seconds: 1
+        id: departure
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to:
+          - "washing_mop"
+          - "washing_the_mop"
+          - "back_to_dock_washing_duster"
+        for:
+          seconds: 2
+        id: washing
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to:
+          - "emptying"
+          - "emptying_bin"
+          - "emptying_dustbin"
+          - "emptying_the_bin"
+        for:
+          seconds: 2
+        id: emptying
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to:
+          - "returning"
+          - "returning_home"
+          - "docking"
+          - "going_to_wash_the_mop"
+        for:
+          seconds: 2
+        id: returning
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to:
+          - "charging"
+          - "docked"
+          - "charging_complete"
+          - "idle"
+        for:
+          seconds: 2
+        id: victory
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to:
+          - "paused"
+          - "remote_control_active"
+          - "manual_mode"
+          - "locked"
+        for:
+          seconds: 2
+        id: paused
+      - trigger: state
+        entity_id: sensor.cinderella_status
+        to:
+          - "charger_disconnected"
+          - "charging_problem"
+          - "error"
+          - "device_offline"
+        for:
+          seconds: 2
+        id: status_update
+      - trigger: state
+        entity_id: binary_sensor.cinderella_dock_mop_drying
+        to: "on"
+        for:
+          seconds: 2
+        id: drying
+    actions:
+      - delay: "00:00:01"
+      - action: rest_command.viper_core_vacuum
+        data:
+          event: "{{ trigger.id if trigger.id not in ['vacuum_error', 'dock_error'] else 'error' }}"
+          error: >
+            {% if trigger.id == 'vacuum_error' %}
+              {{ states('sensor.cinderella_vacuum_error') }}
+            {% elif trigger.id == 'dock_error' %}
+              {{ states('sensor.cinderella_dock_dock_error') }}
+            {% elif trigger.id == 'status_update' %}
+              {{ states('sensor.cinderella_status') }}
+            {% else %}
+              {{ '' }}
+            {% endif %}
+          source: "{{ 'dock' if trigger.id == 'dock_error' else 'vacuum' }}"
+          entity_id: "{{ trigger.entity_id }}"
+
+  - id: viper_core_ice_maker_auto_off
+    alias: "Viper Core: Ice Maker Auto-Off and Usage"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: switch.refrigerator_cubed_ice
+        to: "on"
+        for:
+          seconds: 5
+    conditions:
+      - condition: state
+        entity_id: input_boolean.keep_ice_maker_on
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.ice_maker_auto_refill_running
+        state: "off"
+    variables:
+      next_ice_count: "{{ states('counter.ice_usage_counter') | int(0) + 1 }}"
+    actions:
+      - action: switch.turn_off
+        target:
+          entity_id: switch.refrigerator_cubed_ice
+      - action: counter.increment
+        target:
+          entity_id: counter.ice_usage_counter
+      - action: rest_command.viper_core_ice_maker
+        data:
+          action: "ice_dispensed_counter_{{ next_ice_count }}"
+          entity_id: switch.refrigerator_cubed_ice
+
+  - id: viper_core_ice_maker_turn_on_when_empty
+    alias: "Viper Core: Ice Maker Turn On When Empty"
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id: counter.ice_usage_counter
+        above: 15
+    conditions:
+      - condition: state
+        entity_id: input_boolean.keep_ice_maker_on
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.ice_maker_auto_refill_running
+        state: "off"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.ice_maker_auto_refill_running
+      - action: switch.turn_on
+        target:
+          entity_id: switch.refrigerator_cubed_ice
+      - action: rest_command.viper_core_ice_maker
+        data:
+          action: "auto_refill_started"
+          entity_id: switch.refrigerator_cubed_ice
+
+  - id: viper_core_ice_maker_fill_and_reset
+    alias: "Viper Core: Ice Maker Fill and Reset"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.ice_maker_auto_refill_running
+        to: "on"
+    actions:
+      - delay:
+          hours: 4
+      - condition: state
+        entity_id: input_boolean.ice_maker_auto_refill_running
+        state: "on"
+      - action: switch.turn_off
+        target:
+          entity_id: switch.refrigerator_cubed_ice
+      - delay: "00:00:05"
+      - action: switch.turn_off
+        target:
+          entity_id: switch.refrigerator_cubed_ice
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.ice_maker_auto_refill_running
+      - action: counter.reset
+        target:
+          entity_id: counter.ice_usage_counter
+      - action: rest_command.viper_core_ice_maker
+        data:
+          action: "auto_refill_complete_counter_reset"
+          entity_id: switch.refrigerator_cubed_ice

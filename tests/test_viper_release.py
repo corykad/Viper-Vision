@@ -1115,11 +1115,11 @@ class ViperReleaseTests(unittest.TestCase):
             }
         )
 
-        self.assertIn("url: \"http://viper_core:8099/event/doorbell\"", package_text)
-        self.assertIn("url: \"http://viper_core:8099/event/fridge\"", package_text)
-        self.assertIn("url: \"http://viper_core:8099/event/vacuum\"", package_text)
-        self.assertIn("url: \"http://viper_core:8099/event/ice_maker\"", package_text)
-        self.assertIn("url: \"http://viper_core:8099/event/hvac\"", package_text)
+        self.assertIn("url: \"http://local-viper-core:8099/event/doorbell\"", package_text)
+        self.assertIn("url: \"http://local-viper-core:8099/event/fridge\"", package_text)
+        self.assertIn("url: \"http://local-viper-core:8099/event/vacuum\"", package_text)
+        self.assertIn("url: \"http://local-viper-core:8099/event/ice_maker\"", package_text)
+        self.assertIn("url: \"http://local-viper-core:8099/event/hvac\"", package_text)
         self.assertIn("- id: viper_core_door_ai_monitor", package_text)
         self.assertIn("- id: viper_core_refrigerator_door_router", package_text)
         self.assertIn("- id: viper_core_refrigerator_filter_notifications", package_text)
@@ -4092,6 +4092,35 @@ class ViperReleaseTests(unittest.TestCase):
         self.assertIn("action: rest_command.viper_set_ice_maker_on", package_text)
         self.assertIn("action: rest_command.viper_set_ice_maker_off", package_text)
         self.assertNotIn("tojson", package_text)
+
+    def test_matter_package_can_target_viper_core_addon(self):
+        package_text = viper_matter.generate_matter_controls_package({
+            "viper_core_url": "http://local-viper-core:8099",
+            "speakers": {"Office Sonos": {"id": "192.168.4.34", "type": "sonos", "enabled": True}},
+        })
+
+        self.assertIn("http://local-viper-core:8099/api/control/armed", package_text)
+        self.assertIn("http://local-viper-core:8099/api/control/speakers/Office%20Sonos/enabled", package_text)
+        self.assertNotIn(":5050/api/control", package_text)
+
+    def test_config_preserves_viper_core_control_target(self):
+        normalized = cfg.validate_and_normalize_config({
+            "viper_core_url": "http://local-viper-core:8099/",
+            "use_viper_core": True,
+        })
+
+        self.assertEqual(normalized["viper_core_url"], "http://local-viper-core:8099")
+        self.assertTrue(normalized["use_viper_core"])
+
+    def test_matter_control_health_uses_viper_core_url_when_configured(self):
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {"ready": True}
+        with patch.object(viper_matter.requests, "get", return_value=response) as get:
+            result = viper_matter.check_viper_control_api({"viper_core_url": "http://local-viper-core:8099"})
+
+        self.assertTrue(result["ok"])
+        get.assert_called_once()
+        self.assertEqual(get.call_args.args[0], "http://local-viper-core:8099/api/control/state")
 
     def test_matter_entity_ids_match_generated_template_switches(self):
         config = cfg.validate_and_normalize_config({
@@ -7209,6 +7238,8 @@ Wireless:        No
             addon / "viper_core" / "events.py",
             addon / "viper_core" / "ha.py",
             addon / "viper_core" / "health_server.py",
+            addon / "viper_core" / "vision.py",
+            addon / "viper_core" / "web_ui.py",
             addon / "viper_core_package.yaml",
             root / "docs" / "ha-green-viper-core.md",
         ]
@@ -7221,17 +7252,21 @@ Wireless:        No
         self.assertIn("ingress: true", config)
         self.assertIn("hassio_api: true", config)
         self.assertIn("homeassistant_api: true", config)
+        self.assertIn("media:rw", config)
         self.assertIn("aarch64", config)
         self.assertIn("amd64", config)
         self.assertIn("armv7", config)
 
         package = (addon / "viper_core_package.yaml").read_text(encoding="utf-8")
         self.assertIn("rest_command:", package)
+        self.assertIn("viper_core_ring_doorbell_router", package)
+        self.assertIn("binary_sensor.front_door_ding", package)
+        self.assertIn("binary_sensor.back_door_ding", package)
         self.assertIn("viper_core_doorbell:", package)
-        self.assertIn("http://viper_core:8099/event/fridge", package)
-        self.assertIn("http://viper_core:8099/event/vacuum", package)
-        self.assertIn("http://viper_core:8099/event/ice_maker", package)
-        self.assertIn("http://viper_core:8099/event/hvac", package)
+        self.assertIn("http://local-viper-core:8099/event/fridge", package)
+        self.assertIn("http://local-viper-core:8099/event/vacuum", package)
+        self.assertIn("http://local-viper-core:8099/event/ice_maker", package)
+        self.assertIn("http://local-viper-core:8099/event/hvac", package)
 
     def test_viper_core_event_processor_handles_ha_events(self):
         root = Path(__file__).resolve().parents[1]
@@ -7256,16 +7291,28 @@ Wireless:        No
                 self.calls.append(("persistent_notification/create", {"title": title, "message": message}))
                 return []
 
+            def tts_get_url(self, message):
+                self.calls.append(("tts_get_url", {"message": message}))
+                return {"url": "http://homeassistant.local/api/tts_proxy/test.mp3"}
+
         cfg_obj = config_module.CoreConfig(
             notification_service="persistent_notification.create",
             pushover_service="notify.pushover",
+            tts_service="tts.google_say",
+            tts_targets=["media_player.entryway_speaker"],
+            direct_sonos_targets=["192.168.4.34"],
+            alexa_notify_service="notify.alexa_media",
+            alexa_targets=["media_player.cory_s_sonos_beam"],
         )
         fake_ha = FakeHa()
         processor = events_module.EventProcessor(cfg_obj, fake_ha)
 
-        result = processor.handle("doorbell", {"door": "front", "action": "pressed"})
-        duplicate = processor.handle("doorbell", {"door": "front", "action": "pressed"})
-        fridge = processor.handle("fridge", {"appliance": "freezer", "state": "open"})
+        sonos_calls = []
+        with patch.object(events_module, "_play_sonos_url", side_effect=lambda *args: sonos_calls.append(args)), \
+             patch.object(events_module.vision, "describe_doorbell", return_value=""):
+            result = processor.handle("doorbell", {"door": "front", "action": "pressed"})
+            duplicate = processor.handle("doorbell", {"door": "front", "action": "motion"})
+            fridge = processor.handle("fridge", {"appliance": "freezer", "state": "open"})
 
         self.assertTrue(result["ok"])
         self.assertTrue(duplicate["duplicate"])
@@ -7273,7 +7320,554 @@ Wireless:        No
         self.assertIn("Front doorbell pressed.", result["message"])
         self.assertIn("freezer is open", fridge["message"])
         self.assertIn(("notify.pushover", {"title": "Viper Doorbell", "message": "Front doorbell pressed."}), fake_ha.calls)
+        self.assertIn(("tts.google_say", {"entity_id": ["media_player.entryway_speaker"], "message": "Front doorbell pressed."}), fake_ha.calls)
+        self.assertIn(("tts_get_url", {"message": "Front doorbell pressed."}), fake_ha.calls)
+        self.assertIn(("192.168.4.34", "http://homeassistant.local/api/tts_proxy/test.mp3"), sonos_calls)
+        self.assertIn(
+            (
+                "notify.alexa_media",
+                {
+                    "message": "Front doorbell pressed.",
+                    "title": "Viper Doorbell",
+                    "target": ["media_player.cory_s_sonos_beam"],
+                    "data": {"type": "announce"},
+                },
+            ),
+            fake_ha.calls,
+        )
         self.assertEqual(len(processor.recent_events), 3)
+
+    def test_viper_core_doorbell_uses_ai_description_when_configured(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        config_module = importlib.import_module("viper_core.config")
+        events_module = importlib.import_module("viper_core.events")
+
+        class FakeHa:
+            def available(self):
+                return True
+
+            def call_service(self, *_args, **_kwargs):
+                return []
+
+            def create_notification(self, *_args, **_kwargs):
+                return []
+
+            def tts_get_url(self, _message):
+                return {"url": "http://homeassistant.local/api/tts_proxy/test.mp3"}
+
+        processor = events_module.EventProcessor(config_module.CoreConfig(gemini_api_key="key"), FakeHa())
+        with patch.object(events_module.vision, "describe_doorbell", return_value="A visitor is at the front door."):
+            result = processor.handle("doorbell", {"door": "front", "action": "pressed"})
+
+        self.assertEqual(result["message"], "A visitor is at the front door.")
+
+    def test_viper_core_live_video_turns_ring_stream_on_only_for_capture(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        vision_module = importlib.import_module("viper_core.vision")
+
+        class FakeHa:
+            def __init__(self):
+                self.calls = []
+
+            def available(self):
+                return True
+
+            def get_state(self, entity_id):
+                return {"state": "off", "attributes": {"friendly_name": entity_id}}
+
+            def call_service(self, service, payload):
+                self.calls.append((service, payload))
+                return []
+
+        config = type("Config", (), {
+            "gemini_api_key": "key",
+            "gemini_vision_model": "model",
+            "front_door_stream_url": "rtsp://ring/front_live",
+            "front_door_live_stream_switch": "switch.front_door_live_stream",
+            "doorbell_live_video_seconds": 4,
+            "doorbell_live_video_frames": 4,
+        })()
+        fake_ha = FakeHa()
+
+        with patch.object(vision_module.shutil, "which", return_value="/usr/bin/ffmpeg"), \
+             patch.object(vision_module.time, "sleep"), \
+             patch.object(vision_module, "describe_stream_video_with_gemini", return_value="Live result."):
+            result = vision_module.describe_live_doorbell(config, fake_ha, "front", mode="manual")
+
+        self.assertEqual(result, "Live result.")
+        self.assertEqual(fake_ha.calls[0], ("switch/turn_on", {"entity_id": "switch.front_door_live_stream"}))
+        self.assertEqual(fake_ha.calls[-1], ("switch/turn_off", {"entity_id": "switch.front_door_live_stream"}))
+
+    def test_viper_core_live_video_leaves_already_running_ring_stream_on(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        vision_module = importlib.import_module("viper_core.vision")
+
+        class FakeHa:
+            def __init__(self):
+                self.calls = []
+
+            def available(self):
+                return True
+
+            def get_state(self, entity_id):
+                return {"state": "on", "attributes": {"friendly_name": entity_id}}
+
+            def call_service(self, service, payload):
+                self.calls.append((service, payload))
+                return []
+
+        config = type("Config", (), {
+            "gemini_api_key": "key",
+            "gemini_vision_model": "model",
+            "back_door_stream_url": "rtsp://ring/back_live",
+            "back_door_live_stream_switch": "switch.back_door_live_stream",
+            "doorbell_live_video_seconds": 4,
+            "doorbell_live_video_frames": 4,
+        })()
+        fake_ha = FakeHa()
+
+        with patch.object(vision_module.shutil, "which", return_value="/usr/bin/ffmpeg"), \
+             patch.object(vision_module, "describe_stream_video_with_gemini", return_value="Live result."):
+            result = vision_module.describe_live_doorbell(config, fake_ha, "back", mode="manual")
+
+        self.assertEqual(result, "Live result.")
+        self.assertEqual(fake_ha.calls, [])
+
+    def test_viper_core_control_state_routes_enabled_speakers(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        config_module = importlib.import_module("viper_core.config")
+        control_module = importlib.import_module("viper_core.control")
+        events_module = importlib.import_module("viper_core.events")
+
+        class FakeHa:
+            def __init__(self):
+                self.calls = []
+
+            def available(self):
+                return True
+
+            def call_service(self, service, payload):
+                self.calls.append((service, payload))
+                return []
+
+            def create_notification(self, title, message):
+                self.calls.append(("persistent_notification/create", {"title": title, "message": message}))
+
+            def tts_get_url(self, message):
+                return {"url": "http://homeassistant.local/api/tts_proxy/test.mp3"}
+
+        state_path = root / ".pytest_viper_core_control_state.json"
+        try:
+            if state_path.exists():
+                state_path.unlink()
+            control_state = control_module.ControlState(state_path)
+            api = control_module.ControlApi(control_state, FakeHa())
+
+            self.assertTrue(api.handle_get("/api/control/state")["speakers"]["office sonos"]["enabled"])
+            self.assertTrue(api.handle_post("/api/control/speakers/office%20sonos/enabled", {"state": False})["ok"])
+
+            fake_ha = FakeHa()
+            processor = events_module.EventProcessor(config_module.CoreConfig(), fake_ha, control_state)
+            sonos_calls = []
+            with patch.object(events_module, "_play_sonos_url", side_effect=lambda *args: sonos_calls.append(args)):
+                processor.handle("fridge", {"appliance": "fridge", "state": "open"})
+
+            self.assertFalse(sonos_calls)
+            self.assertTrue(any(call[0] == "tts.google_say" for call in fake_ha.calls))
+            self.assertTrue(any(call[0] == "notify.alexa_media" for call in fake_ha.calls))
+
+            api.handle_post("/api/control/global_mute", {"state": True})
+            fake_ha.calls.clear()
+            processor.handle("fridge", {"appliance": "fridge", "state": "closed"})
+            self.assertFalse(any(call[0] == "tts.google_say" for call in fake_ha.calls))
+            self.assertFalse(any(call[0] == "notify.alexa_media" for call in fake_ha.calls))
+
+            self.assertTrue(api.handle_post("/api/control/speakers", {
+                "name": "Test Speaker",
+                "id": "media_player.test",
+                "type": "ha",
+                "enabled": True,
+                "doorbell": True,
+                "fridge": False,
+                "utilities": True,
+            })["ok"])
+            self.assertTrue(api.handle_post("/api/control/speakers/test%20speaker/route", {"route": "fridge", "state": True})["ok"])
+            self.assertTrue(api.handle_post("/api/control/speakers/test%20speaker/delete", {})["ok"])
+        finally:
+            if state_path.exists():
+                state_path.unlink()
+
+    def test_viper_core_chime_events_include_fridge_and_freezer_close(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        control_module = importlib.import_module("viper_core.control")
+
+        state_path = root / ".pytest_viper_core_chime_state.json"
+        try:
+            if state_path.exists():
+                state_path.unlink()
+            control_state = control_module.ControlState(state_path)
+            control_state.state["chimes"]["available"] = []
+            control_state.state["chimes"]["events"].update({
+                "fridge_open": "fridge-open.mp3",
+                "fridge_closed": "fridge-closed.mp3",
+                "freezer_open": "freezer-open.mp3",
+                "freezer_closed": "freezer-closed.mp3",
+            })
+            with patch.object(control_state, "available_chimes", return_value=[
+                "freezer-closed.mp3",
+                "freezer-open.mp3",
+                "fridge-closed.mp3",
+                "fridge-open.mp3",
+            ]):
+                self.assertEqual(
+                    control_state.chime_for_event("fridge", {"appliance": "fridge", "state": "open"}),
+                    "fridge-open.mp3",
+                )
+                self.assertEqual(
+                    control_state.chime_for_event("fridge", {"appliance": "fridge", "state": "closed"}),
+                    "fridge-closed.mp3",
+                )
+                self.assertEqual(
+                    control_state.chime_for_event("fridge", {"appliance": "freezer", "state": "open"}),
+                    "freezer-open.mp3",
+                )
+                self.assertEqual(
+                    control_state.chime_for_event("fridge", {"appliance": "freezer", "state": "closed"}),
+                    "freezer-closed.mp3",
+                )
+        finally:
+            if state_path.exists():
+                state_path.unlink()
+
+    def test_viper_core_fridge_chime_suppresses_speech_when_chime_is_sent(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        config_module = importlib.import_module("viper_core.config")
+        control_module = importlib.import_module("viper_core.control")
+        events_module = importlib.import_module("viper_core.events")
+
+        class FakeHa:
+            def __init__(self):
+                self.calls = []
+
+            def available(self):
+                return True
+
+            def call_service(self, service, payload):
+                self.calls.append((service, payload))
+                return []
+
+            def create_notification(self, title, message):
+                self.calls.append(("persistent_notification/create", {"title": title, "message": message}))
+
+            def tts_get_url(self, message):
+                self.calls.append(("tts_get_url", {"message": message}))
+                return {"url": "http://homeassistant.local/api/tts_proxy/test.mp3"}
+
+            def get_state(self, entity_id):
+                return {"state": "off", "attributes": {"friendly_name": entity_id}}
+
+        state_path = root / ".pytest_viper_core_fridge_chime_state.json"
+        try:
+            if state_path.exists():
+                state_path.unlink()
+            control_state = control_module.ControlState(state_path)
+            control_state.state["settings"]["external_base_url"] = "http://viper-core.local:8099"
+            control_state.state["chimes"]["events"]["fridge_open"] = "fridge-open.mp3"
+            fake_ha = FakeHa()
+            processor = events_module.EventProcessor(
+                config_module.CoreConfig(
+                    notification_service="persistent_notification.create",
+                    tts_service="tts.google_say",
+                    tts_targets=["media_player.entryway_speaker"],
+                    alexa_notify_service="notify.alexa_media",
+                    alexa_targets=["media_player.echo"],
+                ),
+                fake_ha,
+                control_state,
+            )
+
+            with patch.object(control_state, "available_chimes", return_value=["fridge-open.mp3"]), \
+                 patch.object(events_module, "_play_sonos_url"):
+                result = processor.handle("fridge", {"appliance": "fridge", "state": "open"})
+
+            self.assertTrue(result["ok"])
+            self.assertIn(
+                (
+                    "media_player/play_media",
+                    {
+                        "entity_id": "media_player.entryway_speaker",
+                        "media_content_id": "media-source://media_source/local/viper_core_chimes/fridge-open.mp3",
+                        "media_content_type": "audio/mpeg",
+                    },
+                ),
+                fake_ha.calls,
+            )
+            self.assertFalse(any(call[0] == "tts.google_say" for call in fake_ha.calls))
+            self.assertFalse(any(call[0] == "notify.alexa_media" for call in fake_ha.calls))
+            self.assertFalse(any(call[0] == "tts_get_url" for call in fake_ha.calls))
+        finally:
+            if state_path.exists():
+                state_path.unlink()
+
+    def test_viper_core_chime_media_types_are_real_audio_types(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        events_module = importlib.import_module("viper_core.events")
+
+        self.assertEqual(events_module._chime_media_type("ding.mp3"), "audio/mpeg")
+        self.assertEqual(events_module._chime_media_type("ding.wav"), "audio/wav")
+        self.assertEqual(events_module._chime_media_type("ding.ogg"), "audio/ogg")
+        self.assertEqual(
+            events_module._chime_media_source("door bell.mp3"),
+            "media-source://media_source/local/viper_core_chimes/door%20bell.mp3",
+        )
+
+    def test_viper_core_uploaded_chimes_sync_to_home_assistant_media(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        control_module = importlib.import_module("viper_core.control")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_path = tmp_path / "state.json"
+            chime_dir = tmp_path / "data" / "chimes"
+            media_dir = tmp_path / "media" / "viper_core_chimes"
+            media_dir.parent.mkdir(parents=True)
+            with patch.object(control_module, "CHIMES_DIR", chime_dir), \
+                 patch.object(control_module, "MEDIA_CHIMES_DIR", media_dir):
+                control_state = control_module.ControlState(state_path)
+                result = control_state.save_chime_file("door bell.mp3", b"fake mp3")
+
+                self.assertTrue(result["ok"])
+                self.assertEqual(control_state.available_chimes(), ["door bell.mp3"])
+                self.assertEqual((media_dir / "door bell.mp3").read_bytes(), b"fake mp3")
+
+                delete = control_state.delete_chime_file("door bell.mp3")
+                self.assertTrue(delete["ok"])
+                self.assertFalse((media_dir / "door bell.mp3").exists())
+
+    def test_viper_core_web_ui_renders_control_panel(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        web_module = importlib.import_module("viper_core.web_ui")
+
+        state = {
+            "ok": True,
+            "home_assistant": {"message": "API running."},
+            "dependencies": {"message": "Required entities are ready."},
+            "control": {
+                "armed": True,
+                "global_mute": False,
+                "speakers": {"office sonos": {"id": "192.168.4.34", "type": "sonos", "enabled": True, "doorbell": True, "fridge": True, "utilities": True}},
+                "chimes": {"available": ["front.mp3"], "events": {"front_doorbell": "front.mp3", "fridge_closed": "", "freezer_closed": ""}},
+                "settings": {
+                    "front_door_stream_url": "rtsp://hidden/front",
+                    "back_door_stream_url": "rtsp://hidden/back",
+                    "doorbell_video_mode": "fast",
+                },
+            },
+            "recent_events": [{"event_type": "doorbell", "message": "Front doorbell pressed."}],
+        }
+
+        html = web_module.render_page(state)
+        self.assertIn("Viper Core", html)
+        self.assertIn('href="?page=doorbells"', html)
+        self.assertIn("Speakers", html)
+        self.assertIn("Recent Events", html)
+
+        doorbells = web_module.render_page(state, "doorbells")
+        self.assertIn("Doorbell Tests", doorbells)
+        self.assertIn("Test Front Doorbell", doorbells)
+        self.assertIn("Test Front Live Video", doorbells)
+        self.assertIn("Test Back Live Video", doorbells)
+        self.assertNotIn("rtsp://hidden/front", doorbells)
+        self.assertNotIn("Front Door Stream URL", doorbells)
+
+        chimes = web_module.render_page(state, "chimes")
+        self.assertIn("Upload Chime File", chimes)
+        self.assertIn("Fridge Closed", chimes)
+        self.assertIn("Freezer Closed", chimes)
+        self.assertIn("Manage Uploaded Chime Files", chimes)
+        self.assertIn('id="chime_test_status"', chimes)
+        self.assertIn('id="chime_assignment_status"', chimes)
+        self.assertIn('data-async="true"', chimes)
+        self.assertIn('Test Selected Chime', chimes)
+        self.assertIn('data-test-selected-chime="true"', chimes)
+        self.assertIn('data-test-file-chime="true"', chimes)
+        self.assertIn("function viperBasePath()", chimes)
+        self.assertIn("function viperUrl(path)", chimes)
+        self.assertIn("postChimeTest(payload", chimes)
+        self.assertIn("querySelector('select[name=\"filename\"]')", chimes)
+        self.assertIn('X-Viper-Async', chimes)
+        self.assertIn('URLSearchParams', chimes)
+        self.assertIn('application/x-www-form-urlencoded', chimes)
+
+        refrigerator = web_module.render_page(state, "refrigerator")
+        self.assertIn("Test Fridge Closed", refrigerator)
+        self.assertIn("Test Freezer Closed", refrigerator)
+
+        diagnostics = web_module.render_page(state, "diagnostics")
+        self.assertIn("Send Pushover Test", diagnostics)
+
+        speakers = web_module.render_page(state, "speakers")
+        self.assertIn("office sonos", speakers.lower())
+
+    def test_viper_core_health_server_normalizes_ingress_paths(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        health_module = importlib.import_module("viper_core.health_server")
+
+        self.assertEqual(health_module._viper_path("/api/hassio_ingress/token/ui/chimes/test"), "/ui/chimes/test")
+        self.assertEqual(health_module._viper_path("/api/hassio_ingress/token/chimes/ding.mp3"), "/chimes/ding.mp3")
+        self.assertEqual(health_module._viper_path("/ui/chimes/test"), "/ui/chimes/test")
+
+    def test_viper_core_control_api_sends_hvac_and_vacuum_commands(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        control_module = importlib.import_module("viper_core.control")
+
+        class FakeHa:
+            def __init__(self):
+                self.calls = []
+
+            def available(self):
+                return True
+
+            def call_service(self, service, payload):
+                self.calls.append((service, payload))
+                return []
+
+            def get_state(self, entity_id):
+                if entity_id == "vacuum.cinderella":
+                    return {"state": "docked", "attributes": {"friendly_name": "Cinderella"}}
+                return {"state": "cool", "attributes": {"temperature": 70, "fan_mode": "auto", "swing_mode": "vertical"}}
+
+        state_path = root / ".pytest_viper_core_control_api_state.json"
+        try:
+            if state_path.exists():
+                state_path.unlink()
+            fake_ha = FakeHa()
+            api = control_module.ControlApi(control_module.ControlState(state_path), fake_ha)
+
+            hvac = api.handle_post("/api/control/hvac", {
+                "entity_id": "climate.office_heat_pump_alexa",
+                "mode": "cool",
+                "temperature": "68",
+            })
+            vacuum = api.handle_post("/api/control/vacuum", {"action": "dock"})
+            devices = api.device_status()
+
+            self.assertTrue(hvac["ok"])
+            self.assertTrue(vacuum["ok"])
+            self.assertIn(("climate/set_temperature", {"entity_id": "climate.office_heat_pump_alexa", "hvac_mode": "cool", "temperature": 68.0}), fake_ha.calls)
+            self.assertIn(("vacuum/return_to_base", {"entity_id": "vacuum.cinderella"}), fake_ha.calls)
+            self.assertEqual(devices["vacuum"]["state"], "docked")
+            self.assertTrue(devices["heat_pumps"])
+        finally:
+            if state_path.exists():
+                state_path.unlink()
+
+    def test_viper_core_pushover_test_uses_direct_keys_without_audio(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        config_module = importlib.import_module("viper_core.config")
+        control_module = importlib.import_module("viper_core.control")
+        events_module = importlib.import_module("viper_core.events")
+
+        class FakeHa:
+            def __init__(self):
+                self.calls = []
+
+            def available(self):
+                return True
+
+            def call_service(self, service, payload):
+                self.calls.append((service, payload))
+                return []
+
+        state_path = root / ".pytest_viper_core_pushover_state.json"
+        try:
+            if state_path.exists():
+                state_path.unlink()
+            control_state = control_module.ControlState(state_path)
+            control_state.set_settings({"pushover_user_key": "user", "pushover_api_token": "token"})
+            fake_ha = FakeHa()
+            processor = events_module.EventProcessor(config_module.CoreConfig(), fake_ha, control_state)
+
+            with patch.object(events_module, "_send_pushover") as send_pushover:
+                result = processor.handle("pushover_test", {"title": "Test", "message": "Hello"})
+
+            self.assertTrue(result["ok"])
+            send_pushover.assert_called_once_with("token", "user", "Test", "Hello")
+            self.assertFalse(fake_ha.calls)
+        finally:
+            if state_path.exists():
+                state_path.unlink()
+
+    def test_viper_core_health_server_maps_legacy_windows_routes(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        health_module = importlib.import_module("viper_core.health_server")
+
+        broadcast = health_module._legacy_event("/remote/broadcast", {"broadcast_text": "Hello", "channel": "manual"})
+        vacuum = health_module._legacy_event("/cinderella", {"event": "victory"})
+        doorbell = health_module._legacy_event("/doorbell-webhook/back", {})
+
+        self.assertEqual(broadcast, ("broadcast", {"broadcast_text": "Hello", "channel": "manual", "push": False, "message": "Hello"}))
+        self.assertEqual(vacuum, ("vacuum", {"event": "victory"}))
+        self.assertEqual(doorbell, ("doorbell", {"door": "back", "action": "pressed"}))
+
+    def test_viper_core_ha_client_reports_missing_dependencies(self):
+        root = Path(__file__).resolve().parents[1]
+        addon_path = str(root / "ha_addons" / "viper_core")
+        if addon_path not in sys.path:
+            sys.path.insert(0, addon_path)
+        ha_module = importlib.import_module("viper_core.ha")
+
+        client = ha_module.HomeAssistantClient("http://ha", "token")
+        states = {
+            "switch.refrigerator_cubed_ice": {"state": "off", "attributes": {"friendly_name": "Cubed ice"}},
+            "input_boolean.keep_ice_maker_on": {"state": "off", "attributes": {}},
+            "input_boolean.ice_maker_auto_refill_running": {"state": "unavailable", "attributes": {}},
+        }
+        with patch.object(client, "get_state", side_effect=lambda entity_id: states[entity_id]):
+            status = client.dependency_status(states.keys())
+
+        self.assertFalse(status["ok"])
+        self.assertFalse(status["entities"]["input_boolean.ice_maker_auto_refill_running"]["ok"])
+        self.assertEqual(status["entities"]["switch.refrigerator_cubed_ice"]["state"], "off")
 
 
 if __name__ == "__main__":

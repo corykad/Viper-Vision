@@ -271,6 +271,10 @@ CONFIG_SCHEMA = {
     "version": 1,
     "defaults": {
         "is_armed": True,
+        "viper_host": PC_IP,
+        "flask_port": FLASK_PORT,
+        "viper_core_url": "",
+        "use_viper_core": False,
         "active_prompt": "Standard",
         "vision_engine": "Gemini (Cloud)",
         "ollama_model": "llama3.2-vision",
@@ -1128,6 +1132,8 @@ def validate_and_normalize_config(config_data):
     normalized["ice_maker_keep_on_entity"] = _as_str(normalized.get("ice_maker_keep_on_entity"), defaults["ice_maker_keep_on_entity"]).strip() or defaults["ice_maker_keep_on_entity"]
     normalized["ice_maker_auto_refill_entity"] = _as_str(normalized.get("ice_maker_auto_refill_entity"), defaults["ice_maker_auto_refill_entity"]).strip() or defaults["ice_maker_auto_refill_entity"]
     normalized["ice_maker_counter_entity"] = _as_str(normalized.get("ice_maker_counter_entity"), defaults["ice_maker_counter_entity"]).strip() or defaults["ice_maker_counter_entity"]
+    normalized["viper_core_url"] = _as_str(normalized.get("viper_core_url"), defaults["viper_core_url"]).strip().rstrip("/")
+    normalized["use_viper_core"] = _as_bool(normalized.get("use_viper_core"), defaults["use_viper_core"])
     normalized["doorbell_triggers"] = _normalize_doorbell_triggers(
         normalized.get("doorbell_triggers"),
         defaults["doorbell_triggers"],

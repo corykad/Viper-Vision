@@ -59,6 +59,46 @@ class HomeAssistantClient:
     def get_state(self, entity_id):
         return self._request("GET", f"/states/{entity_id}")
 
+    def get_binary(self, path):
+        if not self.available():
+            raise RuntimeError("Home Assistant URL or token is not configured.")
+        url = f"{self.base_url}{'/' + str(path).lstrip('/')}"
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Accept": "*/*",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            return response.read(), response.headers.get("Content-Type", "")
+
+    def dependency_status(self, entity_ids):
+        results = {}
+        ok = True
+        for entity_id in entity_ids or []:
+            entity_id = str(entity_id or "").strip()
+            if not entity_id:
+                continue
+            try:
+                state = self.get_state(entity_id)
+                current = str((state or {}).get("state") or "unknown").lower()
+                healthy = current not in {"unknown", "unavailable"}
+                results[entity_id] = {
+                    "ok": healthy,
+                    "state": current,
+                    "friendly_name": ((state or {}).get("attributes") or {}).get("friendly_name", ""),
+                }
+                ok = ok and healthy
+            except Exception as exc:
+                results[entity_id] = {"ok": False, "state": "missing", "message": str(exc)}
+                ok = False
+        return {
+            "ok": ok,
+            "entities": results,
+            "message": "Required Home Assistant entities are ready." if ok else "One or more required Home Assistant entities need attention.",
+        }
+
     def call_service(self, domain_service, data=None):
         domain_service = str(domain_service or "").strip().replace(".", "/")
         return self._request("POST", f"/services/{domain_service}", data or {})
@@ -68,6 +108,14 @@ class HomeAssistantClient:
             "persistent_notification/create",
             {"title": str(title or "Viper Core"), "message": str(message or "")},
         )
+
+    def tts_get_url(self, message, platform="google_translate", language="en"):
+        payload = {
+            "message": str(message or ""),
+            "platform": str(platform or "google_translate"),
+            "language": str(language or "en"),
+        }
+        return self._request("POST", "/tts_get_url", payload)
 
     def _request(self, method, path, data=None):
         if not self.available():

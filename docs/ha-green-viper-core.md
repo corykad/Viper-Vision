@@ -1,6 +1,6 @@
 # Viper Core On Home Assistant Green
 
-Viper Core is the path for moving Viper's always-on jobs onto Home Assistant Green while keeping the Windows app as the accessible setup and control panel.
+Viper Core is the path for moving Viper's always-on jobs onto Home Assistant Green while keeping the Windows app as an optional setup and packaging tool.
 
 ## Why Build This Before The Green Arrives
 
@@ -8,12 +8,13 @@ The hard part is not copying files to the Green. The hard part is separating the
 
 - Home Assistant starts Viper Core automatically.
 - Viper Core can use Home Assistant's Supervisor token, so users do not need to paste another long-lived token into the add-on.
-- Viper Core has a health page we can open from Home Assistant.
-- Viper Core has a clean place to move doorbell, fridge, vacuum, ice maker, HVAC, and Pushover logic.
+- Viper Core has a web control panel at `http://<home-assistant-ip>:8099/`.
+- Viper Core can manage speakers, chime files, doorbell AI settings, Pushover keys, heat pumps, the vacuum, and refrigerator basics without the Windows app running.
+- Viper Core has a clean place to keep doorbell, fridge, vacuum, ice maker, HVAC, and Pushover logic running on Home Assistant.
 
 ## What Runs Where
 
-Home Assistant Green should eventually run:
+Home Assistant Green runs or is being prepared to run:
 
 - Doorbell event listening.
 - Refrigerator and freezer chimes.
@@ -21,15 +22,16 @@ Home Assistant Green should eventually run:
 - Roborock status announcements.
 - Heat pump online checks and command confirmation.
 - Pushover outage notifications.
+- Speaker routing and mute controls.
+- Chime file hosting and event-to-chime assignment.
+- Gemini doorbell image descriptions.
 - Matterbridge and Home Assistant package logic.
 
 Windows Viper should keep:
 
 - The accessible desktop setup wizard.
-- Speaker and device discovery screens.
-- Manual controls and diagnostics.
-- Gemini setup and testing.
 - Release packaging.
+- Optional diagnostics while the PC app still exists.
 
 ## Install Plan When The Green Arrives
 
@@ -37,31 +39,32 @@ Windows Viper should keep:
 2. Confirm Home Assistant, SmartThings, Roborock, Ring, Matterbridge, and ESPHome entities are present.
 3. Copy `ha_addons` into the Home Assistant add-ons folder.
 4. In Home Assistant, open **Settings**, **Add-ons**, **Add-on Store**, then install **Viper Core** from local add-ons.
-5. Start Viper Core and open its health page.
+5. Start Viper Core and open its web panel at `http://<home-assistant-ip>:8099/`.
 6. Copy `ha_addons/viper_core/viper_core_package.yaml` into `/config/packages/viper_core_package.yaml`.
 7. Restart Home Assistant or reload packages.
-8. Move one always-on feature at a time from Windows Viper into Viper Core.
+8. Confirm speakers, chimes, Pushover, Gemini, doorbell routes, heat pumps, vacuum, and ice maker controls in the Viper Core web panel.
 
-## First Migration Targets
+## Current Web Panel
 
-Move these first because they hurt the most when the Windows PC or VirtualBox setup flakes out:
+Open `http://<home-assistant-ip>:8099/` from a browser on the LAN. The page includes:
 
-1. Fridge and freezer chime listener.
-2. Doorbell event listener.
-3. Ice maker counter.
-4. Heat pump online/offline Pushover alerts.
-5. Home Assistant and add-on health monitoring.
+- Arm/disarm and global mute.
+- Speaker enable/disable controls and doorbell/fridge/utilities routes.
+- Chime upload, delete, test, and event assignment.
+- Gemini, camera, external URL, and Pushover settings.
+- Current heat pump, vacuum, and refrigerator status.
+- Heat pump, vacuum, ice maker, doorbell, fridge, freezer, broadcast, and Pushover test controls.
 
-This keeps the migration boring and reversible. Each feature can be tested on the Green before removing the Windows-side fallback.
+The Pushover test is intentionally silent: it sends a phone push without speaking on any speaker.
 
 ## Direct Add-on Endpoints
 
 Home Assistant automations can call these endpoints on the add-on container:
 
-- `POST http://viper_core:8099/event/doorbell`
-- `POST http://viper_core:8099/event/fridge`
-- `POST http://viper_core:8099/event/vacuum`
-- `POST http://viper_core:8099/event/ice_maker`
-- `POST http://viper_core:8099/event/hvac`
+- `POST http://local-viper-core:8099/event/doorbell`
+- `POST http://local-viper-core:8099/event/fridge`
+- `POST http://local-viper-core:8099/event/vacuum`
+- `POST http://local-viper-core:8099/event/ice_maker`
+- `POST http://local-viper-core:8099/event/hvac`
 
 The included package file creates `rest_command.viper_core_*` commands for those endpoints.

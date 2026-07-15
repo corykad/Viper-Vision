@@ -128,9 +128,8 @@ def matter_entity_domains(config_data=None):
 
 def generate_matter_controls_package(config_data=None):
     data = cfg.validate_and_normalize_config(config_data) if config_data is not None else cfg.load_config()
-    viper_host = str(data.get("viper_host") or cfg.PC_IP).strip()
-    viper_port = int(data.get("flask_port") or cfg.FLASK_PORT)
-    base_url = f"http://{viper_host}:{viper_port}"
+    explicit = config_data if isinstance(config_data, dict) else {}
+    base_url = _viper_control_base_url(data, explicit)
     speaker_controls = speaker_switches(data)
 
     lines = [
@@ -173,6 +172,18 @@ def generate_matter_controls_package(config_data=None):
     for control in speaker_controls:
         lines.extend(_template_switch_lines(control))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _viper_control_base_url(data, explicit=None):
+    explicit = explicit if isinstance(explicit, dict) else {}
+    core_url = str(explicit.get("viper_core_url") or data.get("viper_core_url") or "").strip()
+    if core_url:
+        return core_url.rstrip("/")
+    if explicit.get("use_viper_core") or data.get("use_viper_core"):
+        return "http://local-viper-core:8099"
+    viper_host = str(explicit.get("viper_host") or data.get("viper_host") or cfg.PC_IP).strip()
+    viper_port = int(explicit.get("flask_port") or data.get("flask_port") or cfg.FLASK_PORT)
+    return f"http://{viper_host}:{viper_port}"
 
 
 def write_matter_package(config_data=None, output_path=None):
@@ -266,9 +277,7 @@ def install_matter_package_via_ssh(config_data=None):
 
 def check_viper_control_api(config_data=None, timeout=5):
     data = cfg.validate_and_normalize_config(config_data) if config_data is not None else cfg.load_config()
-    host = str(data.get("viper_host") or cfg.PC_IP).strip()
-    port = int(data.get("flask_port") or cfg.FLASK_PORT)
-    url = f"http://{host}:{port}/api/control/state"
+    url = f"{_viper_control_base_url(data, config_data if isinstance(config_data, dict) else {})}/api/control/state"
     try:
         response = requests.get(url, timeout=timeout)
         if response.status_code != 200:

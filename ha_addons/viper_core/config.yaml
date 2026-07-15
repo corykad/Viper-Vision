@@ -1,5 +1,5 @@
 name: Viper Core
-version: "0.1.0"
+version: "0.1.21"
 slug: viper_core
 description: Always-on Viper event engine for Home Assistant
 url: https://github.com/corykad/Viper-Vision
@@ -17,9 +17,11 @@ panel_title: Viper Core
 hassio_api: true
 homeassistant_api: true
 ports:
-  8099/tcp: null
+  8099/tcp: 8099
 ports_description:
   8099/tcp: Viper Core health and setup page
+map:
+  - media:rw
 options:
   log_level: info
   health_check_seconds: 60
@@ -30,11 +32,26 @@ options:
     hvac: true
     ice_maker: true
   notification_service: persistent_notification.create
+  tts_service: tts.google_say
+  tts_targets:
+    - media_player.entryway_speaker
+  direct_sonos_targets:
+    - 192.168.4.34
+  alexa_notify_service: notify.alexa_media
+  alexa_targets:
+    - media_player.cory_s_sonos_beam
   doorbell_speaker_service: ""
   fridge_speaker_service: ""
   vacuum_speaker_service: ""
   pushover_service: ""
+  pushover_user_key: ""
+  pushover_api_token: ""
   speaker_targets: []
+  external_base_url: ""
+  gemini_api_key: ""
+  gemini_vision_model: gemini-3.5-flash
+  front_door_camera_entity: camera.front_door_snapshot
+  back_door_camera_entity: camera.back_door_snapshot
   fallback_ha_url: ""
   fallback_ha_token: ""
 schema:
@@ -47,11 +64,26 @@ schema:
     hvac: bool
     ice_maker: bool
   notification_service: str?
+  tts_service: str?
+  tts_targets:
+    - match(^.*$)
+  direct_sonos_targets:
+    - match(^.*$)
+  alexa_notify_service: str?
+  alexa_targets:
+    - match(^.*$)
   doorbell_speaker_service: str?
   fridge_speaker_service: str?
   vacuum_speaker_service: str?
   pushover_service: str?
+  pushover_user_key: password?
+  pushover_api_token: password?
   speaker_targets:
-    - str
+    - match(^.*$)
+  external_base_url: str?
+  gemini_api_key: password?
+  gemini_vision_model: str?
+  front_door_camera_entity: str?
+  back_door_camera_entity: str?
   fallback_ha_url: str?
   fallback_ha_token: str?
